@@ -206,7 +206,7 @@ class DouyinDanmaku implements LiveDanmaku {
   Future<String> getSignature(String roomId, String uniqueId) async {
     try {
       var signResult = await http.HttpClient.instance.postJson(
-        "https://dy.nsapps.cn/signature",
+        "http://dy.nsapps.cn/signature",
         queryParameters: {},
         header: {"Content-Type": "application/json"},
         data: {"roomId": roomId, "uniqueId": uniqueId},
