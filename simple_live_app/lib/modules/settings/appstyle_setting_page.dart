@@ -157,8 +157,8 @@ extension ColorExt on Color {
   }
 
   int get v =>
-      _floatToInt8(a) << 24 |
-      _floatToInt8(r) << 16 |
-      _floatToInt8(g) << 8 |
-      _floatToInt8(b) << 0;
+      _floatToInt8(alpha as double) << 24 |
+      _floatToInt8(red as double) << 16 |
+      _floatToInt8(green as double) << 8 |
+      _floatToInt8(blue as double) << 0;
 }
