@@ -193,13 +193,10 @@ class HuyaSite implements LiveSite {
       var url = await getPlayUrl(line, quality.data["bitRate"]);
       ls.add(url);
     }
-    //var currentTs = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    // from stream-rec url:https://github.com/stream-rec/stream-rec
     return LivePlayUrl(
       urls: ls,
-      headers: {
-        //"user-agent": "HYSDK(Windows, $currentTs)"
-        "user-agent": "HYSDK(Windows, 20000308)",
-      },
+      headers: {"user-agent": "HYSDK(Windows, $currentTs)"},
     );
   }
 
