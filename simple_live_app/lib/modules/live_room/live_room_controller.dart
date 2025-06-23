@@ -118,7 +118,11 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     loadData();
 
     scrollController.addListener(scrollListener);
-
+    //设置音量
+    var id = "${site.id}_$roomId";
+    var volumeVal = DBService.instance.getVolume(id);
+    double volume = volumeVal!.toDouble();
+    player.setVolume(volume);
     super.onInit();
   }
 
@@ -596,6 +600,12 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   }
 
   void showVolumeSlider(BuildContext targetContext) {
+    // 获取音量
+    var id = "${site.id}_$roomId";
+    var volumeVal = DBService.instance.getVolume(id);
+    double volume = volumeVal!.toDouble();
+    player.setVolume(volume);
+    AppSettingsController.instance.setPlayerVolume(volume);
     SmartDialog.showAttach(
       targetContext: targetContext,
       alignment: Alignment.topCenter,
@@ -617,6 +627,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
                 value: AppSettingsController.instance.playerVolume.value,
                 onChanged: (newValue) {
                   player.setVolume(newValue);
+                  addOrUpdateVolume(newValue);
                   AppSettingsController.instance.setPlayerVolume(newValue);
                 },
               ),
@@ -1018,5 +1029,10 @@ ${error?.stackTrace}''');
     liveDanmaku.stop();
     danmakuController = null;
     super.onClose();
+  }
+
+  void addOrUpdateVolume(double newValue) async {
+    var id = "${site.id}_$roomId";
+    DBService.instance.addOrUpdateVolume(id,newValue);
   }
 }
