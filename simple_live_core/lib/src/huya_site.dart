@@ -208,7 +208,7 @@ class HuyaSite implements LiveSite {
   @override
   Future<LivePlayUrl> getPlayUrls(
       {required LiveRoomDetail detail,
-      required LivePlayQuality quality}) async {
+        required LivePlayQuality quality}) async {
     var ls = <String>[];
     for (var element in quality.data["urls"]) {
       var line = element as HuyaLineModel;
@@ -228,7 +228,7 @@ class HuyaSite implements LiveSite {
     req.cdnType = line.cdnType;
     req.streamName = line.streamName;
     var resp =
-        await tupClient.tupRequest("getCdnTokenInfo", req, GetCdnTokenResp());
+    await tupClient.tupRequest("getCdnTokenInfo", req, GetCdnTokenResp());
     var url =
         '${line.line}/${resp.streamName}.flv?${resp.flvAntiCode}&codec=264';
     if (bitRate > 0) {
@@ -328,7 +328,7 @@ class HuyaSite implements LiveSite {
       status: roomInfo["roomInfo"]["eLiveStatus"] == 2,
       data: HuyaUrlDataModel(
         url:
-            "https:${utf8.decode(base64.decode(roomInfo["roomProfile"]["liveLineUrl"].toString()))}",
+        "https:${utf8.decode(base64.decode(roomInfo["roomProfile"]["liveLineUrl"].toString()))}",
         lines: huyaLines,
         bitRates: huyaBiterates,
         uid: getUid(t: 13, e: 10),
@@ -351,8 +351,8 @@ class HuyaSite implements LiveSite {
       },
     );
     var text = RegExp(
-            r"window\.HNF_GLOBAL_INIT.=.\{[\s\S]*?\}[\s\S]*?</script>",
-            multiLine: false)
+        r"window\.HNF_GLOBAL_INIT.=.\{[\s\S]*?\}[\s\S]*?</script>",
+        multiLine: false)
         .firstMatch(resultText)
         ?.group(0);
     var jsonText = text!
@@ -546,7 +546,7 @@ class HuyaSite implements LiveSite {
     final wsTime = (DateTime.now().millisecondsSinceEpoch ~/ 1000 + 21600)
         .toRadixString(16);
     final seqId =
-        (DateTime.now().millisecondsSinceEpoch + int.parse(uid)).toString();
+    (DateTime.now().millisecondsSinceEpoch + int.parse(uid)).toString();
 
     final fm = utf8.decode(base64.decode(Uri.decodeComponent(query['fm']!)));
     final wsSecretPrefix = fm.split('_').first;
@@ -555,7 +555,7 @@ class HuyaSite implements LiveSite {
         .toString();
     final wsSecret = md5
         .convert(utf8.encode(
-            '${wsSecretPrefix}_${uid}_${streamname}_${wsSecretHash}_$wsTime'))
+        '${wsSecretPrefix}_${uid}_${streamname}_${wsSecretHash}_$wsTime'))
         .toString();
 
     return Uri(queryParameters: {
