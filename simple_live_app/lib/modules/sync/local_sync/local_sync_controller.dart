@@ -224,4 +224,8 @@ class LocalSyncController extends BaseController {
     syncDataController.delUserData(id,roomId);
   }
 
+  void sendDanMu(String id, String roomId,String danmu) async{
+    syncDataController.sendDanMu(id,roomId,danmu);
+  }
+
 }

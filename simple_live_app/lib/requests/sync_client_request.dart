@@ -132,4 +132,12 @@ class SyncClientRequest {
       data: parmsStr,
     );
   }
+
+  Future<void> sendDanMu(String parmsStr, String syncUrl) async{
+    var url = "$syncUrl/simpleLive/sendDanMu";
+    var data = await HttpClient.instance.postJson(
+      url,
+      data: parmsStr,
+    );
+  }
 }

@@ -31,6 +31,7 @@ import 'package:simple_live_app/modules//sync/local_sync/local_sync_controller.d
 
 class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   final syncController = LocalSyncController("localhost");
+  final TextEditingController textEditingController = TextEditingController();
 
   final Site pSite;
   final String pRoomId;
@@ -1034,5 +1035,14 @@ ${error?.stackTrace}''');
   void addOrUpdateVolume(double newValue) async {
     var id = "${site.id}_$roomId";
     DBService.instance.addOrUpdateVolume(id,newValue);
+  }
+  void sendDm() {
+    if (textEditingController.text.isEmpty) {
+      SmartDialog.showToast("请输入弹幕");
+      return;
+    }
+    Log.d("发送弹幕"+textEditingController.text);
+    syncController.sendDanMu(site.id, roomId, textEditingController.text);
+    textEditingController.text = "";
   }
 }

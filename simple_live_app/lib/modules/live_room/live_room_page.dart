@@ -456,6 +456,22 @@ class LiveRoomPage extends GetView<LiveRoomController> {
                 ),
               ],
             ),
+            TextField(
+              controller: controller.textEditingController,
+              decoration: InputDecoration(
+                contentPadding: AppStyle.edgeInsetsH12,
+                border: const OutlineInputBorder(),
+                hintText: "请输入弹幕",
+                suffixIcon: TextButton.icon(
+                  onPressed: controller.sendDm,
+                  icon: const Icon(Icons.send),
+                  label: const Text("发送"),
+                ),
+              ),
+              onSubmitted: (e) {
+                controller.sendDm();
+              },
+            ),
             Expanded(
               child: TabBarView(
                 children: [
@@ -465,10 +481,10 @@ class LiveRoomPage extends GetView<LiveRoomController> {
                         ListView.separated(
                           controller: controller.scrollController,
                           separatorBuilder: (_, i) => Obx(
-                            () => SizedBox(
+                                () => SizedBox(
                               // *2与原来的EdgeInsets.symmetric(vertical: )做兼容
                               height: AppSettingsController
-                                      .instance.chatTextGap.value *
+                                  .instance.chatTextGap.value *
                                   2,
                             ),
                           ),
@@ -497,6 +513,7 @@ class LiveRoomPage extends GetView<LiveRoomController> {
                       ],
                     ),
                   ),
+
                   if (controller.site.id == Constant.kBiliBili)
                     buildSuperChats(),
                   buildFollowList(),

@@ -78,5 +78,23 @@ class SyncDataController extends BaseController {
       SmartDialog.dismiss();
     }
   }
-
+  void sendDanMu(String id, String roomId,String danmu) async{
+    try{
+      var userName = AppSettingsController.instance.userName.value;
+      var syncUrl = AppSettingsController.instance.syncUrl.value;
+      var param = {
+        "roomId":roomId,
+        "siteId":id,
+        "userName":userName,
+        "face": danmu
+      };
+      var parmsStr = json.encode(param);
+      await request.sendDanMu(parmsStr,syncUrl);
+    }catch(e){
+      SmartDialog.showToast("发送弹幕失败:$e");
+      Log.logPrint(e);
+    } finally {
+      SmartDialog.dismiss();
+    }
+  }
 }
