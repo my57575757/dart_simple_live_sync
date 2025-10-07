@@ -6,3 +6,6 @@
 -keep class io.flutter.**  { *; }
 -keep class io.flutter.plugins.**  { *; }
 -keep class de.prosiebensat1digital.** { *; }
+# 忽略 JetBrains 注解
+-keep class org.jetbrains.annotations.** { *; }
+-dontwarn org.jetbrains.annotations.**
