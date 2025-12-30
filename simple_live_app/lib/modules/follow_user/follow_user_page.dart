@@ -22,7 +22,24 @@ class FollowUserPage extends GetView<FollowUserController> {
     if (count < 1) count = 1;
     return Scaffold(
       appBar: AppBar(
-        title: const Text("关注用户"),
+        title: TextField(
+          controller: controller.searchController,
+          autofocus: true,
+          decoration: InputDecoration(
+            hintText: "关注用户",
+            border: OutlineInputBorder(
+              borderRadius: AppStyle.radius24,
+            ),
+            contentPadding: AppStyle.edgeInsetsH12,
+            suffixIcon: IconButton(
+              onPressed: controller.doCancel,
+              icon: const Icon(Icons.cancel),
+            ),
+          ),
+          onSubmitted: (e) {
+            controller.doSearch();
+          },
+        ),
         actions: [
           PopupMenuButton(
             itemBuilder: (context) {
