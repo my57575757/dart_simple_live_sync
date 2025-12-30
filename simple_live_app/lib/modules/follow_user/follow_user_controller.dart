@@ -1,6 +1,7 @@
 // ignore_for_file: invalid_use_of_protected_member
 
 import 'dart:async';
+import 'package:flutter/material.dart';
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:get/get.dart';
 import 'package:simple_live_app/app/controller/base_controller.dart';
@@ -18,6 +19,8 @@ import 'package:simple_live_app/modules//sync/local_sync/local_sync_controller.d
 class FollowUserController extends BasePageController<FollowUser> {
   StreamSubscription<dynamic>? onUpdatedIndexedStream;
   StreamSubscription<dynamic>? onUpdatedListStream;
+  TextEditingController searchController = TextEditingController();
+
   final syncController = LocalSyncController("localhost");
   /// 0:全部 1:直播中 2:未直播
   var filterMode = FollowUserTag(id: "0", tag: "全部", userId: []).obs;
@@ -195,6 +198,22 @@ class FollowUserController extends BasePageController<FollowUser> {
     tagList.value = tagList.take(3).toList();
     tagList.addAll(userTagList);
     DBService.instance.updateFollowTagOrder(userTagList);
+  }
+
+  void doSearch() {
+    if (searchController.text.isEmpty) {
+      filterData();
+    }
+    //过滤名称符合的主播
+    final searchText = searchController.text.toLowerCase();
+    final filteredList = FollowService.instance.followList.value
+        .where((user) => user.userName.toLowerCase().contains(searchText))
+        .toList();
+    list.assignAll(filteredList);
+  }
+  void doCancel(){
+    searchController.text = '';
+    doSearch();
   }
 
   @override
