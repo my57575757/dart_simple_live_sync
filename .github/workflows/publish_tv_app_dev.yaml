@@ -1,68 +1,66 @@
-name: app-build-action
-#推送Tag时触发
+name: 修复版 TV 构建 (Manual)
+
+# 1. 修改触发方式为手动点击
 on:
-    push:
-        tags:
-            - "dev_tv_v*"
+  workflow_dispatch:
+
 jobs:
-    build-tv:
-        runs-on: macos-latest
-        permissions:
-            contents: write
-        steps:
-            #签出代码
-            - uses: actions/checkout@v4
-              with:
-                  ref: dev
+  build-tv:
+    # 建议改用 ubuntu，构建 Android 速度更快
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      # 2. 签出代码 (强制指定 my_dev 分支)
+      - uses: actions/checkout@v4
+        with:
+          ref: my_dev
 
-            #APK签名设置
-            - name: Download Android keystore
-              id: android_tv_keystore
-              uses: timheuer/base64-to-file@v1.2
-              with:
-                  fileName: keystore.jks
-                  encodedString: ${{ secrets.TV_KEYSTORE_BASE64 }}
-            - name: Create key.properties
-              run: |
-                  echo "storeFile=${{ steps.android_tv_keystore.outputs.filePath }}" > simple_live_tv_app/android/key.properties
-                  echo "storePassword=${{ secrets.TV_STORE_PASSWORD }}" >> simple_live_tv_app/android/key.properties
-                  echo "keyPassword=${{ secrets.TV_KEY_PASSWORD }}" >> simple_live_tv_app/android/key.properties
-                  echo "keyAlias=${{ secrets.TV_KEY_ALIAS }}" >> simple_live_tv_app/android/key.properties
+      # 设置 JAVA 环境
+      - uses: actions/setup-java@v4
+        with:
+          distribution: "zulu"
+          java-version: "17"
+          cache: "gradle"
 
-            # 设置JAVA环境
-            - uses: actions/setup-java@v4
-              with:
-                  distribution: "zulu"
-                  java-version: "17"
-                  cache: "gradle"
+      # 设置 Flutter (保持原文件的版本配置)
+      - name: Flutter action
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.38.x"
+          cache: true
 
-            #设置Flutter
-            - name: Flutter action
-              uses: subosito/flutter-action@v2
-              with:
-                  flutter-version: "3.38.x"
-                  cache: true
+      # 更新依赖
+      - name: Restore packages
+        run: |
+          cd simple_live_tv_app
+          flutter pub get
 
-            #更新Flutter的packages
-            - name: Restore packages
-              run: |
-                  cd simple_live_tv_app
-                  flutter pub get
+      # 3. 【核心修改】生成临时签名 (替换掉了原来的 Download keystore)
+      - name: Generate Temporary Keystore
+        run: |
+          cd simple_live_tv_app/android
+          # 生成一个无需密码的临时证书
+          keytool -genkey -v -keystore upload.jks -alias android -keyalg RSA -keysize 2048 -validity 10000 -storepass 123456 -keypass 123456 -dname "CN=User"
+          # 写入配置
+          echo "storeFile=upload.jks" > key.properties
+          echo "storePassword=123456" >> key.properties
+          echo "keyPassword=123456" >> key.properties
+          echo "keyAlias=android" >> key.properties
 
-            #打包APK
-            - name: Build APK
-              run: |
-                  cd simple_live_tv_app
-                  flutter build apk --release --split-per-abi
+      # 打包 APK
+      - name: Build APK
+        run: |
+          cd simple_live_tv_app
+          flutter build apk --release --split-per-abi
 
-            #上传APK至Artifacts
-            - name: Upload APK to Artifacts
-              uses: actions/upload-artifact@v4
-              with:
-                  name: android_tv
-                  path: |
-                      simple_live_tv_app/build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk
-                      simple_live_tv_app/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
-                      simple_live_tv_app/build/app/outputs/flutter-apk/app-x86_64-release.apk
-            #完成
-            - run: echo "🍏 This job's status is ${{ job.status }}."
+      # 上传 APK
+      - name: Upload APK to Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: android_tv_fixed
+          path: |
+            simple_live_tv_app/build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk
+            simple_live_tv_app/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+
+      - run: echo "🍏 TV版构建完成！"
