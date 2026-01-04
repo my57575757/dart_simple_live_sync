@@ -24,7 +24,7 @@ class FollowUserPage extends GetView<FollowUserController> {
       appBar: AppBar(
         title: TextField(
           controller: controller.searchController,
-          autofocus: true,
+          autofocus: false,
           decoration: InputDecoration(
             hintText: "关注用户",
             border: OutlineInputBorder(
