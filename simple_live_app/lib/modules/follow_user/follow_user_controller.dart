@@ -20,7 +20,7 @@ class FollowUserController extends BasePageController<FollowUser> {
   StreamSubscription<dynamic>? onUpdatedIndexedStream;
   StreamSubscription<dynamic>? onUpdatedListStream;
   TextEditingController searchController = TextEditingController();
-
+  final FocusNode _searchFocusNode = FocusNode();
   final syncController = LocalSyncController("localhost");
   /// 0:全部 1:直播中 2:未直播
   var filterMode = FollowUserTag(id: "0", tag: "全部", userId: []).obs;
@@ -212,7 +212,8 @@ class FollowUserController extends BasePageController<FollowUser> {
     list.assignAll(filteredList);
   }
   void doCancel(){
-    searchController.text = '';
+    searchController.clear();
+    _searchFocusNode.unfocus();
     doSearch();
   }
 
