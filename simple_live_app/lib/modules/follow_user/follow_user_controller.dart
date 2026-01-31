@@ -122,6 +122,7 @@ class FollowUserController extends BasePageController<FollowUser> {
 
   void updateItem(FollowUser item){
     FollowService.instance.addFollow(item);
+    syncController.addUserData(item);
   }
   // 修改item的标签
   void setItemTag(FollowUser item, FollowUserTag targetTag) {
@@ -135,6 +136,12 @@ class FollowUserController extends BasePageController<FollowUser> {
     item.tag = tarTag.tag;
     updateTag(curTag);
     updateTag(tarTag);
+    updateItem(item);
+    filterData();
+  }
+  // 修改item的名称
+  void setItemUserName(FollowUser item, String userName) {
+    item.userName = userName;
     updateItem(item);
     filterData();
   }
