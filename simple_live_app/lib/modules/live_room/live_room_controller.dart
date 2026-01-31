@@ -654,7 +654,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
               width: 200,
               child: Slider(
                 min: 0,
-                max: 100,
+                max: 300,
                 value: AppSettingsController.instance.playerVolume.value,
                 onChanged: (newValue) {
                   player.setVolume(newValue);
