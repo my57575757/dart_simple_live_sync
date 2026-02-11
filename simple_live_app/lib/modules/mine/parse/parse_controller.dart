@@ -29,7 +29,7 @@ class ParseController extends GetxController {
     // 延迟200ms跳转，等待键盘隐藏
     Future.delayed(const Duration(milliseconds: 200), () {
       Site site = parseResult[1];
-      AppNavigator.toLiveRoomDetail(site: site, roomId: parseResult.first);
+      AppNavigator.toLiveRoomDetail(site: site, roomId: parseResult.first,shareUrl:"");
     });
   }
 

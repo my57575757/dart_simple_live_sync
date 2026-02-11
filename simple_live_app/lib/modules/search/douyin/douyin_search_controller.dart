@@ -62,7 +62,7 @@ class DouyinSearchController extends BaseController {
                 ?.group(1) ??
             "";
 
-        AppNavigator.toLiveRoomDetail(site: site, roomId: id);
+        AppNavigator.toLiveRoomDetail(site: site, roomId: id,shareUrl:"");
         return false;
       }
     }

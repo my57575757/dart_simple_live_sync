@@ -102,6 +102,7 @@ class AppPages {
         () => LiveRoomController(
           pSite: Get.arguments,
           pRoomId: Get.parameters["roomId"] ?? "",
+          pShareUrl: Get.parameters["shareUrl"] ?? "",
         ),
       ),
     ),

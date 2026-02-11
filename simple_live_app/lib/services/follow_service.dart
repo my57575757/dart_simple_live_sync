@@ -226,11 +226,11 @@ class FollowService extends GetxService {
     try {
       var site = Sites.allSites[item.siteId]!;
       // 先只查状态
-      var isLiving = await site.liveSite.getLiveStatus(roomId: item.roomId);
+      var isLiving = await site.liveSite.getLiveStatus(roomId: item.siteId == Constant.kDouyin?(item.roomId+";"+item.shareUrl):item.roomId);
       item.liveStatus.value = isLiving ? 2 : 1;
       if (item.liveStatus.value == 2) {
         // 只有正在直播时才查详细信息
-        var detail = await site.liveSite.getRoomDetail(roomId: item.roomId);
+        var detail = await site.liveSite.getRoomDetail(roomId: item.siteId == Constant.kDouyin?(item.roomId+";"+item.shareUrl):item.roomId);
         item.liveStartTime = detail.showTime;
       } else {
         item.liveStartTime = null;
@@ -412,7 +412,8 @@ class FollowService extends GetxService {
             "userName": item.userName,
             "face": item.face,
             "addTime": item.addTime.toString(),
-            "tag": item.tag
+            "tag": item.tag,
+            "shareUrl": item.shareUrl
           },
         )
         .toList();

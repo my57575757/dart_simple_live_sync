@@ -12,7 +12,8 @@ class FollowUser {
     required this.userName,
     required this.face,
     required this.addTime,
-    this.tag = "全部"
+    this.tag = "全部",
+    this.shareUrl = ""
   });
 
   ///id=siteId_roomId
@@ -37,6 +38,9 @@ class FollowUser {
   @HiveField(6)
   String tag;
 
+  @HiveField(7)
+  String shareUrl;
+
   /// 直播状态
   /// 0=未知(加载中) 1=未开播 2=直播中
   Rx<int> liveStatus = 0.obs;
@@ -52,6 +56,7 @@ class FollowUser {
         face: json['face'],
         addTime: DateTime.parse(json['addTime']),
         tag: json["tag"]??"全部",
+        shareUrl: json["shareUrl"]??"",
       );
 
   Map<String, dynamic> toJson() => {
@@ -62,5 +67,6 @@ class FollowUser {
         'face': face,
         'addTime': addTime.toString(),
         'tag':tag,
+        'shareUrl':shareUrl,
       };
 }

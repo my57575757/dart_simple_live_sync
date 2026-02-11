@@ -78,7 +78,7 @@ class SearchListView extends StatelessWidget {
                     ),
                     onTap: () {
                       AppNavigator.toLiveRoomDetail(
-                          site: controller.site, roomId: item.roomId);
+                          site: controller.site, roomId: item.roomId,shareUrl:"");
                     },
                   );
                 },

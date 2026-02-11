@@ -746,6 +746,7 @@ class LiveRoomPage extends GetView<LiveRoomController> {
                       controller.resetRoom(
                         Sites.allSites[item.siteId]!,
                         item.roomId,
+                        item.shareUrl,
                       );
                     },
                   ),

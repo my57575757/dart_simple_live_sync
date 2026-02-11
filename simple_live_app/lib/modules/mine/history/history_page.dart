@@ -87,7 +87,7 @@ class HistoryPage extends GetView<HistoryController> {
                 ],
               ),
               onTap: () {
-                AppNavigator.toLiveRoomDetail(site: site, roomId: item.roomId);
+                AppNavigator.toLiveRoomDetail(site: site, roomId: item.roomId, shareUrl:"");
               },
               onLongPress: () async {
                 var result =

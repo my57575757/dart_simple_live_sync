@@ -44,7 +44,9 @@ class FollowUserAdapter extends TypeAdapter<FollowUser> {
       ..writeByte(5)
       ..write(obj.addTime)
       ..writeByte(6)
-      ..write(obj.tag);
+      ..write(obj.tag)
+      ..writeByte(7)
+      ..write(obj.shareUrl);
   }
 
   @override

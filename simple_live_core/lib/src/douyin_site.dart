@@ -5,6 +5,7 @@ import 'package:simple_live_core/simple_live_core.dart';
 import 'package:simple_live_core/src/common/convert_helper.dart';
 import 'package:simple_live_core/src/common/http_client.dart';
 import 'package:simple_live_core/src/scripts/douyin_sign.dart';
+import 'package:simple_live_app/modules/mine/parse/parse_controller.dart';
 
 class DouyinSite implements LiveSite {
   @override
@@ -15,6 +16,8 @@ class DouyinSite implements LiveSite {
 
   @override
   LiveDanmaku getDanmaku() => DouyinDanmaku();
+
+  final ParseController parseController = ParseController();
 
   /// 使用 QQBrowser User-Agent（参考 DouyinLiveRecorder）
   static const String kDefaultUserAgent =
@@ -237,6 +240,12 @@ class DouyinSite implements LiveSite {
 
   @override
   Future<LiveRoomDetail> getRoomDetail({required String roomId}) async {
+    var arr = roomId.split(";");
+    var shareUrl = "";
+    if(arr.length>1){
+      shareUrl = arr[1];
+    }
+    roomId = arr[0];
     // 有两种roomId，一种是webRid，一种是roomId
     // roomId是一次性的，用户每次重新开播都会生成一个新的roomId
     // roomId一般长度为19位，例如：7376429659866598196
@@ -245,7 +254,7 @@ class DouyinSite implements LiveSite {
     // 这里简单进行判断，如果roomId长度小于15，则认为是webRid
     if (roomId.length <= 16) {
       var webRid = roomId;
-      return await getRoomDetailByWebRid(webRid);
+      return await getRoomDetailByWebRid(webRid,shareUrl);
     }
 
     return await getRoomDetailByRoomId(roomId);
@@ -274,7 +283,7 @@ class DouyinSite implements LiveSite {
     // roomId是一次性的，用户每次重新开播都会生成一个新的roomId
     // 所以如果roomId对应的直播间状态不是直播中，就通过webRid获取直播间信息
     if (status == 4) {
-      var result = await getRoomDetailByWebRid(webRid);
+      var result = await getRoomDetailByWebRid(webRid,"");
       return result;
     }
 
@@ -308,12 +317,14 @@ class DouyinSite implements LiveSite {
   /// 通过WebRid获取直播间信息
   /// - [webRid] 直播间RID
   /// - 返回直播间信息
-  Future<LiveRoomDetail> getRoomDetailByWebRid(String webRid) async {
+  Future<LiveRoomDetail> getRoomDetailByWebRid(String webRid,String shareUrl) async {
     try {
       var result = await _getRoomDetailByWebRidApi(webRid);
       return result;
     } catch (e) {
       CoreLog.error(e);
+      // 通过shareUrl获取信息
+      return await _getRoomDetailByShareUrl(shareUrl);
     }
     return await _getRoomDetailByWebRidHtml(webRid);
   }
@@ -365,6 +376,16 @@ class DouyinSite implements LiveSite {
       ),
       data: roomStatus ? roomData["stream_url"] : {},
     );
+  }
+  /// 通过shareUrl访问直播间网页，从网页HTML中获取直播间信息
+  /// - [shareUrl] 直播间shareUrl
+  /// - 返回直播间信息
+  Future<LiveRoomDetail> _getRoomDetailByShareUrl(String shareUrl) async {
+    var parseResult = await parseController.parse(shareUrl);
+    if (parseResult.isEmpty && parseResult.first == "") {
+      throw Exception("无法解析此链接");
+    }
+    return getRoomDetail(roomId: parseResult.first);
   }
 
   /// 通过WebRid访问直播间网页，从网页HTML中获取直播间信息

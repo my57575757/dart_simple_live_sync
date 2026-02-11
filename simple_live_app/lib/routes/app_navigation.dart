@@ -25,7 +25,7 @@ class AppNavigator {
 
   /// 跳转至直播间
   static void toLiveRoomDetail(
-      {required Site site, required String roomId}) async {
+      {required Site site, required String roomId, required String shareUrl}) async {
     if (site.id == Constant.kBiliBili &&
         !BiliBiliAccountService.instance.logined.value &&
         AppSettingsController.instance.bilibiliLoginTip.value) {
@@ -52,6 +52,7 @@ class AppNavigator {
 
     Get.toNamed(RoutePath.kLiveRoomDetail, arguments: site, parameters: {
       "roomId": roomId,
+      "shareUrl": shareUrl,
     });
   }
 

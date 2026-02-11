@@ -34,13 +34,16 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
 
   final Site pSite;
   final String pRoomId;
+  final String pShareUrl;
   late LiveDanmaku liveDanmaku;
   LiveRoomController({
     required this.pSite,
     required this.pRoomId,
+    required this.pShareUrl,
   }) {
     rxSite = pSite.obs;
     rxRoomId = pRoomId.obs;
+    rxShareUrl = pShareUrl.obs;
     liveDanmaku = site.liveSite.getDanmaku();
     // 抖音应该默认是竖屏的
     if (site.id == "douyin") {
@@ -52,6 +55,8 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   Site get site => rxSite.value;
   late Rx<String> rxRoomId;
   String get roomId => rxRoomId.value;
+  late Rx<String> rxShareUrl;
+  String get shareUrl => rxShareUrl.value;
 
   Rx<LiveRoomDetail?> detail = Rx<LiveRoomDetail?>(null);
   var online = 0.obs;
@@ -292,7 +297,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       error = null;
       update();
       addSysMsg("正在读取直播间信息");
-      detail.value = await site.liveSite.getRoomDetail(roomId: roomId);
+      detail.value = await site.liveSite.getRoomDetail(roomId: site.id == Constant.kDouyin?(roomId+";"+shareUrl):roomId);
 
       if (site.id == Constant.kDouyin) {
         // 1.6.0之前收藏的WebRid
@@ -865,6 +870,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
                         resetRoom(
                           Sites.allSites[item.siteId]!,
                           item.roomId,
+                          item.shareUrl,
                         );
                       },
                     ),
@@ -986,14 +992,14 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     }
   }
 
-  void resetRoom(Site site, String roomId) async {
+  void resetRoom(Site site, String roomId, String shareUrl) async {
     if (this.site == site && this.roomId == roomId) {
       return;
     }
 
     rxSite.value = site;
     rxRoomId.value = roomId;
-
+    rxShareUrl.value = shareUrl;
     // 清除全部消息
     liveDanmaku.stop();
     messages.clear();

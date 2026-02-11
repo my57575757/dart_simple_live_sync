@@ -71,7 +71,7 @@ class DouyinSearchView extends StatelessWidget {
                   var id = regExp.firstMatch(uri.toString())?.group(1) ?? "";
 
                   AppNavigator.toLiveRoomDetail(
-                      site: controller.site, roomId: id);
+                      site: controller.site, roomId: id,shareUrl:"");
                   return NavigationActionPolicy.CANCEL;
                 }
                 return NavigationActionPolicy.ALLOW;

@@ -875,6 +875,7 @@ void showFollowUser(LiveRoomController controller) {
                       controller.resetRoom(
                         Sites.allSites[item.siteId]!,
                         item.roomId,
+                        item.shareUrl,
                       );
                     },
                   ),

@@ -181,7 +181,7 @@ class FollowUserPage extends GetView<FollowUserController> {
                   },
                   onTap: () {
                     AppNavigator.toLiveRoomDetail(
-                        site: site, roomId: item.roomId);
+                        site: site, roomId: item.roomId, shareUrl:item.shareUrl);
                   },
                   onLongPress: () {
                     setFollowTagDialog(item);

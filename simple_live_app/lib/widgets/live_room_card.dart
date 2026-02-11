@@ -17,7 +17,7 @@ class LiveRoomCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return ShadowCard(
       onTap: () {
-        AppNavigator.toLiveRoomDetail(site: site, roomId: item.roomId);
+        AppNavigator.toLiveRoomDetail(site: site, roomId: item.roomId, shareUrl:"");
       },
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
