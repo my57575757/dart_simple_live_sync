@@ -324,7 +324,9 @@ class DouyinSite implements LiveSite {
     } catch (e) {
       CoreLog.error(e);
       // 通过shareUrl获取信息
-      return await _getRoomDetailByShareUrl(shareUrl);
+      if(shareUrl!=""){
+        return await _getRoomDetailByShareUrl(shareUrl);
+      }
     }
     return await _getRoomDetailByWebRidHtml(webRid);
   }

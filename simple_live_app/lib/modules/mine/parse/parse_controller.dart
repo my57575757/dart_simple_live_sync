@@ -145,6 +145,8 @@ class ParseController extends GetxController {
       return [id, Sites.allSites[Constant.kDouyin]!];
     }
     if (url.contains("webcast.amemv.com")) {
+      //抖音请求一次,获取真正的url
+      url = await getLocationSecond(url);
       var regExp = RegExp(r"reflow/(\d+)");
       id = regExp.firstMatch(url)?.group(1) ?? "";
       return [id, Sites.allSites[Constant.kDouyin]!];
@@ -169,6 +171,29 @@ class ParseController extends GetxController {
         ),
       );
     } on DioException catch (e) {
+      if (e.response!.statusCode == 302) {
+        var redirectUrl = e.response!.headers.value("Location");
+        if (redirectUrl != null) {
+          return redirectUrl;
+        }
+      }
+    } catch (e) {
+      Log.logPrint(e);
+    }
+    return "";
+  }
+  Future<String> getLocationSecond(String url) async {
+    try {
+      if (url.isEmpty) return "";
+      final resp = await Dio().get<String>(
+        url,
+      );
+      final res = resp.data ?? "";
+      var regExp = RegExp(r'\\"shareUrl\\"\s*:\s*\\"(.*?)\\"');
+      Log.logPrint(res);
+      return regExp.firstMatch(res)?.group(1) ?? "";
+    } on DioException catch (e) {
+      Log.logPrint(e);
       if (e.response!.statusCode == 302) {
         var redirectUrl = e.response!.headers.value("Location");
         if (redirectUrl != null) {
