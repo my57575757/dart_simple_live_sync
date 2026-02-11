@@ -317,6 +317,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
                 userName: detail.value!.userName,
                 face: detail.value!.userAvatar,
                 addTime: DateTime.now(),
+                shareUrl: shareUrl,
               ),
             );
           } else {
@@ -560,6 +561,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       userName: detail.value?.userName ?? "",
       face: detail.value?.userAvatar ?? "",
       addTime: DateTime.now(),
+      shareUrl: shareUrl,
     );
     DBService.instance.addFollow(
       user,

@@ -24,6 +24,7 @@ class FollowUserAdapter extends TypeAdapter<FollowUser> {
       face: fields[4] as String,
       addTime: fields[5] as DateTime,
       tag: fields[6] ?? "全部",
+      shareUrl: fields[7] ?? "",
     );
   }
 
