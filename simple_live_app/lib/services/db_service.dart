@@ -83,6 +83,12 @@ class DBService extends GetxService {
   }
 
   Future addFollow(FollowUser follow) async {
+    var existing = followBox.get(follow.id);
+    if (existing != null &&
+        existing.shareUrl.isNotEmpty &&
+        follow.shareUrl.isEmpty) {
+      follow.shareUrl = existing.shareUrl;
+    }
     await followBox.put(follow.id, follow);
   }
 
@@ -107,9 +113,10 @@ class DBService extends GetxService {
     return his;
   }
 
-  Future addOrUpdateVolume(String id,double volume) async {
+  Future addOrUpdateVolume(String id, double volume) async {
     await volumeBox.put(id, volume);
   }
+
   double? getVolume(String id) {
     if (volumeBox.containsKey(id)) {
       var d = volumeBox.get(id);

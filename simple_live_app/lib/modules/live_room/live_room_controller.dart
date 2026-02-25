@@ -306,13 +306,14 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
         if (detail.value!.roomId != roomId) {
           var oldId = roomId;
           rxRoomId.value = detail.value!.roomId;
+          rxShareUrl.value = shareUrl;
           if (followed.value) {
             // 更新关注列表
             DBService.instance.deleteFollow("${site.id}_$oldId");
             DBService.instance.addFollow(
               FollowUser(
-                id: "${site.id}_$roomId",
-                roomId: roomId,
+                id: "${site.id}_${detail.value!.roomId}",
+                roomId: detail.value!.roomId,
                 siteId: site.id,
                 userName: detail.value!.userName,
                 face: detail.value!.userAvatar,
