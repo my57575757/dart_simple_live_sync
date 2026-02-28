@@ -297,7 +297,9 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       error = null;
       update();
       addSysMsg("正在读取直播间信息");
-      detail.value = await site.liveSite.getRoomDetail(roomId: site.id == Constant.kDouyin?(roomId+";"+shareUrl):roomId);
+      detail.value = await site.liveSite.getRoomDetail(
+          roomId:
+              site.id == Constant.kDouyin ? (roomId + ";" + shareUrl) : roomId);
 
       if (site.id == Constant.kDouyin) {
         // 1.6.0之前收藏的WebRid
@@ -585,7 +587,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     DBService.instance.deleteFollow(id);
     followed.value = false;
     EventBus.instance.emit(Constant.kUpdateFollow, id);
-    syncController.delUserData(site.id,roomId);
+    syncController.delUserData(site.id, roomId);
   }
 
   void share() {
@@ -1008,8 +1010,10 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     messages.clear();
     superChats.clear();
     danmakuController?.clear();
+    // 重置缩放
+    resetZoom();
 
-    // 重新设置LiveDanmaku
+    // 重新设置 LiveDanmaku
     liveDanmaku = site.liveSite.getDanmaku();
 
     // 停止播放
@@ -1091,6 +1095,6 @@ ${error?.stackTrace}''');
 
   void addOrUpdateVolume(double newValue) async {
     var id = "${site.id}_$roomId";
-    DBService.instance.addOrUpdateVolume(id,newValue);
+    DBService.instance.addOrUpdateVolume(id, newValue);
   }
 }

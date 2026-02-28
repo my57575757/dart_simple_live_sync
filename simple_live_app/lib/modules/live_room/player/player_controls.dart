@@ -80,7 +80,7 @@ Widget buildFullControls(
         Positioned.fill(
           child: GestureDetector(
             onTap: controller.onTap,
-            onDoubleTapDown: controller.onDoubleTap,
+            onDoubleTapDown: controller.onDoubleTapZoom,
             onLongPress: () {
               if (controller.lockControlsState.value) {
                 return;
@@ -466,7 +466,7 @@ Widget buildControls(
       Positioned.fill(
         child: GestureDetector(
           onTap: controller.onTap,
-          onDoubleTapDown: controller.onDoubleTap,
+          onDoubleTapDown: controller.onDoubleTapZoom,
           onVerticalDragStart: controller.onVerticalDragStart,
           onVerticalDragUpdate: controller.onVerticalDragUpdate,
           onVerticalDragEnd: controller.onVerticalDragEnd,

@@ -49,7 +49,7 @@ mixin PlayerMixin {
       }
     }
     // media_kit 仓库更新导致的问题，临时解决办法
-    if(Platform.isAndroid){
+    if (Platform.isAndroid) {
       await pp.setProperty('force-seekable', 'yes');
     }
   }
@@ -100,16 +100,16 @@ mixin PlayerStateMixin on PlayerMixin {
   /// 是否处于全屏状态
   RxBool fullScreenState = false.obs;
 
-  /// 显示手势Tip
+  /// 显示手势 Tip
   RxBool showGestureTip = false.obs;
 
-  /// 手势Tip文本
+  /// 手势 Tip 文本
   RxString gestureTipText = "".obs;
 
-  /// 显示提示底部Tip
+  /// 显示提示底部 Tip
   RxBool showBottomTip = false.obs;
 
-  /// 提示底部Tip文本
+  /// 提示底部 Tip 文本
   RxString bottomTipText = "".obs;
 
   /// 自动隐藏控制器计时器
@@ -126,7 +126,23 @@ mixin PlayerStateMixin on PlayerMixin {
   var showQualites = false.obs;
   var showLines = false.obs;
 
-  /// 隐藏控制器
+  /// InteractiveViewer 控制器，用于缩放和平移
+  final TransformationController transformationController =
+      TransformationController();
+
+  /// 焦点节点，用于键盘快捷键
+  final FocusNode playerFocusNode = FocusNode();
+
+  /// 当前缩放倍数 getter
+  double get currentZoomScale {
+    final value = transformationController.value;
+    final scale = value.getMaxScaleOnAxis();
+    return scale.clamp(1.0, 4.0);
+  }
+
+  /// 判断是否处于放大状态
+  bool get isZoomed => currentZoomScale > 1.0;
+
   void hideControls() {
     showControlsState.value = false;
     hideControlsTimer?.cancel();
@@ -192,17 +208,6 @@ mixin PlayerDanmakuMixin on PlayerStateMixin {
 
   void initDanmakuController(DanmakuController e) {
     danmakuController = e;
-    // danmakuController?.updateOption(
-    //   DanmakuOption(
-    //     fontSize: AppSettingsController.instance.danmuSize.value,
-    //     area: AppSettingsController.instance.danmuArea.value,
-    //     duration: AppSettingsController.instance.danmuSpeed.value,
-    //     opacity: AppSettingsController.instance.danmuOpacity.value,
-    //     strokeWidth: AppSettingsController.instance.danmuStrokeWidth.value,
-    //     fontWeight: FontWeight
-    //         .values[AppSettingsController.instance.danmuFontWeight.value],
-    //   ),
-    // );
   }
 
   void updateDanmuOption(DanmakuOption? option) {
@@ -229,16 +234,11 @@ mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
   final pip = Floating();
   StreamSubscription<PiPStatus>? _pipSubscription;
 
-  //final VolumeController volumeController = VolumeController();
-
   /// 初始化一些系统状态
   void initSystem() async {
     if (Platform.isAndroid || Platform.isIOS) {
       VolumeController.instance.showSystemUI = false;
     }
-
-    // 屏幕常亮
-    //WakelockPlus.enable();
 
     // 开始隐藏计时
     resetHideControlsTimer();
@@ -252,7 +252,6 @@ mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
   /// 释放一些系统状态
   Future resetSystem() async {
     _pipSubscription?.cancel();
-    //pip.dispose();
     await SystemChrome.setEnabledSystemUIMode(
       SystemUiMode.edgeToEdge,
       overlays: SystemUiOverlay.values,
@@ -260,7 +259,6 @@ mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
 
     await setPortraitOrientation();
     if (Platform.isAndroid || Platform.isIOS || Platform.isMacOS) {
-      // 亮度重置,桌面平台可能会报错,暂时不处理桌面平台的亮度
       try {
         await ScreenBrightness.instance.resetApplicationScreenBrightness();
       } catch (e) {
@@ -275,25 +273,21 @@ mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
   Future<void> enterFullScreen() async {
     fullScreenState.value = true;
     if (Platform.isAndroid || Platform.isIOS) {
-      //全屏
       SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual, overlays: []);
       if (!isVertical.value) {
-        //横屏
         setLandscapeOrientation();
       }
     } else {
-      // 读取窗口大小
       _lastWindowSize = await windowManager.getSize();
       _lastWindowPosition = await windowManager.getPosition();
       windowManager.setFullScreen(true);
       windowManager.setTitleBarStyle(TitleBarStyle.hidden);
       windowManager.maximize();
     }
-    //danmakuController?.clear();
   }
 
   /// 退出全屏
-  void exitFull() async{
+  void exitFull() async {
     if (Platform.isAndroid || Platform.isIOS) {
       SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge,
           overlays: SystemUiOverlay.values);
@@ -301,33 +295,30 @@ mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
     } else {
       windowManager.setFullScreen(false);
       windowManager.setTitleBarStyle(TitleBarStyle.normal);
-      if (_lastWindowSize != null) await windowManager.setSize(_lastWindowSize!);
-      if (_lastWindowPosition != null) await windowManager.setPosition(_lastWindowPosition!);
+      if (_lastWindowSize != null)
+        await windowManager.setSize(_lastWindowSize!);
+      if (_lastWindowPosition != null)
+        await windowManager.setPosition(_lastWindowPosition!);
     }
     fullScreenState.value = false;
-
-    //danmakuController?.clear();
   }
 
   Size? _lastWindowSize;
   Offset? _lastWindowPosition;
 
-  ///小窗模式()
+  ///小窗模式 ()
   void enterSmallWindow() async {
     if (!(Platform.isAndroid || Platform.isIOS)) {
       fullScreenState.value = true;
       smallWindowState.value = true;
 
-      // 读取窗口大小
       _lastWindowSize = await windowManager.getSize();
       _lastWindowPosition = await windowManager.getPosition();
 
       windowManager.setTitleBarStyle(TitleBarStyle.hidden);
-      // 获取视频窗口大小
       var width = player.state.width ?? 16;
       var height = player.state.height ?? 9;
 
-      // 横屏还是竖屏
       if (height > width) {
         var aspectRatio = width / height;
         windowManager.setSize(Size(400, 400 / aspectRatio));
@@ -340,7 +331,7 @@ mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
     }
   }
 
-  ///退出小窗模式()
+  ///退出小窗模式 ()
   void exitSmallWindow() {
     if (!(Platform.isAndroid || Platform.isIOS)) {
       fullScreenState.value = false;
@@ -349,7 +340,6 @@ mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
       windowManager.setSize(_lastWindowSize!);
       windowManager.setPosition(_lastWindowPosition!);
       windowManager.setAlwaysOnTop(false);
-      //windowManager.setAlignment(Alignment.center);
     }
   }
 
@@ -374,7 +364,7 @@ mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
     }
   }
 
-  /// 是否是IOS16以下
+  /// 是否是 IOS16 以下
   Future<bool> beforeIOS16() async {
     if (Platform.isIOS) {
       var info = await deviceInfo.iosInfo;
@@ -389,7 +379,6 @@ mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
   Future saveScreenshot() async {
     try {
       SmartDialog.showLoading(msg: "正在保存截图");
-      //检查相册权限,仅iOS需要
       var permission = await Utils.checkPhotoPermission();
       if (!permission) {
         SmartDialog.showToast("没有相册权限");
@@ -399,18 +388,15 @@ mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
 
       var imageData = await player.screenshot();
       if (imageData == null) {
-        SmartDialog.showToast("截图失败,数据为空");
+        SmartDialog.showToast("截图失败，数据为空");
         SmartDialog.dismiss(status: SmartStatus.loading);
         return;
       }
 
       if (Platform.isIOS || Platform.isAndroid) {
-        await ImageGallerySaverPlus.saveImage(
-          imageData,
-        );
+        await ImageGallerySaverPlus.saveImage(imageData);
         SmartDialog.showToast("已保存截图至相册");
       } else {
-        //选择保存文件夹
         var path = await FilePicker.platform.saveFile(
           allowedExtensions: ["jpg"],
           type: FileType.image,
@@ -445,16 +431,13 @@ mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
       return;
     }
     danmakuStateBeforePIP = showDanmakuState.value;
-    //关闭并清除弹幕
     if (AppSettingsController.instance.pipHideDanmu.value &&
         danmakuStateBeforePIP) {
       showDanmakuState.value = false;
     }
     danmakuController?.clear();
-    //关闭控制器
     showControlsState.value = false;
 
-    //监听事件
     var width = player.state.width ?? 0;
     var height = player.state.height ?? 0;
     Rational ratio = const Rational.landscape();
@@ -504,7 +487,7 @@ mixin PlayerGestureControlMixin
 
   void onHover(PointerHoverEvent event, BuildContext context) {
     final screenHeight = MediaQuery.of(context).size.height;
-    final targetPosition = screenHeight * 0.25; // 计算屏幕顶部25%的位置
+    final targetPosition = screenHeight * 0.25;
     if (event.position.dy <= targetPosition ||
         event.position.dy >= targetPosition * 3) {
       if (!showControlsState.value) {
@@ -513,15 +496,107 @@ mixin PlayerGestureControlMixin
     }
   }
 
-  /// 双击全屏/退出全屏
-  void onDoubleTap(TapDownDetails details) {
+  /// 双击缩放处理：放大时重置，否则全屏
+  void onDoubleTapZoom(TapDownDetails details) {
     if (lockControlsState.value) {
       return;
     }
-    if (fullScreenState.value) {
-      exitFull();
+    if (isZoomed) {
+      resetZoom();
     } else {
-      enterFullScreen();
+      if (fullScreenState.value) {
+        exitFull();
+      } else {
+        enterFullScreen();
+      }
+    }
+  }
+
+  /// 重置缩放到原始状态
+  void resetZoom() {
+    transformationController.value = Matrix4.identity();
+  }
+
+  /// 限制缩放范围 1.0x - 4.0x
+  void onInteractionEnd() {
+    double scale = currentZoomScale;
+    if (scale < 1.0) {
+      resetZoom();
+    } else if (scale > 4.0) {
+      final overScale = scale / 4.0;
+      transformationController.value = transformationController.value
+        ..scale(1.0 / overScale);
+    }
+  }
+
+  /// 按步进值缩放
+  void zoomBy(double step) {
+    if (lockControlsState.value || smallWindowState.value) {
+      return;
+    }
+    final currentScale = currentZoomScale;
+    final newScale = (currentScale + step).clamp(1.0, 4.0);
+    if (newScale == currentScale) {
+      return;
+    }
+    final scale = newScale / currentScale;
+    transformationController.value = transformationController.value
+      ..scale(scale);
+    showZoomIndicator(newScale);
+  }
+
+  /// 按偏移量平移
+  void panBy(double dx, double dy) {
+    if (lockControlsState.value || smallWindowState.value || !isZoomed) {
+      return;
+    }
+    transformationController.value = transformationController.value
+      ..translate(dx, dy);
+  }
+
+  /// 显示缩放倍数提示
+  void showZoomIndicator(double scale) {
+    if (lockControlsState.value || smallWindowState.value) {
+      return;
+    }
+    gestureTipText.value = "缩放 ${(scale * 100).toInt()}%";
+    showGestureTip.value = true;
+    hideSeekTipTimer?.cancel();
+    hideSeekTipTimer = Timer(const Duration(seconds: 2), () {
+      showGestureTip.value = false;
+    });
+  }
+
+  /// 键盘快捷键处理
+  void handleKeyboardKey(KeyEvent event) {
+    if (event is! KeyDownEvent) return;
+    if (lockControlsState.value || smallWindowState.value) return;
+
+    final logicalKey = event.logicalKey;
+
+    // 缩放快捷键
+    if (logicalKey == LogicalKeyboardKey.numpadAdd ||
+        logicalKey == LogicalKeyboardKey.equal) {
+      zoomBy(0.5);
+    } else if (logicalKey == LogicalKeyboardKey.minus ||
+        logicalKey == LogicalKeyboardKey.numpadSubtract) {
+      zoomBy(-0.5);
+    }
+    // 平移快捷键
+    else if (logicalKey == LogicalKeyboardKey.arrowUp) {
+      panBy(0, 50);
+    } else if (logicalKey == LogicalKeyboardKey.arrowDown) {
+      panBy(0, -50);
+    } else if (logicalKey == LogicalKeyboardKey.arrowLeft) {
+      panBy(50, 0);
+    } else if (logicalKey == LogicalKeyboardKey.arrowRight) {
+      panBy(-50, 0);
+    }
+    // 重置快捷键
+    else if (logicalKey == LogicalKeyboardKey.home) {
+      resetZoom();
+      gestureTipText.value = "缩放 100%";
+      showZoomIndicator(1.0);
     }
   }
 
@@ -540,7 +615,6 @@ mixin PlayerGestureControlMixin
     }
 
     final dy = details.globalPosition.dy;
-    // 开始位置必须是中间2/4的位置
     if (dy < Get.height * 0.25 || dy > Get.height * 0.75) {
       return;
     }
@@ -571,8 +645,6 @@ mixin PlayerGestureControlMixin
     if (!Platform.isAndroid && !Platform.isIOS) {
       return;
     }
-    //String text = "";
-    //double value = 0.0;
 
     Log.logPrint("$verStartPosition/${e.globalPosition.dy}");
 
@@ -583,7 +655,7 @@ mixin PlayerGestureControlMixin
     }
   }
 
-  int lastVolume = -1; // it's ok to be -1
+  int lastVolume = -1;
 
   void setGestureVolume(double dy) {
     double value = 0.0;
@@ -607,12 +679,10 @@ mixin PlayerGestureControlMixin
       return;
     }
     lastVolume = volume;
-    // update UI outside throttle to make it more fluent
     gestureTipText.value = "音量 $volume%";
     throttle?.invoke(() async => await _realSetVolume(volume));
   }
 
-  // 0 to 100, 5 step each
   int _convertVolume(int volume) {
     return (volume / 5).round() * 5;
   }
@@ -671,8 +741,6 @@ class PlayerController extends BaseController
   void onInit() {
     initSystem();
     initStream();
-    //设置音量
-    // player.setVolume(AppSettingsController.instance.playerVolume.value);
     super.onInit();
   }
 
@@ -686,12 +754,9 @@ class PlayerController extends BaseController
   void initStream() {
     _errorSubscription = player.stream.error.listen((event) {
       Log.d("播放器错误：$event");
-      // 跳过无音频输出的错误
-      // Could not open/initialize audio device -> no sound.
       if (event.contains('no sound.')) {
         return;
       }
-      //SmartDialog.showToast(event);
       mediaError(event);
     });
 

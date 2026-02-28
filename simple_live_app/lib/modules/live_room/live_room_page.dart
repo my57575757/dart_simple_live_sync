@@ -1,7 +1,10 @@
 import 'dart:io';
+import 'dart:ui';
 
 import 'package:floating/floating.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 import 'package:lottie/lottie.dart';
 import 'package:media_kit_video/media_kit_video.dart';
@@ -256,20 +259,49 @@ class LiveRoomPage extends GetView<LiveRoomController> {
     }
     return Stack(
       children: [
-        Video(
-          key: controller.globalPlayerKey,
-          controller: controller.videoController,
-          pauseUponEnteringBackgroundMode:
-              AppSettingsController.instance.playerAutoPause.value,
-          resumeUponEnteringForegroundMode:
-              AppSettingsController.instance.playerAutoPause.value,
-          controls: (state) {
-            return playerControls(state, controller);
-          },
-          aspectRatio: aspectRatio,
-          fit: boxFit,
-          // 自己实现
-          wakelock: false,
+        KeyboardListener(
+          focusNode: controller.playerFocusNode,
+          onKeyEvent: controller.handleKeyboardKey,
+          child: Listener(
+            onPointerSignal: (event) {
+              // Ctrl+ 滚轮缩放
+              if (event is PointerScrollEvent &&
+                  HardwareKeyboard.instance.isControlPressed) {
+                final delta = event.scrollDelta.dy;
+                // 向下滚动（delta > 0）缩小，向上滚动（delta < 0）放大
+                final step = delta > 0 ? -0.5 : 0.5;
+                controller.zoomBy(step);
+              }
+            },
+            child: Container(
+              color: Colors.black,
+              child: InteractiveViewer(
+                transformationController: controller.transformationController,
+                minScale: 1.0,
+                maxScale: 4.0,
+                boundaryMargin: EdgeInsets.zero,
+                panEnabled: true,
+                scaleEnabled: true,
+                onInteractionEnd: (_) {
+                  controller.onInteractionEnd();
+                },
+                child: Video(
+                  key: controller.globalPlayerKey,
+                  controller: controller.videoController,
+                  pauseUponEnteringBackgroundMode:
+                      AppSettingsController.instance.playerAutoPause.value,
+                  resumeUponEnteringForegroundMode:
+                      AppSettingsController.instance.playerAutoPause.value,
+                  controls: (state) {
+                    return playerControls(state, controller);
+                  },
+                  aspectRatio: aspectRatio,
+                  fit: boxFit,
+                  wakelock: false,
+                ),
+              ),
+            ),
+          ),
         ),
         Obx(
           () => Visibility(
