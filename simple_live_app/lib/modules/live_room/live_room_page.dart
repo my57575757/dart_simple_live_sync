@@ -275,31 +275,32 @@ class LiveRoomPage extends GetView<LiveRoomController> {
             },
             child: Container(
               color: Colors.black,
-              child: InteractiveViewer(
-                transformationController: controller.transformationController,
-                minScale: 1.0,
-                maxScale: 4.0,
-                boundaryMargin: EdgeInsets.zero,
-                panEnabled: true,
-                scaleEnabled: true,
-                onInteractionEnd: (_) {
-                  controller.onInteractionEnd();
-                },
-                child: Video(
-                  key: controller.globalPlayerKey,
-                  controller: controller.videoController,
-                  pauseUponEnteringBackgroundMode:
-                      AppSettingsController.instance.playerAutoPause.value,
-                  resumeUponEnteringForegroundMode:
-                      AppSettingsController.instance.playerAutoPause.value,
-                  controls: (state) {
-                    return playerControls(state, controller);
-                  },
-                  aspectRatio: aspectRatio,
-                  fit: boxFit,
-                  wakelock: false,
-                ),
-              ),
+              child: Obx(() => InteractiveViewer(
+                    transformationController:
+                        controller.transformationController,
+                    minScale: 1.0,
+                    maxScale: 4.0,
+                    boundaryMargin: EdgeInsets.zero,
+                    panEnabled: controller.isZoomedState.value, // 响应式拖拽控制
+                    scaleEnabled: true,
+                    onInteractionEnd: (_) {
+                      controller.onInteractionEnd();
+                    },
+                    child: Video(
+                      key: controller.globalPlayerKey,
+                      controller: controller.videoController,
+                      pauseUponEnteringBackgroundMode:
+                          AppSettingsController.instance.playerAutoPause.value,
+                      resumeUponEnteringForegroundMode:
+                          AppSettingsController.instance.playerAutoPause.value,
+                      controls: (state) {
+                        return playerControls(state, controller);
+                      },
+                      aspectRatio: aspectRatio,
+                      fit: boxFit,
+                      wakelock: false,
+                    ),
+                  )),
             ),
           ),
         ),

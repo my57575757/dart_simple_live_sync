@@ -257,7 +257,7 @@ class RemoteSyncWebDAVController extends BaseController {
           await DBService.instance.followBox.clear();
           for (var item in jsonData) {
             var user = FollowUser.fromJson(item);
-            await DBService.instance.followBox.put(user.id, user);
+            await DBService.instance.updateFollow(user);
           }
           Log.i('已同步关注用户列表');
         } catch (e) {

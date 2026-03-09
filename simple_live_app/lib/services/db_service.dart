@@ -92,6 +92,18 @@ class DBService extends GetxService {
     await followBox.put(follow.id, follow);
   }
 
+  /// 更新关注用户（用于同步场景）
+  /// 与 addFollow 不同，此方法专门用于同步场景，保留有效 shareUrl
+  Future updateFollow(FollowUser follow) async {
+    var existing = followBox.get(follow.id);
+    if (existing != null &&
+        existing.shareUrl.isNotEmpty &&
+        follow.shareUrl.isEmpty) {
+      follow.shareUrl = existing.shareUrl;
+    }
+    await followBox.put(follow.id, follow);
+  }
+
   Future deleteFollow(String id) async {
     await followBox.delete(id);
   }

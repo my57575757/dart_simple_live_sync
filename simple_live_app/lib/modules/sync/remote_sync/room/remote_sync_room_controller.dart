@@ -129,7 +129,7 @@ class RemoteSyncRoomController extends BaseController {
       }
       for (var item in jsonBody) {
         var user = FollowUser.fromJson(item);
-        await DBService.instance.followBox.put(user.id, user);
+        await DBService.instance.updateFollow(user);
       }
       SmartDialog.showToast('已同步关注用户列表');
       EventBus.instance.emit(Constant.kUpdateFollow, 0);

@@ -143,6 +143,14 @@ mixin PlayerStateMixin on PlayerMixin {
   /// 判断是否处于放大状态
   bool get isZoomed => currentZoomScale > 1.0;
 
+  /// 响应式放大状态，用于 UI 绑定
+  RxBool isZoomedState = false.obs;
+
+  /// 更新放大状态
+  void updateZoomState() {
+    isZoomedState.value = isZoomed;
+  }
+
   void hideControls() {
     showControlsState.value = false;
     hideControlsTimer?.cancel();
@@ -741,6 +749,10 @@ class PlayerController extends BaseController
   void onInit() {
     initSystem();
     initStream();
+    // 监听 transformationController 变化以更新缩放状态
+    transformationController.addListener(() {
+      updateZoomState();
+    });
     super.onInit();
   }
 
