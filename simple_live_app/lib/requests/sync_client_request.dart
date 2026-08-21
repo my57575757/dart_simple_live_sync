@@ -110,6 +110,22 @@ class SyncClientRequest {
     }
   }
 
+  Future<bool> syncTtwid(SyncClinet client, String ttwid) async {
+    var url = "http://${client.address}:${client.port}/sync/account/ttwid";
+    var data = await HttpClient.instance.postJson(
+      url,
+      data: {
+        "cookie": ttwid,
+      },
+    );
+
+    if (data["status"]) {
+      return true;
+    } else {
+      throw data["message"];
+    }
+  }
+
   Future<bool> syncAll(
       dynamic body,String syncUrl) async {
     var url = syncUrl+"/simpleLive/updateAll";

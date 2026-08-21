@@ -8,6 +8,7 @@ import 'package:simple_live_app/app/utils.dart';
 import 'package:simple_live_app/models/sync_client_info_model.dart';
 import 'package:simple_live_app/requests/sync_client_request.dart';
 import 'package:simple_live_app/services/bilibili_account_service.dart';
+import 'package:simple_live_app/services/douyin_account_service.dart';
 import 'package:simple_live_app/services/db_service.dart';
 import 'package:simple_live_app/services/sync_service.dart';
 
@@ -115,6 +116,28 @@ class SyncDeviceControllerMy extends BaseController {
           client, bilibili);
       if(isOverlay) {
         SmartDialog.showToast("已同步哔哩哔哩账号");
+      }
+    } catch (e) {
+      SmartDialog.showToast("同步失败:$e");
+      Log.logPrint(e);
+    } finally {
+      SmartDialog.dismiss();
+    }
+  }
+
+  void syncTtwid({
+    String dataStr = "",
+    bool isOverlay = true,
+  }) async {
+    try {
+      if(isOverlay) {
+        SmartDialog.showLoading(msg: "同步中...");
+      }
+      var ttwid = ""==dataStr?DouyinAccountService.instance.cookie:dataStr;
+      await request.syncTtwid(
+          client, ttwid);
+      if(isOverlay) {
+        SmartDialog.showToast("已同步抖音 ttwid");
       }
     } catch (e) {
       SmartDialog.showToast("同步失败:$e");

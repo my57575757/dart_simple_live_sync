@@ -57,12 +57,10 @@ class DouyinSearchController extends BaseController {
     if (createWindowAction.request.url?.host == "live.douyin.com") {
       {
         var regExp = RegExp(r"live\.douyin\.com/([\d|\w]+)");
-        var id = regExp
-                .firstMatch(createWindowAction.request.url.toString())
-                ?.group(1) ??
-            "";
-
-        AppNavigator.toLiveRoomDetail(site: site, roomId: id,shareUrl:"");
+        var fullUrl = createWindowAction.request.url.toString();
+        var id = regExp.firstMatch(fullUrl)?.group(1) ?? "";
+        // 使用完整的直播间 URL 作为 shareUrl
+        AppNavigator.toLiveRoomDetail(site: site, roomId: id, shareUrl: fullUrl);
         return false;
       }
     }

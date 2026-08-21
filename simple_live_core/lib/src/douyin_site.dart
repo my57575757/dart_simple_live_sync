@@ -1,11 +1,11 @@
 import 'dart:convert';
 import 'dart:math';
 
+import 'package:dio/dio.dart';
 import 'package:simple_live_core/simple_live_core.dart';
 import 'package:simple_live_core/src/common/convert_helper.dart';
 import 'package:simple_live_core/src/common/http_client.dart';
 import 'package:simple_live_core/src/scripts/douyin_sign.dart';
-import 'package:simple_live_app/modules/mine/parse/parse_controller.dart';
 
 class DouyinSite implements LiveSite {
   @override
@@ -16,8 +16,6 @@ class DouyinSite implements LiveSite {
 
   @override
   LiveDanmaku getDanmaku() => DouyinDanmaku();
-
-  final ParseController parseController = ParseController();
 
   /// 使用 QQBrowser User-Agent（参考 DouyinLiveRecorder）
   static const String kDefaultUserAgent =
@@ -242,7 +240,7 @@ class DouyinSite implements LiveSite {
   Future<LiveRoomDetail> getRoomDetail({required String roomId}) async {
     var arr = roomId.split(";");
     var shareUrl = "";
-    if(arr.length>1){
+    if (arr.length > 1) {
       shareUrl = arr[1];
     }
     roomId = arr[0];
@@ -254,7 +252,7 @@ class DouyinSite implements LiveSite {
     // 这里简单进行判断，如果roomId长度小于15，则认为是webRid
     if (roomId.length <= 16) {
       var webRid = roomId;
-      return await getRoomDetailByWebRid(webRid,shareUrl);
+      return await getRoomDetailByWebRid(webRid, shareUrl);
     }
 
     return await getRoomDetailByRoomId(roomId);
@@ -283,7 +281,7 @@ class DouyinSite implements LiveSite {
     // roomId是一次性的，用户每次重新开播都会生成一个新的roomId
     // 所以如果roomId对应的直播间状态不是直播中，就通过webRid获取直播间信息
     if (status == 4) {
-      var result = await getRoomDetailByWebRid(webRid,"");
+      var result = await getRoomDetailByWebRid(webRid, "");
       return result;
     }
 
@@ -317,14 +315,17 @@ class DouyinSite implements LiveSite {
   /// 通过WebRid获取直播间信息
   /// - [webRid] 直播间RID
   /// - 返回直播间信息
-  Future<LiveRoomDetail> getRoomDetailByWebRid(String webRid,String shareUrl) async {
+  Future<LiveRoomDetail> getRoomDetailByWebRid(
+    String webRid,
+    String shareUrl,
+  ) async {
     try {
       var result = await _getRoomDetailByWebRidApi(webRid);
       return result;
     } catch (e) {
       CoreLog.error(e);
       // 通过shareUrl获取信息
-      if(shareUrl!=""){
+      if (shareUrl != "") {
         return await _getRoomDetailByShareUrl(shareUrl);
       }
     }
@@ -379,15 +380,75 @@ class DouyinSite implements LiveSite {
       data: roomStatus ? roomData["stream_url"] : {},
     );
   }
+
   /// 通过shareUrl访问直播间网页，从网页HTML中获取直播间信息
   /// - [shareUrl] 直播间shareUrl
   /// - 返回直播间信息
   Future<LiveRoomDetail> _getRoomDetailByShareUrl(String shareUrl) async {
-    var parseResult = await parseController.parse(shareUrl);
-    if (parseResult.isEmpty && parseResult.first == "") {
+    var roomId = await _parseDouyinShareRoomId(shareUrl);
+    if (roomId.isEmpty) {
       throw Exception("无法解析此链接");
     }
-    return getRoomDetail(roomId: parseResult.first);
+    return getRoomDetail(roomId: roomId);
+  }
+
+  Future<String> _parseDouyinShareRoomId(String url) async {
+    if (url.contains("live.douyin.com")) {
+      return RegExp(r"live\.douyin\.com/([\d\w]+)").firstMatch(url)?.group(1) ??
+          "";
+    }
+
+    if (url.contains("webcast.amemv.com")) {
+      var shareUrl = await _getShareUrlFromWebcastPage(url);
+      return RegExp(r"reflow/(\d+)").firstMatch(shareUrl)?.group(1) ?? "";
+    }
+
+    if (url.contains("v.douyin.com")) {
+      var shortUrl =
+          RegExp(
+            r"https?:\/\/v.douyin.com\/[\d\w]+\/?",
+          ).firstMatch(url)?.group(0) ??
+          "";
+      var location = await _getRedirectLocation(shortUrl);
+      if (location.isNotEmpty && location != url) {
+        return _parseDouyinShareRoomId(location);
+      }
+    }
+
+    return "";
+  }
+
+  Future<String> _getRedirectLocation(String url) async {
+    try {
+      if (url.isEmpty) return "";
+      await Dio().get(url, options: Options(followRedirects: false));
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 302) {
+        return e.response?.headers.value("Location") ?? "";
+      }
+    } catch (e) {
+      CoreLog.error(e);
+    }
+    return "";
+  }
+
+  Future<String> _getShareUrlFromWebcastPage(String url) async {
+    try {
+      if (url.isEmpty) return "";
+      var response = await Dio().get<String>(url);
+      return RegExp(
+            r'\\"shareUrl\\"\s*:\s*\\"(.*?)\\"',
+          ).firstMatch(response.data ?? "")?.group(1) ??
+          "";
+    } on DioException catch (e) {
+      CoreLog.error(e);
+      if (e.response?.statusCode == 302) {
+        return e.response?.headers.value("Location") ?? "";
+      }
+    } catch (e) {
+      CoreLog.error(e);
+    }
+    return "";
   }
 
   /// 通过WebRid访问直播间网页，从网页HTML中获取直播间信息

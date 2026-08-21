@@ -14,6 +14,7 @@ import 'package:simple_live_app/models/db/follow_user.dart';
 import 'package:simple_live_app/models/db/follow_user_tag.dart';
 import 'package:simple_live_app/models/db/history.dart';
 import 'package:simple_live_app/services/bilibili_account_service.dart';
+import 'package:simple_live_app/services/douyin_account_service.dart';
 import 'package:simple_live_app/services/db_service.dart';
 import 'package:udp/udp.dart';
 import 'package:shelf/shelf.dart' as shelf;
@@ -197,6 +198,7 @@ class SyncService extends GetxService {
       serverRouter.post('/sync/history', _syncHistoryReuqest);
       serverRouter.post('/sync/blocked_word', _syncBlockedWordReuqest);
       serverRouter.post('/sync/account/bilibili', _syncBiliAccountReuqest);
+      serverRouter.post('/sync/account/ttwid', _syncTtwidRequest);
 
       var server = await shelf_io.serve(
         serverRouter,
@@ -379,6 +381,26 @@ class SyncService extends GetxService {
       BiliBiliAccountService.instance.setCookie(cookie);
       BiliBiliAccountService.instance.loadUserInfo();
       SmartDialog.showToast('已同步哔哩哔哩账号');
+      return toJsonResponse({
+        'status': true,
+        'message': 'success',
+      });
+    } catch (e) {
+      return toJsonResponse({
+        'status': false,
+        'message': e.toString(),
+      });
+    }
+  }
+
+  Future<shelf.Response> _syncTtwidRequest(shelf.Request request) async {
+    try {
+      var body = await request.readAsString();
+      Log.d('_syncTtwidRequest: $body');
+      var jsonBody = json.decode(body);
+      var cookie = jsonBody['cookie'];
+      DouyinAccountService.instance.setCookie(cookie);
+      SmartDialog.showToast('已同步抖音 ttwid');
       return toJsonResponse({
         'status': true,
         'message': 'success',

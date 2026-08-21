@@ -29,7 +29,7 @@ class ParseController extends GetxController {
     // 延迟200ms跳转，等待键盘隐藏
     Future.delayed(const Duration(milliseconds: 200), () {
       Site site = parseResult[1];
-      AppNavigator.toLiveRoomDetail(site: site, roomId: parseResult.first,shareUrl:"");
+      AppNavigator.toLiveRoomDetail(site: site, roomId: parseResult.first,shareUrl: parseResult.length > 2 ? (parseResult[2] ?? "") : "");
     });
   }
 
@@ -118,8 +118,12 @@ class ParseController extends GetxController {
       var btvReg = RegExp(r"https?:\/\/b23.tv\/[0-9a-z-A-Z]+");
       var u = btvReg.firstMatch(url)?.group(0) ?? "";
       var location = await getLocation(u);
-
-      return await parse(location);
+      // 递归解析重定向后的链接，但保留原始短链接作为 shareUrl
+      var result = await parse(location);
+      if (result.isNotEmpty && result[2] == "") {
+        result[2] = url;
+      }
+      return result;
     }
 
     if (url.contains("douyu.com")) {
@@ -141,21 +145,27 @@ class ParseController extends GetxController {
     if (url.contains("live.douyin.com")) {
       var regExp = RegExp(r"live\.douyin\.com/([\d|\w]+)");
       id = regExp.firstMatch(url)?.group(1) ?? "";
-
-      return [id, Sites.allSites[Constant.kDouyin]!];
+      // 保留完整的 live.douyin.com 链接作为 shareUrl
+      return [id, Sites.allSites[Constant.kDouyin]!, url];
     }
     if (url.contains("webcast.amemv.com")) {
       //抖音请求一次,获取真正的url
       url = await getLocationSecond(url);
       var regExp = RegExp(r"reflow/(\d+)");
       id = regExp.firstMatch(url)?.group(1) ?? "";
-      return [id, Sites.allSites[Constant.kDouyin]!];
+      // 保留原始链接作为 shareUrl
+      return [id, Sites.allSites[Constant.kDouyin]!, url];
     }
     if (url.contains("v.douyin.com")) {
       var regExp = RegExp(r"http.?://v.douyin.com/[\d\w]+/");
       var u = regExp.firstMatch(url)?.group(0) ?? "";
       var location = await getLocation(u);
-      return await parse(location);
+      // 递归解析重定向后的链接，但保留原始短链接作为 shareUrl
+      var result = await parse(location);
+      if (result.isNotEmpty && result[2] == "") {
+        result[2] = url;
+      }
+      return result;
     }
 
     return [];

@@ -44,6 +44,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     rxSite = pSite.obs;
     rxRoomId = pRoomId.obs;
     rxShareUrl = pShareUrl.obs;
+    hydrateShareUrlFromFollow();
     liveDanmaku = site.liveSite.getDanmaku();
     // 抖音应该默认是竖屏的
     if (site.id == "douyin") {
@@ -57,6 +58,16 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   String get roomId => rxRoomId.value;
   late Rx<String> rxShareUrl;
   String get shareUrl => rxShareUrl.value;
+
+  void hydrateShareUrlFromFollow() {
+    if (shareUrl.isNotEmpty) {
+      return;
+    }
+    var follow = DBService.instance.followBox.get("${site.id}_$roomId");
+    if (follow != null && follow.shareUrl.isNotEmpty) {
+      rxShareUrl.value = follow.shareUrl;
+    }
+  }
 
   Rx<LiveRoomDetail?> detail = Rx<LiveRoomDetail?>(null);
   var online = 0.obs;
@@ -297,9 +308,9 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       error = null;
       update();
       addSysMsg("正在读取直播间信息");
+      hydrateShareUrlFromFollow();
       detail.value = await site.liveSite.getRoomDetail(
-          roomId:
-              site.id == Constant.kDouyin ? (roomId + ";" + shareUrl) : roomId);
+          roomId: site.id == Constant.kDouyin ? "$roomId;$shareUrl" : roomId);
 
       if (site.id == Constant.kDouyin) {
         // 1.6.0之前收藏的WebRid

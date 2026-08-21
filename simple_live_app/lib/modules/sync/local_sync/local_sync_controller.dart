@@ -78,6 +78,7 @@ class LocalSyncController extends BaseController {
     var shieldListData = jsonMap['shieldListData'] ?? "";
     var historesData = jsonMap['historesData'] ?? "";
     var bilibiliData = jsonMap['bilibiliData'] ?? "";
+    var ttwid = jsonMap['ttwid'] ?? "";
     if(""!=userData){
       controller.syncFollow(dataStr: userData,isOverlay: false);
     }
@@ -89,6 +90,9 @@ class LocalSyncController extends BaseController {
     }
     if(""!=bilibiliData){
       controller.syncBiliAccount(dataStr: bilibiliData,isOverlay: false);
+    }
+    if(""!=ttwid){
+      controller.syncTtwid(dataStr: ttwid,isOverlay: false);
     }
   }
 
