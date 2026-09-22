@@ -874,7 +874,7 @@ class DouyuDanmakuArgs {
   String toString() => json.encode({"roomId": roomId, "cookie": cookie});
 }
 
-class DouyuDanmaku implements LiveDanmaku {
+class DouyuDanmaku extends LiveDanmaku {
   @override
   int heartbeatTime = 45 * 1000;
 
@@ -2365,6 +2365,7 @@ import 'package:simple_live_app/services/twitch_account_service.dart';
         return "";
     }
   }
+```
 
 3) 增加 sendDanmaku 与静态错误映射（放在 `onWSMessage` 附近）：
 
