@@ -43,7 +43,7 @@ Simple Live 当前只能接收各平台弹幕，用户无法发言。本期新�
 
 - 外层命令：`WebSocketCommand{iCmdType(short), vData(bytes)}`；类型 1 RegisterReq、3 WupReq（发弹幕）、4 WupRsp、7 Push、10 VerifyCookieReq、11 VerifyCookieRsp
 - VerifyCookie：`WSVerifyCookieReq{lUid, sUA, sCookie(整串 cookie), sGuid}`，回执 iValidate==0 为成功
-- SendMessageReq 字段（tag 顺序）：0 `UserId tUserId`、1 long `lTid`、2 long `lSid`、3 string `sContent`、4 int `iShowMode=0`、5 `ContentFormat tFormat`、6 `BulletFormat tBulletFormat`、7 vector `vAtSomeone`、8 long `lPid`（主播 yyuid）
+- SendMessageReq 字段（tag 顺序）：0 `UserId tUserId`、1 long `lTid`、2 long `lSid`、3 string `sContent`、4 int `iShowMode=0`、5 `ContentFormat tFormat`、6 `BulletFormat tBulletFormat`、7 `vTagInfo: List<HuyaMessageTagInfo>`（writeList，标签信息列表，本期不带 @人 数据）、8 long `lPid`（主播 yyuid）。tag7 该结构能否被服务器接受待真机确认。
 - UserId：0 long lUid、1 string sGuid、2 string sToken、3 string sHuYaUA（`webh5&<版本号>&websocket`）、4 string sCookie（`udb_uid=<yyuid>; udb_biztoken=<biztoken>`）、5 int iTokenType、6 string sDeviceInfo、7 string sQIMEI
 - ContentFormat（tag 0-5）：iFontColor、iFontSize、iPopupStyle、iNickNameFontColor、iDarkFontColor、iDarkNickNameFontColor
 - BulletFormat（tag 0-8）：iFontColor、iFontSize、iTextSpeed、iTransitionType、tBorderGroundFormat 等
@@ -135,7 +135,7 @@ class LiveDanmaku {
 
 App 层将 errorCode 映射为中文文案：未登录 → 引导登录；禁言/封禁 → 「你已被禁言」；频率 → 「发言太快，请稍后再试」；敏感词 → 「内容包含敏感词」；抖音验证码 → 「需要完成验证码，请稍后重试」（P2 再提供 WebView 发送入口）。
 
-弹幕长度：输入框 maxLength，B站按 20 字（无特殊权限），其余按平台通用上限。
+弹幕长度：各平台输入上限统一 200 字（maxLength:200）；平台自身更严格的限制（如 B站 code=12）以错误提示反馈。
 
 ## 5. 测试策略
 
