@@ -25,6 +25,9 @@ class DouyuSite implements LiveSite {
   @override
   String name = "斗鱼直播";
 
+  /// 用户设置的 cookie
+  String cookie = "";
+
   @override
   LiveDanmaku getDanmaku() => DouyuDanmaku();
 
@@ -248,7 +251,10 @@ class DouyuSite implements LiveSite {
       introduction: roomInfo["show_details"].toString(),
       notice: "",
       status: roomInfo["show_status"] == 1 && roomInfo["videoLoop"] != 1,
-      danmakuData: roomInfo["room_id"].toString(),
+      danmakuData: DouyuDanmakuArgs(
+        roomId: int.tryParse(roomInfo["room_id"].toString()) ?? 0,
+        cookie: cookie,
+      ),
       data: DouyuSign.getSign(crptext, roomInfo["room_id"].toString()),
       url: "https://www.douyu.com/$roomId",
       isRecord: roomInfo["videoLoop"] == 1,
