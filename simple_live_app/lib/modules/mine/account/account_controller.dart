@@ -4,9 +4,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:get/get.dart';
 import 'package:simple_live_app/app/utils.dart';
+import 'package:simple_live_app/modules/mine/account/web_login.dart';
 import 'package:simple_live_app/routes/route_path.dart';
 import 'package:simple_live_app/services/bilibili_account_service.dart';
 import 'package:simple_live_app/services/douyin_account_service.dart';
+import 'package:simple_live_app/services/douyu_account_service.dart';
+import 'package:simple_live_app/services/huya_account_service.dart';
 import 'package:simple_live_app/services/twitch_account_service.dart';
 import 'package:simple_live_core/simple_live_core.dart';
 
@@ -80,16 +83,86 @@ class AccountController extends GetxController {
     await BiliBiliAccountService.instance.loadUserInfo();
   }
 
-  void douyinTap() async {
-    if (DouyinAccountService.instance.hasCookie.value) {
-      var result = await Utils.showAlertDialog("确定要清除自定义 ttwid 吗？", title: "清除配置");
+  void douyuTap() async {
+    if (DouyuAccountService.instance.logined.value) {
+      var result = await Utils.showAlertDialog("确定要退出斗鱼账号吗？", title: "退出登录");
       if (result) {
-        DouyinAccountService.instance.clearCookie();
-        SmartDialog.showToast("已清除自定义 ttwid，将使用默认 ttwid");
+        DouyuAccountService.instance.logout();
       }
     } else {
-      doDouyinCookieConfig();
+      DouyuAccountService.instance.startWebLogin();
     }
+  }
+
+  void huyaTap() async {
+    if (HuyaAccountService.instance.logined.value) {
+      var result = await Utils.showAlertDialog("确定要退出虎牙账号吗？", title: "退出登录");
+      if (result) {
+        HuyaAccountService.instance.logout();
+      }
+    } else {
+      HuyaAccountService.instance.startWebLogin();
+    }
+  }
+
+  void douyinTap() {
+    douyinMenu();
+  }
+
+  void douyinLoginTap() {
+    DouyinAccountService.instance.logout();
+    SmartDialog.showToast("已退出抖音账号");
+  }
+
+  void douyinLogin() {
+    Get.toNamed(
+      RoutePath.kWebLogin,
+      arguments: WebLoginArgs(
+        title: "抖音账号登录",
+        startUrl: "https://live.douyin.com",
+        cookieUrl: "https://live.douyin.com",
+        requiredCookies: ["sessionid"],
+        onSuccess: (cookieStr) {
+          DouyinAccountService.instance.setLoginCookie(cookieStr);
+          SmartDialog.showToast("抖音登录成功");
+        },
+      ),
+    );
+  }
+
+  void douyinMenu() {
+    Utils.showBottomSheet(
+      title: "抖音",
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ListTile(
+            leading: const Icon(Icons.account_circle_outlined),
+            title: Text(DouyinAccountService.instance.logined.value
+                ? "退出账号登录"
+                : "账号登录（可发送弹幕）"),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () {
+              Get.back();
+              if (DouyinAccountService.instance.logined.value) {
+                douyinLoginTap();
+              } else {
+                douyinLogin();
+              }
+            },
+          ),
+          ListTile(
+            leading: const Icon(Icons.tune),
+            title: const Text("自定义 ttwid"),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () {
+              Get.back();
+              doDouyinCookieConfig();
+            },
+          ),
+        ],
+      ),
+    );
   }
 
   void twitchTap() async {
