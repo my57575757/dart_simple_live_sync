@@ -29,6 +29,10 @@ class HuyaSite implements LiveSite {
   BaseTarsHttp("http://wup.huya.com", "liveui", headers: requestHeaders);
 
   String? playUserAgent;
+
+  /// 用户设置的 cookie
+  String cookie = "";
+
   @override
   String id = "huya";
 
@@ -409,6 +413,7 @@ class HuyaSite implements LiveSite {
         ayyuid: tLiveInfo["lYyid"] ?? 0,
         topSid: topSid ?? 0,
         subSid: subSid ?? 0,
+        cookie: cookie,
       ),
       url: "https://www.huya.com/$roomId",
     );
