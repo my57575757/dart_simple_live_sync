@@ -204,9 +204,9 @@ class HuyaDanmaku extends LiveDanmaku {
     webScoketUtils?.sendMessage(cmd.toUint8List());
 
     var timer = Timer(const Duration(seconds: 10), () {
-      var c = _pendingWup.remove(id);
-      if (c != null && !c.isCompleted) {
-        c.complete(-999);
+      _pendingWup.remove(id);
+      if (!completer.isCompleted) {
+        completer.complete(-999);
       }
     });
     var status = await completer.future;
@@ -263,13 +263,22 @@ class HuyaDanmaku extends LiveDanmaku {
         var packet = TarsUniPacket();
         packet.decode(bytes);
         var id = packet.requestId;
-        var completer = _pendingWup.remove(id);
-        if (completer != null) {
-          var rsp = packet.getByClass(
-            "tReq",
-            HuyaSendMessageRsp(),
-          );
-          completer.complete(rsp.iStatus);
+        var completer = _pendingWup[id];
+        if (completer == null) {
+          return;
+        }
+        try {
+          var rsp = packet.getByClass("tReq", HuyaSendMessageRsp());
+          _pendingWup.remove(id);
+          if (!completer.isCompleted) {
+            completer.complete(rsp.iStatus);
+          }
+        } catch (e) {
+          CoreLog.error(e);
+          _pendingWup.remove(id);
+          if (!completer.isCompleted) {
+            completer.complete(-1);
+          }
         }
         return;
       }
