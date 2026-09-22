@@ -831,10 +831,11 @@ void main() {
   });
 
   group("frameStt", () {
-    test("帧头与现有协议一致（小端 689）", () {
+    test("帧头与现有协议一致（小端 689，length=总长-4）", () {
       var frame = DouyuDanmaku.frameStt("type@=mrkl/");
       var bd = ByteData.sublistView(frame);
-      expect(bd.getInt32(0, Endian.little), frame.length);
+      expect(bd.getInt32(0, Endian.little), frame.length - 4);
+      expect(bd.getInt32(4, Endian.little), frame.length - 4);
       expect(bd.getInt16(8, Endian.little), 689);
       expect(frame.last, 0);
     });
@@ -1531,6 +1532,8 @@ git commit -m "feat(app): 斗鱼账号服务（WebView 登录）"
 创建 `simple_live_core/test/danmaku/huya_danmaku_test.dart`：
 
 ```dart
+import 'dart:convert';
+
 import 'package:simple_live_core/src/model/tars/huya_send_message_req.dart';
 import 'package:simple_live_core/src/model/tars/huya_user_id.dart';
 import 'package:tars_dart/tars/codec/tars_output_stream.dart';
@@ -1553,10 +1556,21 @@ void main() {
     var bytes = oos.toUint8List();
 
     expect(bytes.isNotEmpty, isTrue);
-    // tag0 tUserId：首字节 head byte，type=12(struct)
-    expect(bytes.first & 0x0F, 0); // tag = 0
-    // 内容包含 sContent 原文
-    expect(String.fromCharCodes(bytes).contains("你好"), isTrue);
+    // tag0 tUserId：首字节 head，tag = 0
+    expect(bytes.first & 0x0F, 0);
+    // sContent 以 UTF-8 字节存储，断言字节序列存在
+    var contentBytes = utf8.encode("你好");
+    var found = false;
+    for (var i = 0; i <= bytes.length - contentBytes.length; i++) {
+      if (contentBytes
+          .asMap()
+          .entries
+          .every((e) => bytes[i + e.key] == e.value)) {
+        found = true;
+        break;
+      }
+    }
+    expect(found, isTrue);
   });
 
   test("SendMessageReq 默认字段可编码不报错", () {
@@ -2400,9 +2414,10 @@ import 'package:simple_live_app/services/twitch_account_service.dart';
     if (platform == Constant.kBiliBili) {
       switch (code) {
         case "1":
-        case "3":
         case "13":
           return "你已被禁言";
+        case "3":
+          return "房间已锁定，无法发言";
         case "11":
           return "发言太快，请稍后再试";
         case "12":
