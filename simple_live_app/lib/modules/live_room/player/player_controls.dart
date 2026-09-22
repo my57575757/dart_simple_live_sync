@@ -285,6 +285,23 @@ Widget buildFullControls(
                       color: Colors.white,
                     ),
                   ),
+                  IconButton(
+                    onPressed: () async {
+                      var text = await Utils.showEditTextDialog(
+                        "",
+                        title: "发送弹幕",
+                        hintText: "说点什么…",
+                      );
+                      if (text == null || text.trim().isEmpty) {
+                        return;
+                      }
+                      await controller.sendDanmaku(text);
+                    },
+                    icon: const Icon(
+                      Remix.chat_3_line,
+                      color: Colors.white,
+                    ),
+                  ),
                   Obx(
                     () => Padding(
                       padding: const EdgeInsets.only(left: 8.0),
