@@ -13,6 +13,7 @@ import 'package:simple_live_tv_app/models/db/history.dart';
 import 'package:simple_live_tv_app/services/bilibili_account_service.dart';
 import 'package:simple_live_tv_app/services/db_service.dart';
 import 'package:simple_live_tv_app/services/signalr_service.dart';
+import 'package:simple_live_tv_app/services/twitch_account_service.dart';
 
 class SyncController extends BaseController {
   final SignalRService signalR = SignalRService();
@@ -23,6 +24,7 @@ class SyncController extends BaseController {
   StreamSubscription? _onHistorySubscription;
   StreamSubscription? _onShieldWordSubscription;
   StreamSubscription? _onBiliAccountSubscription;
+  StreamSubscription? _onTwitchAccountSubscription;
   var currentRoomId = "--".obs;
   RxList<RoomUser> roomUsers = <RoomUser>[].obs;
   Timer? _timer;
@@ -97,6 +99,9 @@ class SyncController extends BaseController {
     });
     _onBiliAccountSubscription = signalR.onBiliAccountStream.listen((data) {
       onReceiveBiliAccount(data.$1, data.$2);
+    });
+    _onTwitchAccountSubscription = signalR.onTwitchAccountStream.listen((data) {
+      onReceiveTwitchAccount(data.$1, data.$2);
     });
   }
 
@@ -173,6 +178,20 @@ class SyncController extends BaseController {
     }
   }
 
+  void onReceiveTwitchAccount(bool overlay, String data) async {
+    try {
+      var jsonBody = json.decode(data);
+      TwitchAccountService.instance.setConfig(
+        clientId: (jsonBody['clientId'] ?? "").toString(),
+        oauthToken: (jsonBody['token'] ?? "").toString(),
+      );
+      SmartDialog.showToast('已同步 Twitch 账号');
+    } catch (e) {
+      SmartDialog.showToast("同步失败:$e");
+      Log.logPrint(e);
+    }
+  }
+
   @override
   void onClose() {
     _timer?.cancel();
@@ -183,6 +202,7 @@ class SyncController extends BaseController {
     _onHistorySubscription?.cancel();
     _onShieldWordSubscription?.cancel();
     _onBiliAccountSubscription?.cancel();
+    _onTwitchAccountSubscription?.cancel();
     signalR.dispose();
     super.onClose();
   }

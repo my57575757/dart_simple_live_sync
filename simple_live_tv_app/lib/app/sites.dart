@@ -31,6 +31,13 @@ class Sites {
       liveSite: DouyinSite(),
       index: 3,
     ),
+    "twitch": Site(
+      id: "twitch",
+      logo: "assets/images/twitch.png",
+      name: "Twitch",
+      liveSite: TwitchSite(),
+      index: 4,
+    ),
   };
 
   static List<Site> get supportSites {

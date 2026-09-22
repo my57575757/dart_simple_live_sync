@@ -22,6 +22,7 @@ import 'package:simple_live_tv_app/services/db_service.dart';
 import 'package:simple_live_tv_app/services/follow_user_service.dart';
 import 'package:simple_live_tv_app/services/local_storage_service.dart';
 import 'package:simple_live_tv_app/services/sync_service.dart';
+import 'package:simple_live_tv_app/services/twitch_account_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -75,6 +76,8 @@ Future initServices() async {
   Get.put(AppSettingsController());
 
   Get.put(BiliBiliAccountService());
+
+  Get.put(TwitchAccountService());
 
   Get.put(SyncService());
 

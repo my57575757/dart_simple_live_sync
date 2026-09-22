@@ -79,6 +79,7 @@ class LocalSyncController extends BaseController {
     var historesData = jsonMap['historesData'] ?? "";
     var bilibiliData = jsonMap['bilibiliData'] ?? "";
     var ttwid = jsonMap['ttwid'] ?? "";
+    var twitchData = jsonMap['twitchData'] ?? "";
     if(""!=userData){
       controller.syncFollow(dataStr: userData,isOverlay: false);
     }
@@ -93,6 +94,9 @@ class LocalSyncController extends BaseController {
     }
     if(""!=ttwid){
       controller.syncTtwid(dataStr: ttwid,isOverlay: false);
+    }
+    if(""!=twitchData){
+      controller.syncTwitchAccount(dataStr: twitchData,isOverlay: false);
     }
   }
 

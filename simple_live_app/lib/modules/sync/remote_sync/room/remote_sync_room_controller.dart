@@ -17,6 +17,7 @@ import 'package:simple_live_app/models/db/history.dart';
 import 'package:simple_live_app/services/bilibili_account_service.dart';
 import 'package:simple_live_app/services/db_service.dart';
 import 'package:simple_live_app/services/signalr_service.dart';
+import 'package:simple_live_app/services/twitch_account_service.dart';
 
 class RemoteSyncRoomController extends BaseController {
   final String roomId;
@@ -32,6 +33,7 @@ class RemoteSyncRoomController extends BaseController {
   StreamSubscription? _onHistorySubscription;
   StreamSubscription? _onShieldWordSubscription;
   StreamSubscription? _onBiliAccountSubscription;
+  StreamSubscription? _onTwitchAccountSubscription;
   var currentRoomId = "--".obs;
   RxList<RoomUser> roomUsers = <RoomUser>[].obs;
 
@@ -119,6 +121,9 @@ class RemoteSyncRoomController extends BaseController {
     _onBiliAccountSubscription = signalR.onBiliAccountStream.listen((data) {
       onReceiveBiliAccount(data.$1, data.$2);
     });
+    _onTwitchAccountSubscription = signalR.onTwitchAccountStream.listen((data) {
+      onReceiveTwitchAccount(data.$1, data.$2);
+    });
   }
 
   void onReceiveFavorite(bool overlay, String data) async {
@@ -189,6 +194,20 @@ class RemoteSyncRoomController extends BaseController {
       BiliBiliAccountService.instance.setCookie(cookie);
       BiliBiliAccountService.instance.loadUserInfo();
       SmartDialog.showToast('已同步哔哩哔哩账号');
+    } catch (e) {
+      SmartDialog.showToast("同步失败:$e");
+      Log.logPrint(e);
+    }
+  }
+
+  void onReceiveTwitchAccount(bool overlay, String data) async {
+    try {
+      var jsonBody = json.decode(data);
+      TwitchAccountService.instance.setConfig(
+        clientId: (jsonBody['clientId'] ?? "").toString(),
+        oauthToken: (jsonBody['token'] ?? "").toString(),
+      );
+      SmartDialog.showToast('已同步 Twitch 账号');
     } catch (e) {
       SmartDialog.showToast("同步失败:$e");
       Log.logPrint(e);
@@ -328,6 +347,40 @@ class RemoteSyncRoomController extends BaseController {
     }
   }
 
+  void syncTwitchAccount() async {
+    try {
+      if (roomUsers.length <= 1) {
+        SmartDialog.showToast("无设备连接");
+        return;
+      }
+      if (!TwitchAccountService.instance.configured.value) {
+        SmartDialog.showToast("未配置 Twitch 接口");
+        return;
+      }
+      SmartDialog.showLoading(msg: "发送中...");
+
+      var resp = await signalR.sendContent(
+        roomName: currentRoomId.value,
+        action: "SendTwitchAccount",
+        overlay: true,
+        content: json.encode({
+          "clientId": TwitchAccountService.instance.clientId,
+          "token": TwitchAccountService.instance.oauthToken,
+        }),
+      );
+      if (resp.isSuccess) {
+        SmartDialog.showToast("已发送 Twitch 账号");
+      } else {
+        SmartDialog.showToast("发送失败:${resp.message}");
+      }
+    } catch (e) {
+      SmartDialog.showToast("同步失败:$e");
+      Log.logPrint(e);
+    } finally {
+      SmartDialog.dismiss();
+    }
+  }
+
   void showQRInfo() {
     Utils.showBottomSheet(
       title: "房间信息",
@@ -364,6 +417,7 @@ class RemoteSyncRoomController extends BaseController {
     _onHistorySubscription?.cancel();
     _onShieldWordSubscription?.cancel();
     _onBiliAccountSubscription?.cancel();
+    _onTwitchAccountSubscription?.cancel();
     signalR.dispose();
     super.onClose();
   }

@@ -196,6 +196,15 @@ class RemoteSyncRoomPage extends GetView<RemoteSyncRoomController> {
                     controller.syncBiliAccount();
                   },
                 ),
+                AppStyle.divider,
+                ListTile(
+                  leading: const Icon(Remix.twitch_line),
+                  title: const Text("发送 Twitch 账号"),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () {
+                    controller.syncTwitchAccount();
+                  },
+                ),
               ],
             ),
           ),

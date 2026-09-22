@@ -1,0 +1,210 @@
+import 'dart:async';
+import 'dart:math';
+
+import 'package:simple_live_core/src/common/core_log.dart';
+import 'package:simple_live_core/src/interface/live_danmaku.dart';
+import 'package:simple_live_core/src/model/live_message.dart';
+import 'package:web_socket_channel/web_socket_channel.dart';
+
+class TwitchDanmakuArgs {
+  /// 频道登录名（小写）
+  final String channel;
+
+  /// 可选 OAuth Token，为空时匿名连接
+  final String? oauthToken;
+
+  TwitchDanmakuArgs({required this.channel, this.oauthToken});
+}
+
+class TwitchDanmaku implements LiveDanmaku {
+  @override
+  int heartbeatTime = 0;
+
+  @override
+  Function(LiveMessage msg)? onMessage;
+  @override
+  Function(String msg)? onClose;
+  @override
+  Function()? onReady;
+
+  WebSocketChannel? _channel;
+  bool _closed = false;
+
+  @override
+  void heartbeat() {}
+
+  @override
+  Future start(dynamic args) async {
+    var danmakuArgs = args as TwitchDanmakuArgs;
+    _closed = false;
+    _channel = WebSocketChannel.connect(
+      Uri.parse("wss://irc-ws.chat.twitch.tv:443"),
+    );
+
+    _channel!.stream.listen(
+      (event) => _handleMessage(event.toString(), danmakuArgs),
+      onError: (e) {
+        CoreLog.error(e);
+        onClose?.call("与服务器连接断开");
+      },
+      onDone: () {
+        if (!_closed) {
+          onClose?.call("与服务器连接断开");
+        }
+      },
+      cancelOnError: true,
+    );
+
+    _send("CAP REQ :twitch.tv/tags twitch.tv/commands");
+    var token = danmakuArgs.oauthToken;
+    String nick;
+    if (token != null && token.isNotEmpty) {
+      _send("PASS oauth:$token");
+      nick = "simplelive${Random().nextInt(900000) + 100000}";
+    } else {
+      nick = "justinfan${Random().nextInt(90000) + 10000}";
+    }
+    _send("NICK $nick");
+    _send("JOIN #${danmakuArgs.channel}");
+  }
+
+  void _send(String message) {
+    _channel?.sink.add("$message\r\n");
+  }
+
+  void _handleMessage(String raw, TwitchDanmakuArgs args) {
+    for (var line in raw.split("\r\n")) {
+      if (line.isEmpty) {
+        continue;
+      }
+      _handleLine(line);
+    }
+  }
+
+  void _handleLine(String line) {
+    try {
+      if (line.startsWith("PING")) {
+        _send(line.replaceFirst("PING", "PONG"));
+        return;
+      }
+      if (line.startsWith("RECONNECT")) {
+        onClose?.call("服务器要求重新连接");
+        return;
+      }
+
+      String? tagsRaw;
+      var remainder = line;
+      if (line.startsWith("@")) {
+        var spaceIndex = line.indexOf(" ");
+        tagsRaw = line.substring(1, spaceIndex);
+        remainder = line.substring(spaceIndex + 1);
+      }
+
+      var trailingIndex = remainder.indexOf(" :");
+      var trailing =
+          trailingIndex >= 0 ? remainder.substring(trailingIndex + 2) : "";
+      var tokens = trailingIndex >= 0
+          ? remainder.substring(0, trailingIndex).split(" ")
+          : remainder.split(" ");
+
+      // :nick!user@host COMMAND target
+      if (tokens.length < 2) {
+        return;
+      }
+      var command = tokens[1];
+      if (command == "PRIVMSG") {
+        _parsePrivmsg(tagsRaw, tokens[0], trailing);
+      } else if (command == "366") {
+        onReady?.call();
+      } else if (command == "NOTICE" &&
+          trailing.contains("authentication failed")) {
+        onClose?.call("Twitch 身份验证失败");
+      }
+    } catch (e) {
+      CoreLog.error(e);
+    }
+  }
+
+  void _parsePrivmsg(String? tagsRaw, String prefix, String text) {
+    var tags = <String, String>{};
+    if (tagsRaw != null) {
+      for (var pair in tagsRaw.split(";")) {
+        var index = pair.indexOf("=");
+        if (index > 0) {
+          tags[pair.substring(0, index)] =
+              _unescapeTag(pair.substring(index + 1));
+        }
+      }
+    }
+
+    var nick = prefix.startsWith(":")
+        ? prefix.substring(1).split("!").first
+        : prefix;
+    var userName = tags["display-name"]?.isNotEmpty == true
+        ? tags["display-name"]!
+        : nick;
+    var colorText = tags["color"] ?? "";
+    var color = colorText.startsWith("#")
+        ? _parseHexColor(colorText)
+        : LiveMessageColor.white;
+
+    onMessage?.call(LiveMessage(
+      type: LiveMessageType.chat,
+      userName: userName,
+      message: text,
+      color: color,
+    ));
+  }
+
+  String _unescapeTag(String value) {
+    var buffer = StringBuffer();
+    for (var i = 0; i < value.length; i++) {
+      var c = value[i];
+      if (c == r"\" && i + 1 < value.length) {
+        var next = value[i + 1];
+        switch (next) {
+          case ":":
+            buffer.write(";");
+            break;
+          case "s":
+            buffer.write(" ");
+            break;
+          case r"\":
+            buffer.write(r"\");
+            break;
+          case "r":
+            buffer.write("\r");
+            break;
+          case "n":
+            buffer.write("\n");
+            break;
+          default:
+            buffer.write(next);
+        }
+        i++;
+      } else {
+        buffer.write(c);
+      }
+    }
+    return buffer.toString();
+  }
+
+  LiveMessageColor _parseHexColor(String hex) {
+    var value = int.tryParse(hex.substring(1), radix: 16) ?? 0;
+    return LiveMessageColor(
+      (value >> 16) & 0xFF,
+      (value >> 8) & 0xFF,
+      value & 0xFF,
+    );
+  }
+
+  @override
+  Future stop() async {
+    _closed = true;
+    onMessage = null;
+    onClose = null;
+    onReady = null;
+    await _channel?.sink.close();
+    _channel = null;
+  }
+}

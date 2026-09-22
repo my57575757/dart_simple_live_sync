@@ -148,4 +148,8 @@ void main() {
   group('douyin tests', () {
     testSite(DouyinSite());
   });
+
+  group('twitch tests', () {
+    testSite(TwitchSite());
+  });
 }

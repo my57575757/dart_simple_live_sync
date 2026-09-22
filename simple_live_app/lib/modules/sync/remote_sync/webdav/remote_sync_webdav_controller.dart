@@ -23,6 +23,7 @@ import 'package:simple_live_app/modules/sync/remote_sync/webdav/webdav_client.da
 import 'package:simple_live_app/services/bilibili_account_service.dart';
 import 'package:simple_live_app/services/db_service.dart';
 import 'package:simple_live_app/services/local_storage_service.dart';
+import 'package:simple_live_app/services/twitch_account_service.dart';
 
 class RemoteSyncWebDAVController extends BaseController {
   // ui
@@ -32,6 +33,7 @@ class RemoteSyncWebDAVController extends BaseController {
   var isSyncHistories = true.obs;
   var isSyncBlockWord = true.obs;
   var isSyncBilibiliAccount = true.obs;
+  var isSyncTwitchAccount = true.obs;
 
   late DAVClient davClient;
   var user = "--".obs;
@@ -42,6 +44,7 @@ class RemoteSyncWebDAVController extends BaseController {
   final _userHistoriesJsonName = 'SimpleLive_histories.json';
   final _userBlockedWordJsonName = 'SimpleLive_blocked_word.json';
   final _userBilibiliAccountJsonName = 'SimpleLive_bilibili_account.json';
+  final _userTwitchAccountJsonName = 'SimpleLive_twitch_account.json';
   final _userSettingsJsonName = 'SimpleLive_Settings.json';
   final _userTagsJsonName = 'SimpleLive_Tags.json';
 
@@ -207,6 +210,17 @@ class RemoteSyncWebDAVController extends BaseController {
           File(join(profile.path, _userBilibiliAccountJsonName));
       await bilibiliAccountJsonFile
           .writeAsString(jsonEncode(userBiliAccountCookieMap));
+      // twitch_account
+      var userTwitchAccountMap = {
+        'data': {
+          'clientId': TwitchAccountService.instance.clientId,
+          'token': TwitchAccountService.instance.oauthToken,
+        }
+      };
+      final twitchAccountJsonFile =
+          File(join(profile.path, _userTwitchAccountJsonName));
+      await twitchAccountJsonFile
+          .writeAsString(jsonEncode(userTwitchAccountMap));
       // settings
       var settingList = LocalStorageService.instance.settingsBox.toMap();
       var dataSettingListMap = {'data': settingList};
@@ -300,10 +314,22 @@ class RemoteSyncWebDAVController extends BaseController {
         } catch (e) {
           Log.e('同步哔哩哔哩账号失败：$e', StackTrace.current);
         }
+      } else if (file.name == _userTwitchAccountJsonName &&
+          isSyncTwitchAccount.value) {
+        try {
+          TwitchAccountService.instance.setConfig(
+            clientId: (jsonData['clientId'] ?? "").toString(),
+            oauthToken: (jsonData['token'] ?? "").toString(),
+          );
+          Log.i('已同步 Twitch 账号');
+        } catch (e) {
+          Log.e('同步 Twitch 账号失败：$e', StackTrace.current);
+        }
       } else if (file.name == _userSettingsJsonName) {
         try {
           await LocalStorageService.instance.settingsBox.clear();
           LocalStorageService.instance.settingsBox.putAll(jsonData);
+          TwitchAccountService.instance.reload();
           Log.i('已同步用户设置');
         } catch (e) {
           Log.e("同步用户设置失败：$e", StackTrace.current);
@@ -352,5 +378,9 @@ class RemoteSyncWebDAVController extends BaseController {
 
   void changeIsSyncBilibiliAccount() {
     isSyncBilibiliAccount.value = !isSyncBilibiliAccount.value;
+  }
+
+  void changeIsSyncTwitchAccount() {
+    isSyncTwitchAccount.value = !isSyncTwitchAccount.value;
   }
 }

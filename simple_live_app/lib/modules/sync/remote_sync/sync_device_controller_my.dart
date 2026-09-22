@@ -11,6 +11,7 @@ import 'package:simple_live_app/services/bilibili_account_service.dart';
 import 'package:simple_live_app/services/douyin_account_service.dart';
 import 'package:simple_live_app/services/db_service.dart';
 import 'package:simple_live_app/services/sync_service.dart';
+import 'package:simple_live_app/services/twitch_account_service.dart';
 
 class SyncDeviceControllerMy extends BaseController {
   final SyncClinet client;
@@ -138,6 +139,36 @@ class SyncDeviceControllerMy extends BaseController {
           client, ttwid);
       if(isOverlay) {
         SmartDialog.showToast("已同步抖音 ttwid");
+      }
+    } catch (e) {
+      SmartDialog.showToast("同步失败:$e");
+      Log.logPrint(e);
+    } finally {
+      SmartDialog.dismiss();
+    }
+  }
+
+  void syncTwitchAccount({
+    dynamic dataStr = "",
+    bool isOverlay = true,
+  }) async {
+    try {
+      if(isOverlay) {
+        SmartDialog.showLoading(msg: "同步中...");
+      }
+      String clientId;
+      String token;
+      if ("" != dataStr) {
+        var data = dataStr is String ? json.decode(dataStr) : dataStr;
+        clientId = (data['clientId'] ?? "").toString();
+        token = (data['token'] ?? "").toString();
+      } else {
+        clientId = TwitchAccountService.instance.clientId;
+        token = TwitchAccountService.instance.oauthToken;
+      }
+      await request.syncTwitchAccount(client, clientId, token);
+      if(isOverlay) {
+        SmartDialog.showToast("已同步 Twitch 账号");
       }
     } catch (e) {
       SmartDialog.showToast("同步失败:$e");

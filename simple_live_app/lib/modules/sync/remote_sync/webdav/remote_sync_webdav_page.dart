@@ -131,6 +131,16 @@ class RemoteSyncWebDAVPage extends GetView<RemoteSyncWebDAVController> {
             ),
           ),
           AppStyle.divider,
+          Obx(
+            () => CheckboxListTile(
+              secondary: const Icon(Remix.twitch_line),
+              title: const Text("同步 Twitch 账号"),
+              value: controller.isSyncTwitchAccount.value,
+              controlAffinity: ListTileControlAffinity.trailing,
+              onChanged: (value) => controller.changeIsSyncTwitchAccount(),
+            ),
+          ),
+          AppStyle.divider,
         ],
       ),
     );

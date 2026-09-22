@@ -4,6 +4,7 @@ import 'package:simple_live_app/app/app_style.dart';
 import 'package:simple_live_app/modules/mine/account/account_controller.dart';
 import 'package:simple_live_app/services/bilibili_account_service.dart';
 import 'package:simple_live_app/services/douyin_account_service.dart';
+import 'package:simple_live_app/services/twitch_account_service.dart';
 
 class AccountPage extends GetView<AccountController> {
   const AccountPage({Key? key}) : super(key: key);
@@ -75,6 +76,23 @@ class AccountPage extends GetView<AccountController> {
                   ? const Icon(Icons.delete_outline)
                   : const Icon(Icons.chevron_right),
               onTap: controller.douyinTap,
+            ),
+          ),
+          Obx(
+            () => ListTile(
+              leading: Image.asset(
+                'assets/images/twitch.png',
+                width: 36,
+                height: 36,
+              ),
+              title: const Text("Twitch"),
+              subtitle: Text(TwitchAccountService.instance.configured.value
+                  ? "已配置 Helix 接口"
+                  : "匿名模式（无需配置）"),
+              trailing: TwitchAccountService.instance.configured.value
+                  ? const Icon(Icons.delete_outline)
+                  : const Icon(Icons.chevron_right),
+              onTap: controller.twitchTap,
             ),
           ),
         ],

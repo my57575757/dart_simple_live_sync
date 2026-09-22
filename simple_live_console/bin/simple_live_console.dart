@@ -116,5 +116,9 @@ List parseUrl(String url) {
         RegExp(r"live\.douyin\.com/([\d|\w]+)").firstMatch(url)?.group(1) ?? "";
     return [DouyinSite(), id];
   }
+  if (url.contains("twitch.tv")) {
+    var id = RegExp(r"twitch\.tv/(\w+)").firstMatch(url)?.group(1) ?? "";
+    return [TwitchSite(), id];
+  }
   throw Exception("链接解析失败");
 }

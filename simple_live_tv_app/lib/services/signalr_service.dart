@@ -39,6 +39,11 @@ class SignalRService {
   Stream<(bool, String)> get onBiliAccountStream =>
       _onBiliAccountStreamController.stream;
 
+  final _onTwitchAccountStreamController =
+      StreamController<(bool, String)>.broadcast();
+  Stream<(bool, String)> get onTwitchAccountStream =>
+      _onTwitchAccountStreamController.stream;
+
   final _onRoomDestroyedStreamController = StreamController<String>.broadcast();
   Stream<String> get onRoomDestroyedStream =>
       _onRoomDestroyedStreamController.stream;
@@ -78,6 +83,9 @@ class SignalRService {
     });
     hubConnection?.on("onBiliAccountReceived", (args) {
       _onBiliAccountStreamController.add((args![0] as bool, args[1] as String));
+    });
+    hubConnection?.on("onTwitchAccountReceived", (args) {
+      _onTwitchAccountStreamController.add((args![0] as bool, args[1] as String));
     });
     hubConnection?.on("onRoomDestroyed", (args) {
       _onRoomDestroyedStreamController.add(args![0].toString());
@@ -138,6 +146,7 @@ class SignalRService {
     _onHistoryStreamController.close();
     _onShieldWordStreamController.close();
     _onBiliAccountStreamController.close();
+    _onTwitchAccountStreamController.close();
     _onRoomDestroyedStreamController.close();
     _onRoomUserUpdatedStreamController.close();
 

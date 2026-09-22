@@ -126,6 +126,12 @@ class LocalStorageService extends GetxService {
   /// 抖音cookie
   static const String kDouyinCookie = "DouyinCookie";
 
+  /// Twitch Client ID
+  static const String kTwitchClientId = "TwitchClientId";
+
+  /// Twitch OAuth Token
+  static const String kTwitchToken = "TwitchToken";
+
   ///主题色
   static const String kStyleColor = "kStyleColor";
 

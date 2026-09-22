@@ -126,6 +126,27 @@ class SyncClientRequest {
     }
   }
 
+  Future<bool> syncTwitchAccount(
+    SyncClinet client,
+    String clientId,
+    String token,
+  ) async {
+    var url = "http://${client.address}:${client.port}/sync/account/twitch";
+    var data = await HttpClient.instance.postJson(
+      url,
+      data: {
+        "clientId": clientId,
+        "token": token,
+      },
+    );
+
+    if (data["status"]) {
+      return true;
+    } else {
+      throw data["message"];
+    }
+  }
+
   Future<bool> syncAll(
       dynamic body,String syncUrl) async {
     var url = syncUrl+"/simpleLive/updateAll";

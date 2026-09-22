@@ -7,6 +7,7 @@ import 'package:simple_live_app/app/utils.dart';
 import 'package:simple_live_app/routes/route_path.dart';
 import 'package:simple_live_app/services/bilibili_account_service.dart';
 import 'package:simple_live_app/services/douyin_account_service.dart';
+import 'package:simple_live_app/services/twitch_account_service.dart';
 import 'package:simple_live_core/simple_live_core.dart';
 
 class AccountController extends GetxController {
@@ -89,6 +90,82 @@ class AccountController extends GetxController {
     } else {
       doDouyinCookieConfig();
     }
+  }
+
+  void twitchTap() async {
+    if (TwitchAccountService.instance.configured.value) {
+      var result = await Utils.showAlertDialog("确定要清除 Twitch 接口配置吗？", title: "清除配置");
+      if (result) {
+        TwitchAccountService.instance.clearConfig();
+        SmartDialog.showToast("已清除配置，使用匿名模式");
+      }
+    } else {
+      showTwitchConfigDialog();
+    }
+  }
+
+  void showTwitchConfigDialog() {
+    var clientIdController = TextEditingController(
+      text: TwitchAccountService.instance.clientId,
+    );
+    var tokenController = TextEditingController(
+      text: TwitchAccountService.instance.oauthToken,
+    );
+    Get.dialog(
+      AlertDialog(
+        title: const Text("Twitch 接口配置（可选）"),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                "默认匿名模式可直接使用。若匿名接口受限，可在 dev.twitch.tv/console 注册应用，填写 Client ID 与 App Access Token 后切换到官方 Helix 接口。留空保存即恢复匿名模式。",
+                style: TextStyle(fontSize: 12, color: Colors.grey),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: clientIdController,
+                decoration: const InputDecoration(
+                  hintText: "Client ID（留空使用内置值）",
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: tokenController,
+                maxLines: 2,
+                decoration: const InputDecoration(
+                  hintText: "OAuth App Access Token",
+                  border: OutlineInputBorder(),
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Get.back(),
+            child: const Text("取消"),
+          ),
+          TextButton(
+            onPressed: () {
+              Get.back();
+              TwitchAccountService.instance.setConfig(
+                clientId: clientIdController.text.trim(),
+                oauthToken: tokenController.text.trim(),
+              );
+              SmartDialog.showToast(
+                TwitchAccountService.instance.configured.value
+                    ? "已切换到 Helix 接口"
+                    : "已保存，使用匿名模式",
+              );
+            },
+            child: const Text("确定"),
+          ),
+        ],
+      ),
+    );
   }
 
   void doDouyinCookieConfig() {

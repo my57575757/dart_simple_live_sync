@@ -9,6 +9,7 @@ import 'package:simple_live_tv_app/app/utils.dart';
 import 'package:simple_live_tv_app/modules/settings/settings_controller.dart';
 import 'package:simple_live_tv_app/services/bilibili_account_service.dart';
 import 'package:simple_live_tv_app/services/follow_user_service.dart';
+import 'package:simple_live_tv_app/services/twitch_account_service.dart';
 import 'package:simple_live_tv_app/widgets/app_scaffold.dart';
 import 'package:simple_live_tv_app/widgets/button/highlight_button.dart';
 import 'package:simple_live_tv_app/widgets/button/highlight_list_tile.dart';
@@ -473,6 +474,22 @@ class SettingsPage extends GetView<SettingsController> {
           onTap: () {
             SmartDialog.showToast("无需登录抖音，您可以直接观看直播");
           },
+        ),
+        AppStyle.vGap24,
+        Obx(
+          () => HighlightListTile(
+            focusNode: controller.twitchFocusNode,
+            title: "Twitch 接口",
+            subtitle: TwitchAccountService.instance.configured.value
+                ? "已配置 Helix 接口"
+                : "匿名模式（无需配置）",
+            leading: Image.asset(
+              "assets/images/twitch.png",
+              width: 64.w,
+              height: 64.w,
+            ),
+            onTap: controller.twitchTap,
+          ),
         )
       ],
     );

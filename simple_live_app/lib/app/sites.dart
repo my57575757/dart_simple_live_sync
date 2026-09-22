@@ -28,6 +28,12 @@ class Sites {
       name: "抖音直播",
       liveSite: DouyinSite(),
     ),
+    Constant.kTwitch: Site(
+      id: Constant.kTwitch,
+      logo: "assets/images/twitch.png",
+      name: "Twitch",
+      liveSite: TwitchSite(),
+    ),
   };
 
   static List<Site> get supportSites {

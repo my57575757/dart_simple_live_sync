@@ -64,6 +64,15 @@ class SyncDevicePage extends GetView<SyncDeviceController> {
                     controller.syncBiliAccount();
                   },
                 ),
+                AppStyle.divider,
+                ListTile(
+                  leading: const Icon(Remix.twitch_line),
+                  title: const Text("同步 Twitch 账号"),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () {
+                    controller.syncTwitchAccount();
+                  },
+                ),
               ],
             ),
           ),
