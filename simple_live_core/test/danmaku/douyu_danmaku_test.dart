@@ -8,6 +8,13 @@ void main() {
     test("@ 与 / 转义", () {
       expect(DouyuDanmaku.escapeStt("a@b/c"), "a@Ab@Sc");
     });
+    test("单字符 @、/ 转义", () {
+      expect(DouyuDanmaku.escapeStt("@"), "@A");
+      expect(DouyuDanmaku.escapeStt("/"), "@S");
+    });
+    test("@= 转义后不与字段分隔符混淆", () {
+      expect(DouyuDanmaku.escapeStt("@="), "@A=");
+    });
   });
 
   group("buildStt", () {
@@ -31,6 +38,13 @@ void main() {
       var vk = DouyuDanmaku.generateVk(1700000000, "did123");
       expect(vk.length, 32);
       expect(RegExp(r"^[0-9a-f]{32}$").hasMatch(vk), isTrue);
+    });
+    test("固定输入产生固定 MD5（拼接顺序与 vk_secret 锁定）", () {
+      // md5("1700000000" + vkSecret + "abcdef0123456789")
+      expect(
+        DouyuDanmaku.generateVk(1700000000, "abcdef0123456789"),
+        "ec00f280db692c8ab9aec64328476757",
+      );
     });
   });
 

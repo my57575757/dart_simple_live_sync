@@ -49,6 +49,9 @@ class DouyuDanmaku extends LiveDanmaku {
   String? _pendingError;
   DateTime _lastSendTime = DateTime.fromMillisecondsSinceEpoch(0);
 
+  /// 实例是否已停止；停止后 _initSendChannel 不得再建立连接
+  bool _stopped = false;
+
   @override
   Future start(dynamic args) async {
     danmakuArgs = args is DouyuDanmakuArgs
@@ -95,6 +98,9 @@ class DouyuDanmaku extends LiveDanmaku {
   }
 
   Future<void> _initSendChannel() async {
+    if (_stopped) {
+      return;
+    }
     var cookie = danmakuArgs.cookie;
     var did = cookieValue(cookie, "dy_did");
     if (did.isEmpty) {
@@ -118,6 +124,11 @@ class DouyuDanmaku extends LiveDanmaku {
       url = "wss://${pick["domain"]}:${pick["port"]}";
     } catch (e) {
       CoreLog.error(e);
+      return;
+    }
+
+    // lapi HTTP 往返期间可能已 stop；不得再赋连接、发 loginreq、起 keeplive Timer
+    if (_stopped) {
       return;
     }
 
@@ -185,20 +196,25 @@ class DouyuDanmaku extends LiveDanmaku {
       _keepLiveTimer = Timer.periodic(
         const Duration(seconds: 45),
         (_) {
-          var tick = DateTime.now().millisecondsSinceEpoch ~/ 1000;
-          _sendChannel!.sink.add(frameStt(buildStt({
-            "type": "keeplive",
-            "vbw": "0",
-            "cnd": "hs-h5",
-            "tick": tick.toString(),
-            "kd": "",
-          })));
+          try {
+            var tick = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+            _sendChannel!.sink.add(frameStt(buildStt({
+              "type": "keeplive",
+              "vbw": "0",
+              "cnd": "hs-h5",
+              "tick": tick.toString(),
+              "kd": "",
+            })));
+          } catch (e) {
+            _keepLiveTimer?.cancel();
+            CoreLog.error(e);
+          }
         },
       );
     } else if (type == "chatmsg") {
       if (_pendingAck != null &&
           fields["uid"] == cookieValue(danmakuArgs.cookie, "acf_uid") &&
-          fields["txt"] == _pendingContent &&
+          fields["txt"] == escapeStt(_pendingContent!) &&
           !_pendingAck!.isCompleted) {
         _pendingAck!.complete();
       }
@@ -215,13 +231,16 @@ class DouyuDanmaku extends LiveDanmaku {
     }
   }
 
-  void _onSendChannelDone() {
+    void _onSendChannelDone() {
     _keepLiveTimer?.cancel();
+    _sendChannel = null;
     if (_loginCompleter != null && !_loginCompleter!.isCompleted) {
+      // 先挂一个吸收错误的监听，避免无 await 方时 completeError 成为未捕获错误
+      _loginCompleter!.future.catchError((_) {});
       _loginCompleter!.completeError("closed");
     }
     if (_pendingAck != null && !_pendingAck!.isCompleted) {
-      _pendingError = "closed";
+      _pendingError = "network_error";
       _pendingAck!.complete();
     }
   }
@@ -239,10 +258,11 @@ class DouyuDanmaku extends LiveDanmaku {
       );
     }
     if (_sendChannel == null) {
+      // 含连接建立中与已断开两种状态；不做自动重连，重进房间恢复
       return DanmakuSendResult(
         success: false,
-        errorCode: "connecting",
-        errorMessage: "发送连接未建立，请稍后再试",
+        errorCode: "network_error",
+        errorMessage: "连接已断开，请稍后重试",
       );
     }
     if (DateTime.now().difference(_lastSendTime).inSeconds < 2) {
@@ -253,7 +273,13 @@ class DouyuDanmaku extends LiveDanmaku {
       );
     }
     try {
-      await _loginCompleter!.future;
+      await _loginCompleter!.future.timeout(const Duration(seconds: 8));
+    } on TimeoutException {
+      return DanmakuSendResult(
+        success: false,
+        errorCode: "login_failed",
+        errorMessage: "连接登录超时",
+      );
     } catch (e) {
       return DanmakuSendResult(
         success: false,
@@ -286,10 +312,20 @@ class DouyuDanmaku extends LiveDanmaku {
       "cst": cst.toString(),
     });
 
+    try {
+      _sendChannel!.sink.add(frameStt(stt));
+    } catch (e) {
+      CoreLog.error(e);
+      return DanmakuSendResult(
+        success: false,
+        errorCode: "network_error",
+        errorMessage: "连接已断开，请稍后重试",
+      );
+    }
+
     _pendingAck = Completer<void>();
     _pendingContent = message;
     _pendingError = null;
-    _sendChannel!.sink.add(frameStt(stt));
     _lastSendTime = DateTime.now();
 
     var timer = Timer(const Duration(seconds: 8), () {
@@ -364,9 +400,19 @@ class DouyuDanmaku extends LiveDanmaku {
 
   @override
   Future stop() async {
+    _stopped = true;
     onMessage = null;
     onClose = null;
     _keepLiveTimer?.cancel();
+    if (_loginCompleter != null && !_loginCompleter!.isCompleted) {
+      // 兜底结束等待登录的调用方，避免 stop 后挂起；catchError 吸收无监听方时的错误
+      _loginCompleter!.future.catchError((_) {});
+      _loginCompleter!.completeError("closed");
+    }
+    if (_pendingAck != null && !_pendingAck!.isCompleted) {
+      _pendingError = "network_error";
+      _pendingAck!.complete();
+    }
     await _sendChannel?.sink.close();
     _sendChannel = null;
     webScoketUtils?.close();
