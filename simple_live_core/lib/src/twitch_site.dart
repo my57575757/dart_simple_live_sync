@@ -43,7 +43,8 @@ class TwitchSite implements LiveSite {
   }
 
   Map<String, String> get _gqlHeader => {
-        "Client-ID": clientId,
+        // GQL 仅接受网页版内置 Client-ID，即使用户配置了自己的应用也不能替换
+        "Client-ID": kWebClientId,
         "X-Device-Id": _deviceId,
         "Content-Type": "application/json",
       };
@@ -64,7 +65,15 @@ class TwitchSite implements LiveSite {
       header: _gqlHeader,
     );
     if (result["errors"] != null) {
-      throw CoreError(result["errors"].toString());
+      var errors = result["errors"] as List;
+      var integrityDenied = errors.any((e) {
+        var ext = (e as Map)["extensions"];
+        return ext is Map && ext["code"] == "IntegrityCheckFailed";
+      });
+      if (integrityDenied) {
+        throw CoreError("Twitch 限制了匿名访问，请在设置中配置 Twitch Token 后重试");
+      }
+      throw CoreError(errors.toString());
     }
     return result["data"] as Map<String, dynamic>;
   }
@@ -99,7 +108,7 @@ class TwitchSite implements LiveSite {
     var data = await gqlPost(
       r"""
       query {
-        games(first: 100, sort: VIEWER_COUNT) {
+        games(first: 100) {
           edges { node { id name boxArtURL } }
         }
       }
@@ -167,7 +176,7 @@ class TwitchSite implements LiveSite {
               cursor
               node {
                 title viewersCount previewImageURL
-                broadcaster { login displayName avatarURL }
+                broadcaster { login displayName profileImageURL(width: 150) }
               }
             }
             pageInfo { hasNextPage }
@@ -221,7 +230,7 @@ class TwitchSite implements LiveSite {
             cursor
             node {
               title viewersCount previewImageURL
-              broadcaster { login displayName avatarURL }
+              broadcaster { login displayName profileImageURL(width: 150) }
             }
           }
           pageInfo { hasNextPage }
@@ -355,10 +364,10 @@ class TwitchSite implements LiveSite {
               __typename
               ... on Stream {
                 title viewersCount previewImageURL
-                broadcaster { login displayName avatarURL }
+                broadcaster { login displayName profileImageURL(width: 150) }
               }
               ... on Channel {
-                login displayName avatarURL
+                login displayName profileImageURL(width: 150)
                 stream { id }
               }
             }
@@ -403,7 +412,7 @@ class TwitchSite implements LiveSite {
         .where((node) => node["__typename"] == "Channel")
         .map((node) => LiveAnchorItem(
               roomId: node["login"].toString(),
-              avatar: node["avatarURL"].toString(),
+              avatar: node["profileImageURL"].toString(),
               userName: node["displayName"].toString(),
               liveStatus: node["stream"] != null,
             ))
@@ -482,7 +491,7 @@ class TwitchSite implements LiveSite {
       r"""
       query($login: String!) {
         user(login: $login) {
-          id login displayName avatarURL description
+          id login displayName profileImageURL(width: 300) description
           stream {
             id title viewersCount previewImageURL createdAt
           }
@@ -502,9 +511,9 @@ class TwitchSite implements LiveSite {
       title: live ? stream["title"].toString() : user["displayName"].toString(),
       cover: live
           ? imageSize(stream["previewImageURL"].toString(), 1280, 720)
-          : user["avatarURL"].toString(),
+          : user["profileImageURL"].toString(),
       userName: user["displayName"].toString(),
-      userAvatar: user["avatarURL"].toString(),
+      userAvatar: user["profileImageURL"].toString(),
       online: live ? int.tryParse(stream["viewersCount"].toString()) ?? 0 : 0,
       status: live,
       url: "https://www.twitch.tv/${user["login"]}",
@@ -512,7 +521,6 @@ class TwitchSite implements LiveSite {
       showTime: live ? _isoToEpoch(stream["createdAt"].toString()) : null,
       danmakuData: TwitchDanmakuArgs(
         channel: user["login"].toString(),
-        oauthToken: oauthToken,
       ),
     );
   }
@@ -553,7 +561,6 @@ class TwitchSite implements LiveSite {
       showTime: live ? _isoToEpoch(stream["started_at"].toString()) : null,
       danmakuData: TwitchDanmakuArgs(
         channel: user["login"].toString(),
-        oauthToken: oauthToken,
       ),
     );
   }
@@ -608,9 +615,7 @@ class TwitchSite implements LiveSite {
   Future<String> _fetchPlaylist(String channel) async {
     var data = await gqlPost(
       r"""
-      query PlaybackAccessToken(
-        $login: String!, $isLive: Boolean!, $vodID: String!, $isVod: Boolean!
-      ) {
+      query PlaybackAccessToken($login: String!) {
         streamPlaybackAccessToken(
           channelName: $login,
           params: {
@@ -621,19 +626,23 @@ class TwitchSite implements LiveSite {
         ) { value signature }
       }
       """,
-      {"login": channel, "isLive": true, "vodID": "", "isVod": false},
+      {"login": channel},
     );
     var token = data["streamPlaybackAccessToken"];
     return HttpClient.instance.getText(
-      "https://usher.ttvnw.net/api/channel/hls/$channel.m3u8",
+      "https://usher.ttvnw.net/api/v2/channel/hls/${channel.toLowerCase()}.m3u8",
       queryParameters: {
-        "nauth": token["value"].toString(),
-        "nauthsig": token["signature"].toString(),
+        "platform": "web",
+        "p": Random().nextInt(999999),
         "allow_source": "true",
         "allow_audio_only": "true",
-        "player": "twitchweb",
+        "playlist_include_framerate": "true",
+        "multigroup_video": "true",
+        "supported_codecs": "h264",
+        "fast_bread": "true",
+        "sig": token["signature"].toString(),
+        "token": token["value"].toString(),
       },
-      header: _gqlHeader,
     );
   }
 
@@ -646,16 +655,19 @@ class TwitchSite implements LiveSite {
       if (!line.startsWith("#EXT-X-STREAM-INF")) {
         continue;
       }
-      var video = RegExp(r'VIDEO="([^"]*)"').firstMatch(line)?.group(1) ?? "";
-      if (video.isEmpty || video == "audio_only") {
+      var id =
+          RegExp(r'STABLE-VARIANT-ID="([^"]*)"').firstMatch(line)?.group(1) ??
+              "";
+      if (id.isEmpty || id == "audio_only") {
         continue;
       }
+      var isSource = RegExp(r'IVS-VARIANT-SOURCE="source"').hasMatch(line);
       var url = lines[i + 1].trim();
       if (url.isEmpty || url.startsWith("#")) {
         continue;
       }
-      var name = video == "chunked" ? "源画质" : video;
-      result.add((name, url, _qualitySort(video)));
+      var name = isSource ? "源画质" : id;
+      result.add((name, url, isSource ? 100000 : _qualitySort(id)));
     }
     return result;
   }

@@ -10,10 +10,7 @@ class TwitchDanmakuArgs {
   /// 频道登录名（小写）
   final String channel;
 
-  /// 可选 OAuth Token，为空时匿名连接
-  final String? oauthToken;
-
-  TwitchDanmakuArgs({required this.channel, this.oauthToken});
+  TwitchDanmakuArgs({required this.channel});
 }
 
 class TwitchDanmaku implements LiveDanmaku {
@@ -56,14 +53,7 @@ class TwitchDanmaku implements LiveDanmaku {
     );
 
     _send("CAP REQ :twitch.tv/tags twitch.tv/commands");
-    var token = danmakuArgs.oauthToken;
-    String nick;
-    if (token != null && token.isNotEmpty) {
-      _send("PASS oauth:$token");
-      nick = "simplelive${Random().nextInt(900000) + 100000}";
-    } else {
-      nick = "justinfan${Random().nextInt(90000) + 10000}";
-    }
+    var nick = "justinfan${Random().nextInt(90000) + 10000}";
     _send("NICK $nick");
     _send("JOIN #${danmakuArgs.channel}");
   }
@@ -116,9 +106,6 @@ class TwitchDanmaku implements LiveDanmaku {
         _parsePrivmsg(tagsRaw, tokens[0], trailing);
       } else if (command == "366") {
         onReady?.call();
-      } else if (command == "NOTICE" &&
-          trailing.contains("authentication failed")) {
-        onClose?.call("Twitch 身份验证失败");
       }
     } catch (e) {
       CoreLog.error(e);
