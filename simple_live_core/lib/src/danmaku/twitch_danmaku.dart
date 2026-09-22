@@ -1,5 +1,6 @@
 // ignore_for_file: overridden_fields
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math';
 
 import 'package:simple_live_core/src/common/core_log.dart';
@@ -204,8 +205,39 @@ class TwitchDanmaku extends LiveDanmaku {
     );
   }
 
+  /// IRC 行内禁止 CR/LF/NUL：替换为空格，防止多行粘贴被解析为多条 IRC 命令
+  static String sanitizeIrcMessage(String m) =>
+      m.replaceAll(RegExp(r'[\r\n\x00]'), ' ');
+
+  /// 按 RFC 1459 口径将消息按 UTF-8 字节安全截断到 [maxBytes]；
+  /// 以 Unicode 码元为单位缩短，不切坏代理对
+  static String truncateIrcMessage(String m, {int maxBytes = 450}) {
+    if (utf8.encode(m).length <= maxBytes) {
+      return m;
+    }
+    var buffer = StringBuffer();
+    var length = 0;
+    for (var rune in m.runes) {
+      var byteLength = utf8.encode(String.fromCharCode(rune)).length;
+      if (length + byteLength > maxBytes) {
+        break;
+      }
+      buffer.writeCharCode(rune);
+      length += byteLength;
+    }
+    return buffer.toString();
+  }
+
   @override
   Future<DanmakuSendResult> sendMessage(String message) async {
+    // 断线/未连接必须先于成功返回；不做本地补显，避免假成功
+    if (_channel == null || _closed) {
+      return DanmakuSendResult(
+        success: false,
+        errorCode: "network_error",
+        errorMessage: "与服务器连接断开",
+      );
+    }
     if (danmakuArgs.oauthToken.isEmpty || danmakuArgs.userLogin.isEmpty) {
       return DanmakuSendResult(
         success: false,
@@ -213,7 +245,8 @@ class TwitchDanmaku extends LiveDanmaku {
         errorMessage: "未配置 Twitch 账号",
       );
     }
-    _send("PRIVMSG #${danmakuArgs.channel} :$message");
+    var safeMessage = truncateIrcMessage(sanitizeIrcMessage(message));
+    _send("PRIVMSG #${danmakuArgs.channel} :$safeMessage");
     return DanmakuSendResult(success: true, needLocalEcho: true);
   }
 
