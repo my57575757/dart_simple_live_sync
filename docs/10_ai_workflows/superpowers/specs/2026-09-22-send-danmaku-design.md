@@ -14,8 +14,8 @@ Simple Live 当前只能接收各平台弹幕，用户无法发言。本期新�
 | 平台 | 发送通道 | 认证凭证 | 关键工作 |
 |---|---|---|---|
 | 哔哩哔哩 | HTTP `POST https://api.live.bilibili.com/msg/send`，表单编码 | Cookie `SESSDATA` + `bili_jct`（现有 BiliBiliAccountService 已具备） | csrf 与 csrf_token 均取 bili_jct；roomid 必须为真实房间号；必带 Referer |
-| 斗鱼 | 另连 `wss://wsproxy.douyu.com:6671~6675`（由 lapi 实时下发）；发送消息类型为 `chatmessage`（注意：接收到的弹幕广播是 `chatmsg`，二者不同） | 新增登录 Cookie：`dy_did`、`acf_uid`、`acf_stk`、`acf_ltkid` | 新增 websec 签名体系；登录后 loginreq；接收连接 danmuproxy:8506 不用于发送 |
-| 虎牙 | 复用 `wss://cdnws.api.huya.com` 接收连接：先发 VerifyCookie（iCmdType=10）登录，再发 WupReq（iCmdType=3）。wup：servant=`liveui`、func=`sendMessage`、key=`tReq` | 扫码登录 Cookie：`udb_uid`、`udb_biztoken`（另有 yyuid/username/udb_guiddata） | 新增 SendMessageReq/UserId/ContentFormat/BulletFormat tars 结构 |
+| 斗鱼 | 另连 `wss://wsproxy.douyu.com:6671~6675`（由 lapi 实时下发）；发送消息类型为 `chatmessage`（注意：接收到的弹幕广播是 `chatmsg`，二者不同） | 新增登录 Cookie：`dy_did`、`acf_uid`、`acf_stk`、`acf_ltkid` | 新增 wsproxy 登录 vk 签名；登录后 loginreq；接收连接 danmuproxy:8506 不用于发送 |
+| 虎牙 | 复用 `wss://cdnws.api.huya.com` 接收连接：先发 VerifyCookie（iCmdType=10）登录，再发 WupReq（iCmdType=3）。wup：servant=`liveui`、func=`sendMessage`、key=`tReq` | WebView 登录 Cookie：`udb_uid`、`udb_biztoken`（另有 yyuid/username/udb_guiddata） | 新增 SendMessageReq/UserId/ContentFormat/BulletFormat tars 结构 |
 | 抖音 | HTTP **GET** `https://live.douyin.com/webcast/room/chat/`（旧 `/webcast/im/send/` 已废弃） | 需新增 WebView 登录获取完整 Cookie（`sessionid` 必须；现有 DouyinAccountService 仅配置 ttwid 设备标识，不是账号登录） | 复用现有 `DouyinSign.getAbogusUrl` 追加 msToken + a_bogus；bdturing 验证码拦截作为 P2 处理 |
 | Twitch | IRC `PRIVMSG #channel :text`；现有接收连接为匿名 justinfan，需改为认证连接：`PASS oauth:<token>` + `NICK <自身登录名>` + `JOIN` | oauth token（现有 TwitchAccountService）；另需调一次 `helix/users` 获取自身 login | TwitchDanmakuArgs 增加 oauthToken/userLogin |
 
@@ -33,9 +33,9 @@ Simple Live 当前只能接收各平台弹幕，用户无法发言。本期新�
 - wsproxy 列表获取：`GET https://www.douyu.com/lapi/live/gateway/web/<rid>?isH5=1`（lapi 实时下发，实测返回 5 个在线网关）
 - 二进制帧（小端）：length(4) + length(4) + msgtype=689(2) + encrypted=0(1) + reserved=0(1) + STT(UTF-8) + `\0`
 - STT：`key@=value/`，`@` 转义为 `@A`、`/` 转义为 `@S`
-- chatmessage 字段：`type@=chatmessage/rid@=<房间>/content@=<内容>/col@=0/dy@=<设备ID>/sender@=<UID>/pe@=0/ifs@=0/nc@=0/dat@=0/rev@=0/tts@=<秒>/cst@=<毫秒随机>/admzq@=0/`
+- chatmessage 字段：`type@=chatmessage/pe@=0/content@=<内容>/col@=0/dy@=<设备ID>/sender@=<UID>/ifs@=0/nc@=0/dat@=0/rev@=0/tts@=<秒>/admzq@=0/cst@=<毫秒随机>/`
 - loginreq：`type@=loginreq/roomid@=x/username@=visitor../uid@=x/ver@=20220825/aver@=218101901/ct@=0/`，另需 `vk` 及 ltkid/stk/devid
-- websec 签名：调 `https://www.douyu.com/wgapi/livenc/liveweb/websec/getEncryption` 取 key/rand_str/enc_time；`u=rand_str`，循环 enc_time 次 `u=MD5(u+key)`，`sign=MD5(u+key+rid+ts)`（登录/心跳场景为 rid+did+ts）
+- vk 签名：wsproxy 登录 loginreq 携带 `vk=MD5(秒时间戳+vk_secret+dy_did)`，vk_secret 为网页端内嵌常量；websec/getEncryption 仅用于直播流签名，弹幕发送不涉及
 - 回执：发送成功无独立 ACK，收到自己的弹幕广播即成功；应答有 chatres、h5cs（result 字段）；禁言为 newblackres（含 sid/endtime）；错误含 errorrid
 - 参考：OrdinaryRoad/ordinaryroad-barrage-fly（2026-01 仍活跃）
 
@@ -48,7 +48,7 @@ Simple Live 当前只能接收各平台弹幕，用户无法发言。本期新�
 - ContentFormat（tag 0-5）：iFontColor、iFontSize、iPopupStyle、iNickNameFontColor、iDarkFontColor、iDarkNickNameFontColor
 - BulletFormat（tag 0-8）：iFontColor、iFontSize、iTextSpeed、iTransitionType、tBorderGroundFormat 等
 - 回执：`SendMessageRsp{int iStatus(tag0), MessageNotice tNotice(tag1)}`；部分房间强制绑手机、约 20s 发言间隔
-- 发弹幕无需 JS 逆向签名；仅账密登录需 md5（本期采用扫码登录规避）
+- 发弹幕无需 JS 逆向签名；登录采用 WebView 打开 `https://www.huya.com`（页面内可扫码或账密），以取得 `udb_biztoken` 为准，无需逆向账密 md5 登录接口
 - 参考：ligb888/huya-danmu（Node，sendMsg 完整实现）、xyxyxiaoyan/HuyaSender（Java，扫码登录）
 
 ### 2.4 抖音接口细节
@@ -91,7 +91,7 @@ class LiveDanmaku {
 ### 3.2 各实现改动
 
 - **BiliBiliDanmaku**：sendMessage 内 POST 表单；从 cookie 正则提取 bili_jct（`bili_jct=([^;]+)`）；roomId 取 args.roomId
-- **DouyuDanmaku**：args 增加 cookie/登录字段；start 时若已登录，内部另建 wsproxy WebSocket（lapi 取列表），完成 websec loginreq；sendMessage 走该连接；未登录返回未登录错误。接收连接逻辑保持不变
+- **DouyuDanmaku**：args 增加 cookie/登录字段；start 时若已登录，内部另建 wsproxy WebSocket（lapi 取列表），完成带 vk 签名的 loginreq；sendMessage 走该连接；未登录返回未登录错误。接收连接逻辑保持不变
 - **HuyaDanmaku**：连接 onReady 后，已登录则先 VerifyCookie 再视为就绪；新增 tars model：`huya_send_message_req.dart`（含 UserId/ContentFormat/BulletFormat），按 2.3 tag 编号；sendMessage 编码 WupReq
 - **DouyinDanmaku**：sendMessage 拼 GET URL → getAbogusUrl 签名 → HttpClient 发起请求 → 解析 status_code
 - **TwitchDanmaku**：args 增加 oauthToken、userLogin；有 token 时用认证序列（PASS/NICK）；sendMessage 发 PRIVMSG，返回 needLocalEcho=true
@@ -111,8 +111,7 @@ class LiveDanmaku {
   - WebView 登录页打开 `https://www.douyu.com`，登录成功提取完整 cookie；校验 `acf_uid`、`acf_stk` 存在
   - LocalStorageService 新增 `kDouyuCookie`；同步 DouyuSite.cookie
 - **HuyaAccountService**：
-  - 优先扫码登录（请求虎牙扫码登录接口 + 轮询），取得含 udb_uid/udb_biztoken 的 cookie
-  - 扫码接口失效时降级 WebView 登录 `https://www.huya.com`
+  - WebView 登录页打开 `https://www.huya.com`（页面内支持扫码或账密登录），登录成功提取完整 cookie；校验 `udb_biztoken` 存在
   - LocalStorageService 新增 `kHuyaCookie`；同步 HuyaSite.cookie
 - **DouyinAccountService 改造**：
   - 现状仅支持手工配置 ttwid（设备标识，用于接收弹幕）；新增 WebView 登录 `https://live.douyin.com`，登录成功提取完整 cookie（校验 `sessionid` 存在）
@@ -140,7 +139,7 @@ App 层将 errorCode 映射为中文文案：未登录 → 引导登录；禁言
 
 ## 5. 测试策略
 
-- Core 单元测试（无网络）：bili_jct 提取、斗鱼 websec 循环 MD5 签名（构造 key/rand_str/enc_time 向量）、STT 转义、虎牙 SendMessageReq tars 编码字节断言
+- Core 单元测试（无网络）：bili_jct 提取、斗鱼 vk 签名向量（`vk=MD5(秒时间戳+vk_secret+dy_did)`）、STT 转义、虎牙 SendMessageReq tars 编码字节断言
 - Core 网络测试：沿用现有真实网络测试风格，各平台 sendMessage 测试通过本地环境变量提供测试 cookie，无凭证时自动 skip
 - App 测试：sendDanmaku 的未登录拦截、空消息、成功/失败 mock、needLocal 本地插入
 - 手工验证：Android 真机逐平台 登录 → 进入房间 → 发一条弹幕 → 确认回环/本地显示；全屏弹框发送；错误场景（未登录、高频）
@@ -150,14 +149,14 @@ App 层将 errorCode 映射为中文文案：未登录 → 引导登录；禁言
 1. Core：DanmakuSendResult + 接口 + BiliBiliDanmaku（端到端链路跑通）
 2. Twitch 认证连接 + sendMessage
 3. 抖音：DouyinAccountService WebView 登录改造 + room/chat + 签名
-4. 斗鱼：DouyuAccountService（WebView 登录）+ wsproxy 连接 + websec 签名 + chatmessage
-5. 虎牙：HuyaAccountService（扫码登录）+ VerifyCookie + SendMessageReq tars
+4. 斗鱼：DouyuAccountService（WebView 登录）+ wsproxy 连接 + vk 签名 + chatmessage
+5. 虎牙：HuyaAccountService（WebView 登录）+ VerifyCookie + SendMessageReq tars
 6. App：底部输入栏 + 全屏弹框 + 错误映射 + 账号页接入
 7. 测试与真机验证
 
 ## 7. 风险
 
-- 斗鱼 websec 签名为现行线上方案，但字段可能随版本调整，需以实测为准；参考实现 ordinaryroad-barrage-fly
+- 斗鱼 vk 签名（vk_secret 内嵌于客户端）为现行线上方案，但字段可能随版本调整，需以实测为准；参考实现 ordinaryroad-barrage-fly
 - 虎牙 SendMessageReq 结构以抓包为准，房间策略（绑手机/等级/20s 间隔）可能阻止发言
 - 抖音 a_bogus 已内置在项目 quickjs 脚本中，若线上版本升级导致签名失效，发送会被风控拦截；备选隐藏 WebView 桥接发送（P2）
 - B站不带 wbi 签名时高频/多账号可能吞弹幕甚至封 SESSDATA，客户端保持 1 条/秒以下
