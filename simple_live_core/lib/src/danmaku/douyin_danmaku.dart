@@ -1,8 +1,9 @@
 // ignore_for_file: overridden_fields
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
+import 'dart:io' show gzip;
 import 'package:simple_live_core/simple_live_core.dart';
+import 'package:simple_live_core/src/common/http_client.dart';
 import 'package:simple_live_core/src/common/web_socket_util.dart';
 import 'package:simple_live_core/src/scripts/douyin_sign.dart';
 
@@ -193,6 +194,85 @@ class DouyinDanmaku extends LiveDanmaku {
     var obj = PushFrame();
     obj.payloadType = 'hb';
     webScoketUtils?.sendMessage(obj.writeToBuffer());
+  }
+
+  static String buildChatUrl({
+    required String roomId,
+    required String content,
+    required String webRid,
+  }) {
+    var params = <String, String>{
+      "room_id": roomId,
+      "content": content,
+      "type": "0",
+      "rtf_content": "",
+      "emoji_id": "0",
+      "camera_id": "",
+      "team_id": "",
+      "paste_edit_method": "0",
+      "aid": "6383",
+      "app_name": "douyin_web",
+      "live_id": "1",
+      "device_platform": "web",
+      "language": "zh-CN",
+      "enter_from": "web_live",
+      "cookie_enabled": "true",
+      "screen_width": "1920",
+      "screen_height": "1080",
+      "browser_name": "Mozilla",
+      "browser_version": "180800",
+      "os_name": "Windows",
+      "os_version": "10",
+      "web_rid": webRid,
+    };
+    var query = params.entries
+        .map((e) =>
+            "${Uri.encodeQueryComponent(e.key)}=${Uri.encodeQueryComponent(e.value)}")
+        .join("&");
+    return "https://live.douyin.com/webcast/room/chat/?$query";
+  }
+
+  @override
+  Future<DanmakuSendResult> sendMessage(String message) async {
+    if (!danmakuArgs.cookie.contains("sessionid")) {
+      return DanmakuSendResult(
+        success: false,
+        errorCode: "not_login",
+        errorMessage: "未登录抖音",
+      );
+    }
+    try {
+      var url = buildChatUrl(
+        roomId: danmakuArgs.roomId,
+        content: message,
+        webRid: danmakuArgs.webRid,
+      );
+      url = DouyinSign.getAbogusUrl(url, DouyinSite.kDefaultUserAgent);
+      var result = await HttpClient.instance.getJson(
+        url,
+        header: {
+          "User-Agent": DouyinSite.kDefaultUserAgent,
+          "Referer": "https://live.douyin.com/${danmakuArgs.webRid}",
+          "Cookie": danmakuArgs.cookie,
+        },
+      );
+      var code = result["status_code"];
+      if (code == 0) {
+        return DanmakuSendResult(success: true);
+      }
+      var msg = result["data"]?["message"]?.toString() ?? "";
+      return DanmakuSendResult(
+        success: false,
+        errorCode: code.toString(),
+        errorMessage: msg,
+      );
+    } catch (e) {
+      return DanmakuSendResult(
+        success: false,
+        errorCode: "network_error",
+        errorMessage: "网络请求失败",
+      );
+    }
   }
 
   @override
