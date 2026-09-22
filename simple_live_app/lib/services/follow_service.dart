@@ -57,6 +57,17 @@ class FollowService extends GetxService {
     super.onInit();
   }
 
+  @override
+  void onClose() {
+    updateTimer?.cancel();
+    for (var timer in _retryTimers) {
+      timer.cancel();
+    }
+    _retryTimers.clear();
+    subscription?.cancel();
+    super.onClose();
+  }
+
   // 添加标签
   Future<void> addFollowUserTag(String tag) async {
     // 判断待添加tag是否已存在，存在则return
@@ -189,37 +200,54 @@ class FollowService extends GetxService {
     return result;
   }
 
-  void startUpdateStatus() async {
+  /// 每次刷新递增，用于作废上一轮的重试
+  int _runGeneration = 0;
+
+  /// 本轮已拿到首次结果（成功或失败）的用户 id
+  final Set<String> _settledIds = <String>{};
+
+  /// 等待重试的定时器
+  final Set<Timer> _retryTimers = <Timer>{};
+
+  static const int _retryDelaySeconds = 15;
+
+  void startUpdateStatus() {
+    _runGeneration++;
+    var generation = _runGeneration;
+    _settledIds.clear();
     updatedCount = 0;
     updating.value = true;
+
+    for (var timer in _retryTimers) {
+      timer.cancel();
+    }
+    _retryTimers.clear();
 
     var concurrency = getOptimalConcurrency();
 
     Log.logPrint("开始更新关注状态，并发数: $concurrency，总数: ${followList.length}");
 
-    // 按平台交错排列，避免单一平台阻塞
-    var interleavedList = interleaveByPlatform(followList);
-
     // 创建任务队列
-    var taskQueue = Queue<FollowUser>.from(interleavedList);
+    var taskQueue =
+        Queue<FollowUser>.from(interleaveByPlatform(followList));
 
     // 工作函数 - 持续从队列中取任务执行
-    Future<void> worker(int workerId) async {
+    Future<void> worker() async {
       while (taskQueue.isNotEmpty) {
         var item = taskQueue.removeFirst();
-        await updateLiveStatus(item);
+        await updateLiveStatus(item, generation: generation);
       }
     }
 
     // 启动固定数量的并发 worker
     var workers = <Future>[];
     for (var i = 0; i < concurrency; i++) {
-      workers.add(worker(i));
+      workers.add(worker());
     }
 
-    await Future.wait(workers);
-
-    Log.logPrint("关注状态更新完成");
+    Future.wait(workers).then((_) {
+      Log.logPrint("关注状态更新完成");
+    });
   }
 
   /// 抖音请求节流：相邻两次抖音请求至少间隔 450ms，避免触发其 444 频率限制
@@ -235,18 +263,22 @@ class FollowService extends GetxService {
     _lastDouyinRequestTime = DateTime.now();
   }
 
-  Future updateLiveStatus(FollowUser item) async {
+  Future updateLiveStatus(FollowUser item,
+      {required int generation}) async {
     if (item.siteId == Constant.kDouyin) {
       await _throttleDouyin();
     }
     try {
       var site = Sites.allSites[item.siteId]!;
+      var queryId = item.siteId == Constant.kDouyin
+          ? "${item.roomId};${item.shareUrl}"
+          : item.roomId;
       // 先只查状态
-      var isLiving = await site.liveSite.getLiveStatus(roomId: item.siteId == Constant.kDouyin?(item.roomId+";"+item.shareUrl):item.roomId);
+      var isLiving = await site.liveSite.getLiveStatus(roomId: queryId);
       item.liveStatus.value = isLiving ? 2 : 1;
-      if (item.liveStatus.value == 2) {
+      if (isLiving) {
         // 只有正在直播时才查详细信息
-        var detail = await site.liveSite.getRoomDetail(roomId: item.siteId == Constant.kDouyin?(item.roomId+";"+item.shareUrl):item.roomId);
+        var detail = await site.liveSite.getRoomDetail(roomId: queryId);
         item.liveStartTime = detail.showTime;
       } else {
         item.liveStartTime = null;
@@ -255,13 +287,49 @@ class FollowService extends GetxService {
       Log.logPrint(e);
       item.liveStatus.value = 0;
       item.liveStartTime = null;
-    } finally {
-      updatedCount++;
-      if (updatedCount >= followList.length) {
-        filterData();
-        updating.value = false;
-      }
+      _scheduleRetry(item, generation, e);
     }
+    // 新一轮刷新已开始，本轮结果作废
+    if (generation != _runGeneration) {
+      return;
+    }
+    _onItemSettled(item);
+  }
+
+  void _onItemSettled(FollowUser item) {
+    _settledIds.add(item.id);
+    updatedCount = _settledIds.length;
+    // 每出一个结果就重建列表，UI 实时刷新
+    filterData();
+    if (_settledIds.length >= followList.length) {
+      updating.value = false;
+    }
+  }
+
+  /// 可确定为永久失败的错误不重试
+  bool _isPermanentFailure(Object e) {
+    var text = e.toString();
+    return text.contains("不存在") ||
+        text.contains("未找到") ||
+        text.contains("已下架") ||
+        text.contains("已删除");
+  }
+
+  void _scheduleRetry(FollowUser item, int generation, Object error) {
+    if (generation != _runGeneration || _isPermanentFailure(error)) {
+      return;
+    }
+    late Timer timer;
+    timer = Timer(const Duration(seconds: _retryDelaySeconds), () {
+      _retryTimers.remove(timer);
+      if (generation != _runGeneration ||
+          !followList.any((e) => e.id == item.id)) {
+        return;
+      }
+      Log.logPrint("$_retryDelaySeconds秒后重试更新:${item.userName}");
+      updateLiveStatus(item, generation: generation);
+    });
+    _retryTimers.add(timer);
   }
 
   void filterData() {
@@ -451,12 +519,5 @@ class FollowService extends GetxService {
       }
       await DBService.instance.addFollow(follow);
     }
-  }
-
-  @override
-  void onClose() {
-    updateTimer?.cancel();
-    subscription?.cancel();
-    super.onClose();
   }
 }
