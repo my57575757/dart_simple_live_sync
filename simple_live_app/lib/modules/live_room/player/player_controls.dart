@@ -287,6 +287,10 @@ Widget buildFullControls(
                   ),
                   IconButton(
                     onPressed: () async {
+                      if (!controller.danmakuLogined) {
+                        await controller.showDanmakuLoginDialog();
+                        return;
+                      }
                       var text = await Utils.showEditTextDialog(
                         "",
                         title: "发送弹幕",

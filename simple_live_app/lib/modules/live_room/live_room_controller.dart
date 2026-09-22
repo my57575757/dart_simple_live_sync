@@ -20,12 +20,14 @@ import 'package:simple_live_app/models/db/follow_user.dart';
 import 'package:simple_live_app/models/db/history.dart';
 import 'package:simple_live_app/modules/live_room/player/player_controller.dart';
 import 'package:simple_live_app/modules/settings/danmu_settings_page.dart';
+import 'package:simple_live_app/routes/route_path.dart';
 import 'package:simple_live_app/services/db_service.dart';
 import 'package:simple_live_app/services/follow_service.dart';
 import 'package:simple_live_app/services/bilibili_account_service.dart';
 import 'package:simple_live_app/services/douyu_account_service.dart';
 import 'package:simple_live_app/services/huya_account_service.dart';
 import 'package:simple_live_app/services/douyin_account_service.dart';
+import 'package:simple_live_app/services/twitch_account_service.dart';
 import 'package:simple_live_app/widgets/desktop_refresh_button.dart';
 import 'package:simple_live_app/widgets/follow_user_item.dart';
 import 'package:simple_live_core/simple_live_core.dart';
@@ -287,6 +289,35 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       );
     } finally {
       sendingDanmaku.value = false;
+    }
+  }
+
+  /// 当前平台账号是否已登录；竖屏底部栏与全屏弹框入口同源
+  bool get danmakuLogined {
+    switch (site.id) {
+      case Constant.kBiliBili:
+        return BiliBiliAccountService.instance.logined.value;
+      case Constant.kDouyu:
+        return DouyuAccountService.instance.logined.value;
+      case Constant.kHuya:
+        return HuyaAccountService.instance.logined.value;
+      case Constant.kDouyin:
+        return DouyinAccountService.instance.logined.value;
+      case Constant.kTwitch:
+        return TwitchAccountService.instance.configured.value;
+      default:
+        return false;
+    }
+  }
+
+  /// 未登录时弹确认框，确认后前往账号管理
+  Future<void> showDanmakuLoginDialog() async {
+    var result = await Utils.showAlertDialog(
+      "登录后才能发送弹幕，是否前往账号管理？",
+      title: "未登录",
+    );
+    if (result) {
+      Get.toNamed(RoutePath.kSettingsAccount);
     }
   }
 

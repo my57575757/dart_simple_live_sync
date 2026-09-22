@@ -15,13 +15,7 @@ import 'package:simple_live_app/app/sites.dart';
 import 'package:simple_live_app/app/utils.dart';
 import 'package:simple_live_app/modules/live_room/live_room_controller.dart';
 import 'package:simple_live_app/modules/live_room/player/player_controls.dart';
-import 'package:simple_live_app/routes/route_path.dart';
-import 'package:simple_live_app/services/bilibili_account_service.dart';
-import 'package:simple_live_app/services/douyin_account_service.dart';
-import 'package:simple_live_app/services/douyu_account_service.dart';
 import 'package:simple_live_app/services/follow_service.dart';
-import 'package:simple_live_app/services/huya_account_service.dart';
-import 'package:simple_live_app/services/twitch_account_service.dart';
 import 'package:simple_live_app/widgets/desktop_refresh_button.dart';
 import 'package:simple_live_app/widgets/follow_user_item.dart';
 import 'package:simple_live_app/widgets/keep_alive_wrapper.dart';
@@ -418,33 +412,6 @@ class LiveRoomPage extends GetView<LiveRoomController> {
     );
   }
 
-  bool get _isLogined {
-    switch (controller.site.id) {
-      case Constant.kBiliBili:
-        return BiliBiliAccountService.instance.logined.value;
-      case Constant.kDouyu:
-        return DouyuAccountService.instance.logined.value;
-      case Constant.kHuya:
-        return HuyaAccountService.instance.logined.value;
-      case Constant.kDouyin:
-        return DouyinAccountService.instance.logined.value;
-      case Constant.kTwitch:
-        return TwitchAccountService.instance.configured.value;
-      default:
-        return false;
-    }
-  }
-
-  Future<void> _showLoginDialog() async {
-    var result = await Utils.showAlertDialog(
-      "登录后才能发送弹幕，是否前往账号管理？",
-      title: "未登录",
-    );
-    if (result) {
-      Get.toNamed(RoutePath.kSettingsAccount);
-    }
-  }
-
   Widget buildSendDanmakuBar(BuildContext context) {
     var inputController = TextEditingController();
     return Container(
@@ -467,8 +434,8 @@ class LiveRoomPage extends GetView<LiveRoomController> {
                 ),
               ),
               onSubmitted: (v) async {
-                if (!_isLogined) {
-                  _showLoginDialog();
+                if (!controller.danmakuLogined) {
+                  controller.showDanmakuLoginDialog();
                   return;
                 }
                 await controller.sendDanmaku(v);
@@ -482,8 +449,8 @@ class LiveRoomPage extends GetView<LiveRoomController> {
               onPressed: controller.sendingDanmaku.value
                   ? null
                   : () async {
-                      if (!_isLogined) {
-                        _showLoginDialog();
+                      if (!controller.danmakuLogined) {
+                        controller.showDanmakuLoginDialog();
                         return;
                       }
                       await controller.sendDanmaku(inputController.text);
