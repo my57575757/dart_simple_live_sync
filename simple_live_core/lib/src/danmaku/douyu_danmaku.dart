@@ -1,12 +1,25 @@
 // ignore_for_file: overridden_fields
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 import 'dart:typed_data';
 
+import 'package:crypto/crypto.dart';
 import 'package:simple_live_core/simple_live_core.dart';
+import 'package:simple_live_core/src/common/http_client.dart';
 import 'package:simple_live_core/src/common/web_socket_util.dart';
+import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../common/binary_writer.dart';
+
+class DouyuDanmakuArgs {
+  final int roomId;
+  final String cookie;
+  DouyuDanmakuArgs({required this.roomId, this.cookie = ""});
+
+  @override
+  String toString() => json.encode({"roomId": roomId, "cookie": cookie});
+}
 
 class DouyuDanmaku extends LiveDanmaku {
   @override
@@ -22,8 +35,25 @@ class DouyuDanmaku extends LiveDanmaku {
 
   WebScoketUtils? webScoketUtils;
 
+  static const String vkSecret =
+      "r5*^5;}2#\${XF[h+;'./.Q'1;,-]f'p[";
+
+  late DouyuDanmakuArgs danmakuArgs;
+
+  // 发送连接
+  WebSocketChannel? _sendChannel;
+  Timer? _keepLiveTimer;
+  Completer<void>? _loginCompleter;
+  Completer<void>? _pendingAck;
+  String? _pendingContent;
+  String? _pendingError;
+  DateTime _lastSendTime = DateTime.fromMillisecondsSinceEpoch(0);
+
   @override
   Future start(dynamic args) async {
+    danmakuArgs = args is DouyuDanmakuArgs
+        ? args
+        : DouyuDanmakuArgs(roomId: int.tryParse(args.toString()) ?? 0);
     webScoketUtils = WebScoketUtils(
       url: serverUrl,
       heartBeatTime: heartbeatTime,
@@ -32,7 +62,7 @@ class DouyuDanmaku extends LiveDanmaku {
       },
       onReady: () {
         onReady?.call();
-        joinRoom(args);
+        joinRoom();
       },
       onHeartBeat: () {
         heartbeat();
@@ -45,25 +75,300 @@ class DouyuDanmaku extends LiveDanmaku {
       },
     );
     webScoketUtils?.connect();
+
+    if (danmakuArgs.cookie.isNotEmpty) {
+      unawaited(_initSendChannel());
+    }
   }
 
-  void joinRoom(roomId) {
-    webScoketUtils
-        ?.sendMessage(serializeDouyu("type@=loginreq/roomid@=$roomId/"));
+  void joinRoom() {
     webScoketUtils?.sendMessage(
-        serializeDouyu("type@=joingroup/rid@=$roomId/gid@=-9999/"));
+      serializeDouyu("type@=loginreq/roomid@=${danmakuArgs.roomId}/"),
+    );
+    webScoketUtils?.sendMessage(serializeDouyu(
+        "type@=joingroup/rid@=${danmakuArgs.roomId}/gid@=-9999/"));
   }
 
   @override
   void heartbeat() {
-    var data = serializeDouyu("type@=mrkl/");
-    webScoketUtils?.sendMessage(data);
+    webScoketUtils?.sendMessage(serializeDouyu("type@=mrkl/"));
+  }
+
+  Future<void> _initSendChannel() async {
+    var cookie = danmakuArgs.cookie;
+    var did = cookieValue(cookie, "dy_did");
+    if (did.isEmpty) {
+      did = _randomDid();
+    }
+    var uid = cookieValue(cookie, "acf_uid");
+
+    String url;
+    try {
+      var resp = await HttpClient.instance.postJson(
+        "https://www.douyu.com/lapi/live/gateway/web/${danmakuArgs.roomId}?isH5=1",
+        data: "",
+        header: {
+          "Cookie": cookie,
+          "Referer": "https://www.douyu.com/${danmakuArgs.roomId}",
+        },
+      );
+      var info = resp["data"] ?? resp;
+      var wssList = info["wss"] as List;
+      var pick = wssList[Random().nextInt(wssList.length)];
+      url = "wss://${pick["domain"]}:${pick["port"]}";
+    } catch (e) {
+      CoreLog.error(e);
+      return;
+    }
+
+    _loginCompleter = Completer<void>();
+    _sendChannel = WebSocketChannel.connect(Uri.parse(url));
+    unawaited(_sendChannel!.ready);
+    _sendChannel!.stream.listen(
+      (event) {
+        if (event is List<int>) {
+          _onSendChannelMessageBytes(Uint8List.fromList(event));
+        } else {
+          _handleStt(event.toString());
+        }
+      },
+      onError: (e) => CoreLog.error(e),
+      onDone: _onSendChannelDone,
+    );
+
+    var now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    var stt = buildStt({
+      "type": "loginreq",
+      "roomid": danmakuArgs.roomId.toString(),
+      "dfl": "sn@=105/ss@=1",
+      "username": uid,
+      "password": "",
+      "ltkid": cookieValue(cookie, "acf_ltkid"),
+      "biz": "1",
+      "stk": cookieValue(cookie, "acf_stk"),
+      "devid": did,
+      "ct": "0",
+      "pt": "2",
+      "cvr": "0",
+      "tvr": "7",
+      "apd": "",
+      "rt": now.toString(),
+      "vk": generateVk(now, did),
+      "ver": "20220825",
+      "aver": "218101901",
+      "dmbt": "chrome",
+      "dmbv": "123",
+    });
+    _sendChannel!.sink.add(frameStt(stt));
+  }
+
+  void _onSendChannelMessageBytes(Uint8List bytes) {
+    // 发送连接下行帧与 danmuproxy 同为 length(4)+length(4)+689(2)+0(1)+0(1)+STT+\0，
+    // body 起始于第 12 字节；直接复用既有标准解析器。
+    var stt = deserializeDouyu(bytes);
+    if (stt != null) {
+      _handleStt(stt);
+    }
+  }
+
+  void _handleStt(String stt) {
+    if (stt.isEmpty) {
+      return;
+    }
+    var fields = _parseStt(stt);
+    var type = fields["type"];
+    if (type == "loginres") {
+      if (_loginCompleter != null && !_loginCompleter!.isCompleted) {
+        _loginCompleter!.complete();
+      }
+      _keepLiveTimer?.cancel();
+      _keepLiveTimer = Timer.periodic(
+        const Duration(seconds: 45),
+        (_) {
+          var tick = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+          _sendChannel!.sink.add(frameStt(buildStt({
+            "type": "keeplive",
+            "vbw": "0",
+            "cnd": "hs-h5",
+            "tick": tick.toString(),
+            "kd": "",
+          })));
+        },
+      );
+    } else if (type == "chatmsg") {
+      if (_pendingAck != null &&
+          fields["uid"] == cookieValue(danmakuArgs.cookie, "acf_uid") &&
+          fields["txt"] == _pendingContent &&
+          !_pendingAck!.isCompleted) {
+        _pendingAck!.complete();
+      }
+    } else if (type == "newblackres") {
+      _pendingError = "muted";
+      if (_pendingAck != null && !_pendingAck!.isCompleted) {
+        _pendingAck!.complete();
+      }
+    } else if (type == "errorrid") {
+      _pendingError = fields["result"] ?? "error";
+      if (_pendingAck != null && !_pendingAck!.isCompleted) {
+        _pendingAck!.complete();
+      }
+    }
+  }
+
+  void _onSendChannelDone() {
+    _keepLiveTimer?.cancel();
+    if (_loginCompleter != null && !_loginCompleter!.isCompleted) {
+      _loginCompleter!.completeError("closed");
+    }
+    if (_pendingAck != null && !_pendingAck!.isCompleted) {
+      _pendingError = "closed";
+      _pendingAck!.complete();
+    }
+  }
+
+  @override
+  Future<DanmakuSendResult> sendMessage(String message) async {
+    var cookie = danmakuArgs.cookie;
+    if (cookie.isEmpty ||
+        cookieValue(cookie, "acf_stk").isEmpty ||
+        cookieValue(cookie, "acf_uid").isEmpty) {
+      return DanmakuSendResult(
+        success: false,
+        errorCode: "not_login",
+        errorMessage: "未登录斗鱼",
+      );
+    }
+    if (_sendChannel == null) {
+      return DanmakuSendResult(
+        success: false,
+        errorCode: "connecting",
+        errorMessage: "发送连接未建立，请稍后再试",
+      );
+    }
+    if (DateTime.now().difference(_lastSendTime).inSeconds < 2) {
+      return DanmakuSendResult(
+        success: false,
+        errorCode: "rate_limit",
+        errorMessage: "发言太快，请稍后再试",
+      );
+    }
+    try {
+      await _loginCompleter!.future;
+    } catch (e) {
+      return DanmakuSendResult(
+        success: false,
+        errorCode: "login_failed",
+        errorMessage: "发送登录失败",
+      );
+    }
+
+    var did = cookieValue(cookie, "dy_did");
+    if (did.isEmpty) {
+      did = _randomDid();
+    }
+    var nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    var cst = DateTime.now().millisecondsSinceEpoch +
+        8000 +
+        Random().nextInt(2000);
+    var stt = buildStt({
+      "type": "chatmessage",
+      "pe": "0",
+      "content": message,
+      "col": "0",
+      "dy": did,
+      "sender": cookieValue(cookie, "acf_uid"),
+      "ifs": "0",
+      "nc": "0",
+      "dat": "0",
+      "rev": "0",
+      "tts": nowSec.toString(),
+      "admzq": "0",
+      "cst": cst.toString(),
+    });
+
+    _pendingAck = Completer<void>();
+    _pendingContent = message;
+    _pendingError = null;
+    _sendChannel!.sink.add(frameStt(stt));
+    _lastSendTime = DateTime.now();
+
+    var timer = Timer(const Duration(seconds: 8), () {
+      if (_pendingAck != null && !_pendingAck!.isCompleted) {
+        _pendingError = "timeout";
+        _pendingAck!.complete();
+      }
+    });
+    await _pendingAck!.future;
+    timer.cancel();
+
+    if (_pendingError != null) {
+      return DanmakuSendResult(
+        success: false,
+        errorCode: _pendingError!,
+        errorMessage: _pendingError == "muted" ? "你已被禁言" : "发送失败",
+      );
+    }
+    return DanmakuSendResult(success: true);
+  }
+
+  static String generateVk(int currentTimeSecs, String did) {
+    return md5
+        .convert("$currentTimeSecs$vkSecret$did".codeUnits)
+        .toString();
+  }
+
+  static String escapeStt(String v) =>
+      v.replaceAll("@", "@A").replaceAll("/", "@S");
+
+  static String buildStt(Map<String, String> fields) {
+    return fields.entries
+        .map((e) => "${escapeStt(e.key)}@=${escapeStt(e.value)}/")
+        .join();
+  }
+
+  static Uint8List frameStt(String body) {
+    var bytes = utf8.encode(body);
+    var total = bytes.length + 9;
+    var writer = BinaryWriter([]);
+    writer.writeInt(total, 4, endian: Endian.little);
+    writer.writeInt(total, 4, endian: Endian.little);
+    writer.writeInt(689, 2, endian: Endian.little);
+    writer.writeInt(0, 1, endian: Endian.little);
+    writer.writeInt(0, 1, endian: Endian.little);
+    writer.writeBytes(bytes);
+    writer.writeInt(0, 1, endian: Endian.little);
+    return Uint8List.fromList(writer.buffer);
+  }
+
+  static String cookieValue(String cookie, String name) {
+    return RegExp("$name=([^;]+)").firstMatch(cookie)?.group(1) ?? "";
+  }
+
+  Map<String, String> _parseStt(String stt) {
+    var result = <String, String>{};
+    for (var field in stt.split("/")) {
+      var idx = field.indexOf("@=");
+      if (idx <= 0) {
+        continue;
+      }
+      result[field.substring(0, idx)] = field.substring(idx + 2);
+    }
+    return result;
+  }
+
+  String _randomDid() {
+    const chars = "0123456789abcdef";
+    var rnd = Random();
+    return List.generate(32, (_) => chars[rnd.nextInt(16)]).join();
   }
 
   @override
   Future stop() async {
     onMessage = null;
     onClose = null;
+    _keepLiveTimer?.cancel();
+    await _sendChannel?.sink.close();
+    _sendChannel = null;
     webScoketUtils?.close();
   }
 
@@ -76,9 +381,7 @@ class DouyuDanmaku extends LiveDanmaku {
       var jsonData = sttToJObject(result);
 
       var type = jsonData["type"]?.toString();
-      //斗鱼好像不会返回人气值
       if (type == "chatmsg") {
-        // 屏蔽阴间弹幕
         if (jsonData["dms"] == null) {
           return;
         }
@@ -99,18 +402,13 @@ class DouyuDanmaku extends LiveDanmaku {
 
   List<int> serializeDouyu(String body) {
     try {
-      const int clientSendToServer = 689;
-      const int encrypted = 0;
-      const int reserved = 0;
-
       List<int> buffer = utf8.encode(body);
-
       var writer = BinaryWriter([]);
       writer.writeInt(4 + 4 + body.length + 1, 4, endian: Endian.little);
       writer.writeInt(4 + 4 + body.length + 1, 4, endian: Endian.little);
-      writer.writeInt(clientSendToServer, 2, endian: Endian.little);
-      writer.writeInt(encrypted, 1, endian: Endian.little);
-      writer.writeInt(reserved, 1, endian: Endian.little);
+      writer.writeInt(689, 2, endian: Endian.little);
+      writer.writeInt(0, 1, endian: Endian.little);
+      writer.writeInt(0, 1, endian: Endian.little);
       writer.writeBytes(buffer);
       writer.writeInt(0, 1, endian: Endian.little);
       return writer.buffer;
@@ -123,17 +421,16 @@ class DouyuDanmaku extends LiveDanmaku {
   String? deserializeDouyu(List<int> buffer) {
     try {
       var reader = BinaryReader(Uint8List.fromList(buffer));
-      int fullMsgLength =
-          reader.readInt32(endian: Endian.little); //fullMsgLength
-      reader.readInt32(endian: Endian.little); //fullMsgLength2
+      int fullMsgLength = reader.readInt32(endian: Endian.little);
+      reader.readInt32(endian: Endian.little);
       int bodyLength = fullMsgLength - 9;
-      reader.readShort(endian: Endian.little); //packType
-      reader.readByte(endian: Endian.little); //encrypted
-      reader.readByte(endian: Endian.little); //reserved
+      reader.readShort(endian: Endian.little);
+      reader.readByte(endian: Endian.little);
+      reader.readByte(endian: Endian.little);
 
       var bytes = reader.readBytes(bodyLength);
 
-      reader.readByte(endian: Endian.little); //固定为0
+      reader.readByte(endian: Endian.little);
       return utf8.decode(bytes);
     } catch (e) {
       CoreLog.error(e);
@@ -141,7 +438,6 @@ class DouyuDanmaku extends LiveDanmaku {
     }
   }
 
-  //辣鸡STT
   dynamic sttToJObject(String str) {
     if (str.contains("//")) {
       var result = [];
@@ -155,14 +451,12 @@ class DouyuDanmaku extends LiveDanmaku {
     }
     if (str.contains("@=")) {
       var result = {};
-      for (var field in str.split('/')) {
+      for (var field in str.split("/")) {
         if (field.isEmpty) {
           continue;
         }
         var tokens = field.split("@=");
-        var k = tokens[0];
-        var v = unscapeSlashAt(tokens[1]);
-        result[k] = sttToJObject(v);
+        result[tokens[0]] = sttToJObject(unscapeSlashAt(tokens[1]));
       }
       return result;
     } else if (str.contains("@A=")) {
