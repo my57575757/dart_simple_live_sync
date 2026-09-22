@@ -22,6 +22,10 @@ import 'package:simple_live_app/modules/live_room/player/player_controller.dart'
 import 'package:simple_live_app/modules/settings/danmu_settings_page.dart';
 import 'package:simple_live_app/services/db_service.dart';
 import 'package:simple_live_app/services/follow_service.dart';
+import 'package:simple_live_app/services/bilibili_account_service.dart';
+import 'package:simple_live_app/services/douyu_account_service.dart';
+import 'package:simple_live_app/services/huya_account_service.dart';
+import 'package:simple_live_app/services/douyin_account_service.dart';
 import 'package:simple_live_app/widgets/desktop_refresh_button.dart';
 import 'package:simple_live_app/widgets/follow_user_item.dart';
 import 'package:simple_live_core/simple_live_core.dart';
@@ -80,6 +84,28 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
 
   /// 聊天信息
   RxList<LiveMessage> messages = RxList<LiveMessage>();
+
+  /// 弹幕发送中
+  var sendingDanmaku = false.obs;
+
+  String get currentUserName {
+    switch (site.id) {
+      case Constant.kBiliBili:
+        return BiliBiliAccountService.instance.name.value;
+      case Constant.kDouyu:
+        return DouyuAccountService.instance.name.value;
+      case Constant.kHuya:
+        return HuyaAccountService.instance.name.value;
+      case Constant.kDouyin:
+        return DouyinAccountService.instance.loginName.value;
+      case Constant.kTwitch:
+        return detail.value?.danmakuData is TwitchDanmakuArgs
+            ? (detail.value!.danmakuData as TwitchDanmakuArgs).userLogin
+            : "";
+      default:
+        return "";
+    }
+  }
 
   /// 清晰度数据
   RxList<LivePlayQuality> qualites = RxList<LivePlayQuality>();
@@ -222,6 +248,94 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     liveDanmaku.onMessage = onWSMessage;
     liveDanmaku.onClose = onWSClose;
     liveDanmaku.onReady = onWSReady;
+  }
+
+  Future<void> sendDanmaku(String text) async {
+    var content = text.trim();
+    if (content.isEmpty) {
+      return;
+    }
+    if (content.length > 200) {
+      SmartDialog.showToast("弹幕内容过长（最多200字）");
+      return;
+    }
+    sendingDanmaku.value = true;
+    try {
+      var result = await liveDanmaku.sendMessage(content);
+      if (result.success) {
+        if (result.needLocalEcho) {
+          onWSMessage(LiveMessage(
+            type: LiveMessageType.chat,
+            userName: currentUserName,
+            message: content,
+            color: LiveMessageColor.white,
+          ));
+        }
+      } else {
+        SmartDialog.showToast(
+          danmakuErrorText(site.id, result),
+        );
+      }
+    } finally {
+      sendingDanmaku.value = false;
+    }
+  }
+
+  static String danmakuErrorText(String platform, DanmakuSendResult result) {
+    var code = result.errorCode;
+    if (code == "not_login") {
+      return "未登录，请先在账号管理中登录";
+    }
+    if (code == "rate_limit") {
+      return "发言太快，请稍后再试";
+    }
+    if (code == "network_error" || code == "timeout") {
+      return "网络异常，请稍后再试";
+    }
+    if (platform == Constant.kBiliBili) {
+      switch (code) {
+        case "1":
+        case "13":
+          return "你已被禁言";
+        case "3":
+          return "房间已锁定，无法发言";
+        case "11":
+          return "发言太快，请稍后再试";
+        case "12":
+          return "弹幕内容过长";
+        case "14":
+          return "该房间仅粉丝团可发言";
+        case "15":
+          return "需要绑定手机后才能发言";
+      }
+    }
+    if (platform == Constant.kDouyin) {
+      switch (code) {
+        case "8":
+          return "未登录或登录已失效";
+        case "9":
+          return "账号已被封禁";
+        case "50001":
+          return "你已被禁言";
+        case "50004":
+          return "内容包含敏感词";
+        case "50008":
+          return "当前账号发言受限";
+        case "3009008":
+          return "发言太快，请稍后再试";
+      }
+    }
+    if (platform == Constant.kDouyu) {
+      if (code == "muted") {
+        return "你已被禁言";
+      }
+    }
+    if (platform == Constant.kHuya) {
+      if (code != "0") {
+        return result.errorMessage.isNotEmpty ? result.errorMessage : "弹幕发送失败";
+      }
+    }
+    return "弹幕发送失败";
   }
 
   /// 接收到WebSocket信息
