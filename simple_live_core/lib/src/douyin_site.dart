@@ -4,6 +4,7 @@ import 'dart:math';
 import 'package:dio/dio.dart';
 import 'package:simple_live_core/simple_live_core.dart';
 import 'package:simple_live_core/src/common/convert_helper.dart';
+import 'package:simple_live_core/src/common/core_error.dart';
 import 'package:simple_live_core/src/common/http_client.dart';
 import 'package:simple_live_core/src/scripts/douyin_sign.dart';
 
@@ -45,6 +46,55 @@ class DouyinSite implements LiveSite {
     "User-Agent": kDefaultUserAgent,
   };
 
+  /// 抖音对单位时间请求数有限制，超限后返回 444，约 15 秒后自动恢复
+  static const List<int> _rateLimitRetryDelaysMs = [1000, 3000, 8000];
+
+  Future<T> _withRateLimitRetry<T>(Future<T> Function() request) async {
+    Object? lastError;
+    for (var attempt = 0;
+        attempt <= _rateLimitRetryDelaysMs.length;
+        attempt++) {
+      try {
+        return await request();
+      } on CoreError catch (e) {
+        lastError = e;
+        if (e.statusCode != 444 ||
+            attempt == _rateLimitRetryDelaysMs.length) {
+          rethrow;
+        }
+        var delay = _rateLimitRetryDelaysMs[attempt] +
+            Random().nextInt(400) -
+            200;
+        await Future.delayed(Duration(milliseconds: delay < 0 ? 0 : delay));
+      }
+    }
+    throw lastError!;
+  }
+
+  Future<String> _getText(
+    String url, {
+    Map<String, dynamic>? queryParameters,
+    Map<String, dynamic>? header,
+  }) {
+    return _withRateLimitRetry(() => HttpClient.instance.getText(
+          url,
+          queryParameters: queryParameters,
+          header: header,
+        ));
+  }
+
+  Future<dynamic> _getJson(
+    String url, {
+    Map<String, dynamic>? queryParameters,
+    Map<String, dynamic>? header,
+  }) {
+    return _withRateLimitRetry(() => HttpClient.instance.getJson(
+          url,
+          queryParameters: queryParameters,
+          header: header,
+        ));
+  }
+
   Future<Map<String, dynamic>> getRequestHeaders() async {
     try {
       // 如果用户已设置 cookie，直接使用用户的 cookie
@@ -68,7 +118,7 @@ class DouyinSite implements LiveSite {
   @override
   Future<List<LiveCategory>> getCategores() async {
     List<LiveCategory> categories = [];
-    var result = await HttpClient.instance.getText(
+    var result = await _getText(
       "https://live.douyin.com/",
       queryParameters: {},
       header: await getRequestHeaders(),
@@ -157,7 +207,7 @@ class DouyinSite implements LiveSite {
     );
     var requestUrl = DouyinSign.getAbogusUrl(uri.toString(), kDefaultUserAgent);
 
-    var result = await HttpClient.instance.getJson(
+    var result = await _getJson(
       requestUrl,
       header: await getRequestHeaders(),
     );
@@ -212,7 +262,7 @@ class DouyinSite implements LiveSite {
     );
     var requestUrl = DouyinSign.getAbogusUrl(uri.toString(), kDefaultUserAgent);
 
-    var result = await HttpClient.instance.getJson(
+    var result = await _getJson(
       requestUrl,
       header: await getRequestHeaders(),
     );
@@ -534,7 +584,7 @@ class DouyinSite implements LiveSite {
   /// - [webRid] 直播间RID
   Future<Map> _getRoomDataByHtml(String webRid) async {
     var dyCookie = await _getWebCookie(webRid);
-    var result = await HttpClient.instance.getText(
+    var result = await _getText(
       "https://live.douyin.com/$webRid",
       queryParameters: {},
       header: {
@@ -589,7 +639,7 @@ class DouyinSite implements LiveSite {
     );
     var requestUrl = DouyinSign.getAbogusUrl(uri.toString(), kDefaultUserAgent);
 
-    var result = await HttpClient.instance.getJson(
+    var result = await _getJson(
       requestUrl,
       header: requestHeader,
     );
@@ -604,7 +654,7 @@ class DouyinSite implements LiveSite {
   /// 通过roomId获取直播间信息
   /// - [roomId] 直播间ID
   Future<Map> _getRoomDataByRoomId(String roomId) async {
-    var result = await HttpClient.instance.getJson(
+    var result = await _getJson(
       'https://webcast.amemv.com/webcast/room/reflow/info/',
       queryParameters: {
         "type_id": 0,
@@ -783,7 +833,7 @@ class DouyinSite implements LiveSite {
       }
     });
 
-    var result = await HttpClient.instance.getJson(
+    var result = await _getJson(
       requlestUrl,
       queryParameters: {},
       header: {

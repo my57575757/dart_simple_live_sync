@@ -222,7 +222,23 @@ class FollowService extends GetxService {
     Log.logPrint("关注状态更新完成");
   }
 
+  /// 抖音请求节流：相邻两次抖音请求至少间隔 450ms，避免触发其 444 频率限制
+  static const int _douyinMinIntervalMs = 450;
+  DateTime _lastDouyinRequestTime = DateTime.fromMillisecondsSinceEpoch(0);
+
+  Future<void> _throttleDouyin() async {
+    var wait = _douyinMinIntervalMs -
+        DateTime.now().difference(_lastDouyinRequestTime).inMilliseconds;
+    if (wait > 0) {
+      await Future.delayed(Duration(milliseconds: wait));
+    }
+    _lastDouyinRequestTime = DateTime.now();
+  }
+
   Future updateLiveStatus(FollowUser item) async {
+    if (item.siteId == Constant.kDouyin) {
+      await _throttleDouyin();
+    }
     try {
       var site = Sites.allSites[item.siteId]!;
       // 先只查状态
