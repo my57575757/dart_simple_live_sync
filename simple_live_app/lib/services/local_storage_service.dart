@@ -126,6 +126,15 @@ class LocalStorageService extends GetxService {
   /// 抖音cookie
   static const String kDouyinCookie = "DouyinCookie";
 
+  /// 抖音账号登录完整cookie
+  static const String kDouyinLoginCookie = "DouyinLoginCookie";
+
+  /// 斗鱼cookie
+  static const String kDouyuCookie = "DouyuCookie";
+
+  /// 虎牙cookie
+  static const String kHuyaCookie = "HuyaCookie";
+
   /// Twitch Client ID
   static const String kTwitchClientId = "TwitchClientId";
 

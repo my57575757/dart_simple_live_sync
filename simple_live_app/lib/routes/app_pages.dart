@@ -29,6 +29,7 @@ import 'package:simple_live_app/modules/mine/account/bilibili/qr_login_controlle
 import 'package:simple_live_app/modules/mine/account/bilibili/qr_login_page.dart';
 import 'package:simple_live_app/modules/mine/account/bilibili/web_login_controller.dart';
 import 'package:simple_live_app/modules/mine/account/bilibili/web_login_page.dart';
+import 'package:simple_live_app/modules/mine/account/web_login.dart';
 import 'package:simple_live_app/modules/settings/appstyle_setting_page.dart';
 import 'package:simple_live_app/modules/settings/auto_exit_settings_page.dart';
 import 'package:simple_live_app/modules/settings/danmu_settings_page.dart';
@@ -172,6 +173,12 @@ class AppPages {
       bindings: [
         BindingsBuilder.put(() => BiliBiliQRLoginController()),
       ],
+    ),
+    //通用WebView登录
+    GetPage(
+      name: RoutePath.kWebLogin,
+      page: () => const WebLoginPage(),
+      binding: BindingsBuilder.put(() => WebLoginController()),
     ),
     // 数据同步
     GetPage(
