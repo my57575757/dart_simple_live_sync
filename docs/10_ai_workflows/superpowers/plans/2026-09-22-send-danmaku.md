@@ -201,6 +201,8 @@ Expected: FAIL（`getCsrf` 方法不存在 / 编译错误）。
     return RegExp(r"bili_jct=([^;]+)").firstMatch(cookie)?.group(1) ?? "";
   }
 
+  DateTime _lastSendTime = DateTime.fromMillisecondsSinceEpoch(0);
+
   @override
   Future<DanmakuSendResult> sendMessage(String message) async {
     var cookie = danmakuArgs.cookie;
@@ -212,9 +214,17 @@ Expected: FAIL（`getCsrf` 方法不存在 / 编译错误）。
         errorMessage: "未登录哔哩哔哩",
       );
     }
+    if (DateTime.now().difference(_lastSendTime).inMilliseconds < 1000) {
+      return DanmakuSendResult(
+        success: false,
+        errorCode: "rate_limit",
+        errorMessage: "发言太快，请稍后再试",
+      );
+    }
 
     var roomId = danmakuArgs.roomId;
     try {
+      _lastSendTime = DateTime.now();
       var result = await HttpClient.instance.postJson(
         "https://api.live.bilibili.com/msg/send",
         data: {
@@ -1908,6 +1918,7 @@ class HuyaDanmakuArgs {
   int _requestId = 0;
   bool _verified = false;
   final Map<int, Completer<int>> _pendingWup = {};
+  DateTime _lastSendTime = DateTime.fromMillisecondsSinceEpoch(0);
 
   String get _uidStr {
     var m = RegExp(r"(?:yyuid|udb_uid)=([^;]+)").firstMatch(
@@ -1988,6 +1999,13 @@ class HuyaDanmakuArgs {
         errorMessage: "未登录虎牙",
       );
     }
+    if (DateTime.now().difference(_lastSendTime).inSeconds < 20) {
+      return DanmakuSendResult(
+        success: false,
+        errorCode: "rate_limit",
+        errorMessage: "发言太快，请稍后再试",
+      );
+    }
     if (!_verified) {
       var waited = 0;
       while (!_verified && waited < 50) {
@@ -2028,6 +2046,7 @@ class HuyaDanmakuArgs {
 
     var completer = Completer<int>();
     _pendingWup[id] = completer;
+    _lastSendTime = DateTime.now();
     webScoketUtils?.sendMessage(cmd.toUint8List());
 
     var timer = Timer(const Duration(seconds: 10), () {
