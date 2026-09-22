@@ -276,6 +276,15 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
           danmakuErrorText(site.id, result),
         );
       }
+    } catch (e) {
+      // core 侧异常（如对已关闭 sink.add 抛 StateError）兜底，避免无反馈
+      Log.logPrint("发送弹幕异常: $e");
+      SmartDialog.showToast(
+        danmakuErrorText(
+          site.id,
+          DanmakuSendResult(success: false, errorCode: "network_error"),
+        ),
+      );
     } finally {
       sendingDanmaku.value = false;
     }
