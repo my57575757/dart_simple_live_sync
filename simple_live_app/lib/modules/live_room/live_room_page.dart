@@ -1,5 +1,4 @@
 import 'dart:io';
-import 'dart:ui';
 
 import 'package:floating/floating.dart';
 import 'package:flutter/gestures.dart';
@@ -16,7 +15,13 @@ import 'package:simple_live_app/app/sites.dart';
 import 'package:simple_live_app/app/utils.dart';
 import 'package:simple_live_app/modules/live_room/live_room_controller.dart';
 import 'package:simple_live_app/modules/live_room/player/player_controls.dart';
+import 'package:simple_live_app/routes/route_path.dart';
+import 'package:simple_live_app/services/bilibili_account_service.dart';
+import 'package:simple_live_app/services/douyin_account_service.dart';
+import 'package:simple_live_app/services/douyu_account_service.dart';
 import 'package:simple_live_app/services/follow_service.dart';
+import 'package:simple_live_app/services/huya_account_service.dart';
+import 'package:simple_live_app/services/twitch_account_service.dart';
 import 'package:simple_live_app/widgets/desktop_refresh_button.dart';
 import 'package:simple_live_app/widgets/follow_user_item.dart';
 import 'package:simple_live_app/widgets/keep_alive_wrapper.dart';
@@ -141,6 +146,7 @@ class LiveRoomPage extends GetView<LiveRoomController> {
         ),
         buildUserProfile(context),
         buildMessageArea(),
+        buildSendDanmakuBar(context),
         buildBottomActions(context),
       ],
     );
@@ -179,60 +185,66 @@ class LiveRoomPage extends GetView<LiveRoomController> {
           padding: AppStyle.edgeInsetsV4.copyWith(
             bottom: AppStyle.bottomBarHeight + 4,
           ),
-          child: Row(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
             children: [
-              TextButton.icon(
-                style: TextButton.styleFrom(
-                  textStyle: const TextStyle(fontSize: 14),
-                ),
-                onPressed: controller.refreshRoom,
-                icon: const Icon(Remix.refresh_line),
-                label: const Text("刷新"),
-              ),
-              AppStyle.hGap4,
-              Obx(
-                () => controller.followed.value
-                    ? TextButton.icon(
-                        style: TextButton.styleFrom(
-                          textStyle: const TextStyle(fontSize: 14),
-                        ),
-                        onPressed: controller.removeFollowUser,
-                        icon: const Icon(Remix.heart_fill),
-                        label: const Text("取消关注"),
-                      )
-                    : TextButton.icon(
-                        style: TextButton.styleFrom(
-                          textStyle: const TextStyle(fontSize: 14),
-                        ),
-                        onPressed: controller.followUser,
-                        icon: const Icon(Remix.heart_line),
-                        label: const Text("关注"),
-                      ),
-              ),
-              const Expanded(child: Center()),
-              TextButton.icon(
-                style: TextButton.styleFrom(
-                  textStyle: const TextStyle(fontSize: 14),
-                ),
-                onPressed: controller.share,
-                icon: const Icon(Remix.share_line),
-                label: const Text("分享"),
-              ),
-              TextButton.icon(
-                style: TextButton.styleFrom(
-                  textStyle: const TextStyle(fontSize: 14),
-                ),
-                onPressed: controller.copyUrl,
-                icon: const Icon(Remix.file_copy_line),
-                label: const Text("复制链接"),
-              ),
-              TextButton.icon(
-                style: TextButton.styleFrom(
-                  textStyle: const TextStyle(fontSize: 14),
-                ),
-                onPressed: controller.copyPlayUrl,
-                icon: const Icon(Remix.file_copy_line),
-                label: const Text("复制播放直链"),
+              buildSendDanmakuBar(context),
+              Row(
+                children: [
+                  TextButton.icon(
+                    style: TextButton.styleFrom(
+                      textStyle: const TextStyle(fontSize: 14),
+                    ),
+                    onPressed: controller.refreshRoom,
+                    icon: const Icon(Remix.refresh_line),
+                    label: const Text("刷新"),
+                  ),
+                  AppStyle.hGap4,
+                  Obx(
+                    () => controller.followed.value
+                        ? TextButton.icon(
+                            style: TextButton.styleFrom(
+                              textStyle: const TextStyle(fontSize: 14),
+                            ),
+                            onPressed: controller.removeFollowUser,
+                            icon: const Icon(Remix.heart_fill),
+                            label: const Text("取消关注"),
+                          )
+                        : TextButton.icon(
+                            style: TextButton.styleFrom(
+                              textStyle: const TextStyle(fontSize: 14),
+                            ),
+                            onPressed: controller.followUser,
+                            icon: const Icon(Remix.heart_line),
+                            label: const Text("关注"),
+                          ),
+                  ),
+                  const Expanded(child: Center()),
+                  TextButton.icon(
+                    style: TextButton.styleFrom(
+                      textStyle: const TextStyle(fontSize: 14),
+                    ),
+                    onPressed: controller.share,
+                    icon: const Icon(Remix.share_line),
+                    label: const Text("分享"),
+                  ),
+                  TextButton.icon(
+                    style: TextButton.styleFrom(
+                      textStyle: const TextStyle(fontSize: 14),
+                    ),
+                    onPressed: controller.copyUrl,
+                    icon: const Icon(Remix.file_copy_line),
+                    label: const Text("复制链接"),
+                  ),
+                  TextButton.icon(
+                    style: TextButton.styleFrom(
+                      textStyle: const TextStyle(fontSize: 14),
+                    ),
+                    onPressed: controller.copyPlayUrl,
+                    icon: const Icon(Remix.file_copy_line),
+                    label: const Text("复制播放直链"),
+                  ),
+                ],
               ),
             ],
           ),
@@ -402,6 +414,91 @@ class LiveRoomPage extends GetView<LiveRoomController> {
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  bool get _isLogined {
+    switch (controller.site.id) {
+      case Constant.kBiliBili:
+        return BiliBiliAccountService.instance.logined.value;
+      case Constant.kDouyu:
+        return DouyuAccountService.instance.logined.value;
+      case Constant.kHuya:
+        return HuyaAccountService.instance.logined.value;
+      case Constant.kDouyin:
+        return DouyinAccountService.instance.logined.value;
+      case Constant.kTwitch:
+        return TwitchAccountService.instance.configured.value;
+      default:
+        return false;
+    }
+  }
+
+  Future<void> _showLoginDialog() async {
+    var result = await Utils.showAlertDialog(
+      "登录后才能发送弹幕，是否前往账号管理？",
+      title: "未登录",
+    );
+    if (result) {
+      Get.toNamed(RoutePath.kSettingsAccount);
+    }
+  }
+
+  Widget buildSendDanmakuBar(BuildContext context) {
+    var inputController = TextEditingController();
+    return Container(
+      padding: AppStyle.edgeInsetsH12.copyWith(top: 6, bottom: 6),
+      color: Theme.of(context).cardColor,
+      child: Row(
+        children: [
+          Expanded(
+            child: TextField(
+              controller: inputController,
+              maxLength: 200,
+              textInputAction: TextInputAction.send,
+              decoration: InputDecoration(
+                hintText: "说点什么…",
+                counterText: "",
+                isDense: true,
+                contentPadding: AppStyle.edgeInsetsA12,
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(20),
+                ),
+              ),
+              onSubmitted: (v) async {
+                if (!_isLogined) {
+                  _showLoginDialog();
+                  return;
+                }
+                await controller.sendDanmaku(v);
+                inputController.clear();
+              },
+            ),
+          ),
+          AppStyle.hGap8,
+          Obx(
+            () => IconButton(
+              onPressed: controller.sendingDanmaku.value
+                  ? null
+                  : () async {
+                      if (!_isLogined) {
+                        _showLoginDialog();
+                        return;
+                      }
+                      await controller.sendDanmaku(inputController.text);
+                      inputController.clear();
+                    },
+              icon: controller.sendingDanmaku.value
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.send),
+            ),
+          ),
+        ],
       ),
     );
   }
