@@ -55,6 +55,7 @@ class BiliBiliDanmaku extends LiveDanmaku {
 
   WebScoketUtils? webScoketUtils;
   late BiliBiliDanmakuArgs danmakuArgs;
+  DateTime _lastSendTime = DateTime.fromMillisecondsSinceEpoch(0);
   @override
   Future start(dynamic args) async {
     danmakuArgs = args as BiliBiliDanmakuArgs;
@@ -132,9 +133,17 @@ class BiliBiliDanmaku extends LiveDanmaku {
         errorMessage: "未登录哔哩哔哩",
       );
     }
+    if (DateTime.now().difference(_lastSendTime).inMilliseconds < 1000) {
+      return DanmakuSendResult(
+        success: false,
+        errorCode: "rate_limit",
+        errorMessage: "发言太快，请稍后再试",
+      );
+    }
 
     var roomId = danmakuArgs.roomId;
     try {
+      _lastSendTime = DateTime.now();
       var result = await HttpClient.instance.postJson(
         "https://api.live.bilibili.com/msg/send",
         data: {
