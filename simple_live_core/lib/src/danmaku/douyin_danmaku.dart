@@ -1,3 +1,4 @@
+// ignore_for_file: overridden_fields
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -29,7 +30,7 @@ class DouyinDanmakuArgs {
   }
 }
 
-class DouyinDanmaku implements LiveDanmaku {
+class DouyinDanmaku extends LiveDanmaku {
   @override
   int heartbeatTime = 10 * 1000;
 

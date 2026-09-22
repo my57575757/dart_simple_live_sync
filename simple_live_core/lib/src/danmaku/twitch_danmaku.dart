@@ -1,3 +1,4 @@
+// ignore_for_file: overridden_fields
 import 'dart:async';
 import 'dart:math';
 
@@ -13,7 +14,7 @@ class TwitchDanmakuArgs {
   TwitchDanmakuArgs({required this.channel});
 }
 
-class TwitchDanmaku implements LiveDanmaku {
+class TwitchDanmaku extends LiveDanmaku {
   @override
   int heartbeatTime = 0;
 

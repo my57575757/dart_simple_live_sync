@@ -1,11 +1,13 @@
+// ignore_for_file: overridden_fields
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
+import 'dart:io' show zlib;
 import 'dart:typed_data';
 
 import 'package:brotli/brotli.dart';
 import 'package:simple_live_core/simple_live_core.dart';
 import 'package:simple_live_core/src/common/convert_helper.dart';
+import 'package:simple_live_core/src/common/http_client.dart';
 import 'package:simple_live_core/src/common/web_socket_util.dart';
 
 import '../common/binary_writer.dart';
@@ -38,7 +40,7 @@ class BiliBiliDanmakuArgs {
   }
 }
 
-class BiliBiliDanmaku implements LiveDanmaku {
+class BiliBiliDanmaku extends LiveDanmaku {
   @override
   int heartbeatTime = 60 * 1000;
 
@@ -113,6 +115,62 @@ class BiliBiliDanmaku implements LiveDanmaku {
     onMessage = null;
     onClose = null;
     webScoketUtils?.close();
+  }
+
+  static String getCsrf(String cookie) {
+    return RegExp(r"bili_jct=([^;]+)").firstMatch(cookie)?.group(1) ?? "";
+  }
+
+  @override
+  Future<DanmakuSendResult> sendMessage(String message) async {
+    var cookie = danmakuArgs.cookie;
+    var csrf = getCsrf(cookie);
+    if (csrf.isEmpty || !cookie.contains("SESSDATA")) {
+      return DanmakuSendResult(
+        success: false,
+        errorCode: "not_login",
+        errorMessage: "未登录哔哩哔哩",
+      );
+    }
+
+    var roomId = danmakuArgs.roomId;
+    try {
+      var result = await HttpClient.instance.postJson(
+        "https://api.live.bilibili.com/msg/send",
+        data: {
+          "msg": message,
+          "roomid": roomId,
+          "rnd": DateTime.now().millisecondsSinceEpoch ~/ 1000,
+          "color": 16777215,
+          "fontsize": 25,
+          "mode": 1,
+          "bubble": 0,
+          "csrf": csrf,
+          "csrf_token": csrf,
+        },
+        formUrlEncoded: true,
+        header: {
+          "Cookie": cookie,
+          "Referer": "https://live.bilibili.com/$roomId",
+          "Origin": "https://live.bilibili.com",
+        },
+      );
+      var code = result["code"];
+      if (code == 0) {
+        return DanmakuSendResult(success: true);
+      }
+      return DanmakuSendResult(
+        success: false,
+        errorCode: code.toString(),
+        errorMessage: result["message"]?.toString() ?? "",
+      );
+    } catch (e) {
+      return DanmakuSendResult(
+        success: false,
+        errorCode: "network_error",
+        errorMessage: "网络请求失败",
+      );
+    }
   }
 
   List<int> encodeData(String msg, int action) {

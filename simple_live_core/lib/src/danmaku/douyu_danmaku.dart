@@ -1,3 +1,4 @@
+// ignore_for_file: overridden_fields
 import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
@@ -7,7 +8,7 @@ import 'package:simple_live_core/src/common/web_socket_util.dart';
 
 import '../common/binary_writer.dart';
 
-class DouyuDanmaku implements LiveDanmaku {
+class DouyuDanmaku extends LiveDanmaku {
   @override
   int heartbeatTime = 45 * 1000;
 
