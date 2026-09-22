@@ -11,7 +11,17 @@ class TwitchDanmakuArgs {
   /// 频道登录名（小写）
   final String channel;
 
-  TwitchDanmakuArgs({required this.channel});
+  /// OAuth token（为空时匿名连接，不能发送）
+  final String oauthToken;
+
+  /// 自身登录名（有 token 时必填，用于 NICK）
+  final String userLogin;
+
+  TwitchDanmakuArgs({
+    required this.channel,
+    this.oauthToken = "",
+    this.userLogin = "",
+  });
 }
 
 class TwitchDanmaku extends LiveDanmaku {
@@ -28,12 +38,14 @@ class TwitchDanmaku extends LiveDanmaku {
   WebSocketChannel? _channel;
   bool _closed = false;
 
+  late TwitchDanmakuArgs danmakuArgs;
+
   @override
   void heartbeat() {}
 
   @override
   Future start(dynamic args) async {
-    var danmakuArgs = args as TwitchDanmakuArgs;
+    danmakuArgs = args as TwitchDanmakuArgs;
     _closed = false;
     _channel = WebSocketChannel.connect(
       Uri.parse("wss://irc-ws.chat.twitch.tv:443"),
@@ -54,8 +66,14 @@ class TwitchDanmaku extends LiveDanmaku {
     );
 
     _send("CAP REQ :twitch.tv/tags twitch.tv/commands");
-    var nick = "justinfan${Random().nextInt(90000) + 10000}";
-    _send("NICK $nick");
+    if (danmakuArgs.oauthToken.isNotEmpty &&
+        danmakuArgs.userLogin.isNotEmpty) {
+      _send("PASS oauth:${danmakuArgs.oauthToken}");
+      _send("NICK ${danmakuArgs.userLogin}");
+    } else {
+      var nick = "justinfan${Random().nextInt(90000) + 10000}";
+      _send("NICK $nick");
+    }
     _send("JOIN #${danmakuArgs.channel}");
   }
 
@@ -184,6 +202,19 @@ class TwitchDanmaku extends LiveDanmaku {
       (value >> 8) & 0xFF,
       value & 0xFF,
     );
+  }
+
+  @override
+  Future<DanmakuSendResult> sendMessage(String message) async {
+    if (danmakuArgs.oauthToken.isEmpty || danmakuArgs.userLogin.isEmpty) {
+      return DanmakuSendResult(
+        success: false,
+        errorCode: "not_login",
+        errorMessage: "未配置 Twitch 账号",
+      );
+    }
+    _send("PRIVMSG #${danmakuArgs.channel} :$message");
+    return DanmakuSendResult(success: true, needLocalEcho: true);
   }
 
   @override

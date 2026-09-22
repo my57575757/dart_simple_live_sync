@@ -30,6 +30,9 @@ class TwitchSite implements LiveSite {
   /// 用户配置的 OAuth Token，非空时元数据走 Helix
   String oauthToken = "";
 
+  /// 自身登录名（oauthToken 存在时惰性获取）
+  String userLogin = "";
+
   bool get useHelix => oauthToken.isNotEmpty;
 
   @override
@@ -506,6 +509,7 @@ class TwitchSite implements LiveSite {
     }
     var stream = user["stream"];
     var live = stream != null;
+    await _ensureUserLogin();
     return LiveRoomDetail(
       roomId: user["login"].toString(),
       title: live ? stream["title"].toString() : user["displayName"].toString(),
@@ -521,8 +525,24 @@ class TwitchSite implements LiveSite {
       showTime: live ? _isoToEpoch(stream["createdAt"].toString()) : null,
       danmakuData: TwitchDanmakuArgs(
         channel: user["login"].toString(),
+        oauthToken: oauthToken,
+        userLogin: userLogin,
       ),
     );
+  }
+
+  Future<void> _ensureUserLogin() async {
+    if (oauthToken.isEmpty || userLogin.isNotEmpty) {
+      return;
+    }
+    var result = await HttpClient.instance.getJson(
+      "https://api.twitch.tv/helix/users",
+      header: _helixHeader,
+    );
+    var data = result["data"] as List;
+    if (data.isNotEmpty) {
+      userLogin = data[0]["login"].toString();
+    }
   }
 
   Future<LiveRoomDetail> _helixRoomDetail(String roomId) async {
@@ -546,6 +566,7 @@ class TwitchSite implements LiveSite {
     var streams = results[1]["data"] as List;
     var live = streams.isNotEmpty;
     var stream = live ? streams.first : null;
+    await _ensureUserLogin();
     return LiveRoomDetail(
       roomId: user["login"].toString(),
       title: live ? stream["title"].toString() : user["display_name"].toString(),
@@ -561,6 +582,8 @@ class TwitchSite implements LiveSite {
       showTime: live ? _isoToEpoch(stream["started_at"].toString()) : null,
       danmakuData: TwitchDanmakuArgs(
         channel: user["login"].toString(),
+        oauthToken: oauthToken,
+        userLogin: userLogin,
       ),
     );
   }
