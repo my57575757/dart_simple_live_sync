@@ -199,6 +199,40 @@ class DouyinDanmaku extends LiveDanmaku {
     webScoketUtils?.sendMessage(obj.writeToBuffer());
   }
 
+  String? _extractMsToken(String raw) {
+    final match =
+        RegExp(r'(?:^|;\s*)msToken=([^;]+)').firstMatch(raw);
+    if (match == null) {
+      return null;
+    }
+    final value = match.group(1)!.trim();
+    if (value.isEmpty) {
+      return null;
+    }
+    try {
+      return Uri.decodeComponent(value);
+    } catch (_) {
+      return value;
+    }
+  }
+
+  Future<String?> _fetchMsToken() async {
+    final response = await HttpClient.instance.getResponse(
+      "https://live.douyin.com/${danmakuArgs.webRid}",
+      header: {
+        "User-Agent": DouyinSite.kDefaultUserAgent,
+        "Cookie": danmakuArgs.cookie,
+      },
+    );
+    for (final cookie in response.headers['set-cookie'] ?? <String>[]) {
+      final token = _extractMsToken(cookie);
+      if (token != null) {
+        return token;
+      }
+    }
+    return null;
+  }
+
   static String buildChatUrl({
     required String roomId,
     required String content,
@@ -245,12 +279,25 @@ class DouyinDanmaku extends LiveDanmaku {
       );
     }
     try {
+      var msToken = _extractMsToken(danmakuArgs.cookie);
+      msToken ??= await _fetchMsToken();
+      if (msToken == null) {
+        return DanmakuSendResult(
+          success: false,
+          errorCode: "ms_token_failed",
+          errorMessage: "获取msToken失败",
+        );
+      }
       var url = buildChatUrl(
         roomId: danmakuArgs.roomId,
         content: message,
         webRid: danmakuArgs.webRid,
       );
-      url = DouyinSign.getAbogusUrl(url, DouyinSite.kDefaultUserAgent);
+      url = DouyinSign.getAbogusUrl(
+        url,
+        DouyinSite.kDefaultUserAgent,
+        msToken: msToken,
+      );
       var result = await HttpClient.instance.getJson(
         url,
         header: {
