@@ -25,6 +25,8 @@ import 'package:simple_live_app/modules/settings/danmu_settings_page.dart';
 import 'package:simple_live_app/routes/route_path.dart';
 import 'package:simple_live_app/services/db_service.dart';
 import 'package:simple_live_app/services/follow_service.dart';
+import 'package:simple_live_app/services/guard_server_service.dart';
+import 'package:simple_live_app/services/local_storage_service.dart';
 import 'package:simple_live_app/services/bilibili_account_service.dart';
 import 'package:simple_live_app/services/douyu_account_service.dart';
 import 'package:simple_live_app/services/huya_account_service.dart';
@@ -257,6 +259,29 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     liveDanmaku.onReady = onWSReady;
   }
 
+  /// 签名服务附加参数：虎牙需要 ayyuid/topSid/subSid
+  Map<String, dynamic> _guardExtraArgs() {
+    final data = detail.value?.danmakuData;
+    if (data is HuyaDanmakuArgs) {
+      return {"ayyuid": data.ayyuid, "topSid": data.topSid, "subSid": data.subSid};
+    }
+    return {};
+  }
+
+  /// 签名服务抖音 webRid（URL 短号）
+  String get _guardWebRid {
+    final data = detail.value?.danmakuData;
+    return data is DouyinDanmakuArgs ? data.webRid : "";
+  }
+
+  /// 签名服务房间号：B站 int 房间号、抖音 String 房间 id，其余兜底详情/控制器房间号
+  String get _guardRoomId {
+    final data = detail.value?.danmakuData;
+    if (data is BiliBiliDanmakuArgs) return data.roomId.toString();
+    if (data is DouyinDanmakuArgs) return data.roomId;
+    return detail.value?.roomId ?? roomId;
+  }
+
   Future<void> sendDanmaku(String text) async {
     var content = text.trim();
     if (content.isEmpty) {
@@ -268,7 +293,42 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     }
     sendingDanmaku.value = true;
     try {
-      var result = await liveDanmaku.sendMessage(content);
+      DanmakuSendResult result;
+      final guard = GuardServerService.instance;
+      final accountId = LocalStorageService.instance.getValue(
+        "${LocalStorageService.kGuardAccountIdPrefix}${site.id}",
+        "",
+      );
+      final useGuard = guard.configured &&
+          ["douyin", "bilibili", "huya"].contains(site.id) &&
+          accountId.isNotEmpty;
+      if (useGuard) {
+        try {
+          final data = await guard.sendDanmaku(
+            platform: site.id,
+            accountId: accountId,
+            roomId: _guardRoomId,
+            webRid: _guardWebRid,
+            content: content,
+            extra: _guardExtraArgs(),
+          );
+          result = DanmakuSendResult(
+            success: data["success"] == true,
+            errorCode: data["platformCode"] != null
+                ? data["platformCode"].toString()
+                : "guard",
+            errorMessage: data["message"]?.toString() ?? "",
+          );
+        } catch (e) {
+          result = DanmakuSendResult(
+            success: false,
+            errorCode: "network_error",
+            errorMessage: "",
+          );
+        }
+      } else {
+        result = await liveDanmaku.sendMessage(content);
+      }
       if (result.success) {
         // 统一本地回显：保证各平台自己的弹幕都能即时在聊天区可见
         selfEchoTracker.add(content);
@@ -317,17 +377,69 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   Future<void> showDanmakuInputDialog() async {
     if (!danmakuLogined) {
       await showDanmakuLoginDialog();
+      playerFocusNode.requestFocus();
       return;
     }
-    var text = await Utils.showEditTextDialog(
-      "",
-      title: "发送弹幕",
-      hintText: "说点什么…",
-    );
+    var text = await _showBottomDanmakuInput();
+    playerFocusNode.requestFocus();
     if (text == null || text.trim().isEmpty) {
       return;
     }
     await sendDanmaku(text);
+  }
+
+  /// 底部弹幕输入框：宽度略窄于画面，回车发送、Esc 取消
+  Future<String?> _showBottomDanmakuInput() {
+    final textController = TextEditingController();
+    final keyFocusNode = FocusNode();
+    return Get.dialog<String>(
+      barrierColor: Colors.black26,
+      KeyboardListener(
+        focusNode: keyFocusNode,
+        onKeyEvent: (event) {
+          if (event is KeyDownEvent &&
+              event.logicalKey == LogicalKeyboardKey.escape) {
+            Get.back();
+          }
+        },
+        child: Align(
+          alignment: Alignment.bottomCenter,
+          child: FractionallySizedBox(
+            widthFactor: 0.86,
+            child: Padding(
+              padding: const EdgeInsets.only(bottom: 36),
+              child: Material(
+                color: Colors.transparent,
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: const Color(0xCC000000),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.white24),
+                  ),
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: TextField(
+                    autofocus: true,
+                    controller: textController,
+                    maxLength: 200,
+                    style: const TextStyle(color: Colors.white),
+                    textInputAction: TextInputAction.send,
+                    onSubmitted: (v) => Get.back(result: v),
+                    decoration: const InputDecoration(
+                      isCollapsed: true,
+                      counterText: "",
+                      border: InputBorder.none,
+                      contentPadding: EdgeInsets.symmetric(vertical: 14),
+                      hintText: "发个弹幕呗…",
+                      hintStyle: TextStyle(color: Colors.white38),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   /// 当前平台账号是否已登录；竖屏底部栏与全屏弹框入口同源
