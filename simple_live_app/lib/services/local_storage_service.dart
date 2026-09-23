@@ -129,6 +129,15 @@ class LocalStorageService extends GetxService {
   /// 抖音账号登录完整cookie
   static const String kDouyinLoginCookie = "DouyinLoginCookie";
 
+  /// Guard服务地址
+  static const String kGuardServerUrl = "GuardServerUrl";
+
+  /// Guard服务Token
+  static const String kGuardServerToken = "GuardServerToken";
+
+  /// Guard账号ID存储前缀
+  static const String kGuardAccountIdPrefix = "GuardAccountId_";
+
   /// 斗鱼cookie
   static const String kDouyuCookie = "DouyuCookie";
 
