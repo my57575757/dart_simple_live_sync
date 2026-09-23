@@ -27,6 +27,9 @@ class RoutePath {
   /// 其他设置
   static const kSettingsOther = "/settings/other";
 
+  /// 弹幕签名服务设置
+  static const kSettingsGuardServer = "/settings/guard_server";
+
   /// 赞助
   static const kSponsor = "/sponsor";
 

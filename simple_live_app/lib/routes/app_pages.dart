@@ -35,6 +35,7 @@ import 'package:simple_live_app/modules/settings/auto_exit_settings_page.dart';
 import 'package:simple_live_app/modules/settings/danmu_settings_page.dart';
 import 'package:simple_live_app/modules/settings/danmu_shield/danmu_shield_controller.dart';
 import 'package:simple_live_app/modules/settings/danmu_shield/danmu_shield_page.dart';
+import 'package:simple_live_app/modules/settings/guard_server/guard_server_page.dart';
 import 'package:simple_live_app/modules/follow_user/follow_user_controller.dart';
 import 'package:simple_live_app/modules/follow_user/follow_user_page.dart';
 import 'package:simple_live_app/modules/mine/history/history_controller.dart';
@@ -250,6 +251,11 @@ class AppPages {
       bindings: [
         BindingsBuilder.put(() => OtherSettingsController()),
       ],
+    ),
+    //弹幕签名服务设置
+    GetPage(
+      name: RoutePath.kSettingsGuardServer,
+      page: () => const GuardServerSettingsPage(),
     ),
     //关注设置
     GetPage(

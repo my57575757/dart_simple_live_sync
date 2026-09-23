@@ -197,6 +197,17 @@ class MinePage extends StatelessWidget {
                   },
                 ),
                 ListTile(
+                  leading: const Icon(Icons.verified_user_outlined),
+                  title: const Text("弹幕签名服务"),
+                  trailing: const Icon(
+                    Icons.chevron_right,
+                    color: Colors.grey,
+                  ),
+                  onTap: () {
+                    Get.toNamed(RoutePath.kSettingsGuardServer);
+                  },
+                ),
+                ListTile(
                   leading: const Icon(Remix.apps_line),
                   title: const Text("其他设置"),
                   trailing: const Icon(
