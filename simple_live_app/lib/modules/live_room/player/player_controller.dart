@@ -292,6 +292,10 @@ mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
       windowManager.setTitleBarStyle(TitleBarStyle.hidden);
       windowManager.maximize();
     }
+    // 全屏按钮卸载时焦点会回退到 FocusScope，需在重建后再把焦点交给键盘监听节点
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      playerFocusNode.requestFocus();
+    });
   }
 
   /// 退出全屏
