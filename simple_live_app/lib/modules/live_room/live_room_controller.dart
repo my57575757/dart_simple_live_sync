@@ -264,7 +264,12 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   Map<String, dynamic> _guardExtraArgs() {
     final data = detail.value?.danmakuData;
     if (data is HuyaDanmakuArgs) {
-      return {"ayyuid": data.ayyuid, "topSid": data.topSid, "subSid": data.subSid};
+      return {
+        "ayyuid": data.ayyuid,
+        "topSid": data.topSid,
+        "subSid": data.subSid,
+        "roomShortId": roomId,
+      };
     }
     return {};
   }
@@ -295,52 +300,54 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     sendingDanmaku.value = true;
     try {
       DanmakuSendResult result;
+      const guardPlatforms = ["douyin", "bilibili", "huya"];
       final guard = GuardServerService.instance;
-      final accountId = LocalStorageService.instance.getValue(
-        "${LocalStorageService.kGuardAccountIdPrefix}${site.id}",
-        "",
-      );
-      final useGuard = guard.configured &&
-          ["douyin", "bilibili", "huya"].contains(site.id) &&
-          accountId.isNotEmpty;
-      if (useGuard) {
-        try {
-          final data = await guard.sendDanmaku(
-            platform: site.id,
-            accountId: accountId,
-            roomId: _guardRoomId,
-            webRid: _guardWebRid,
-            content: content,
-            extra: _guardExtraArgs(),
-          );
-          result = DanmakuSendResult(
-            success: data["success"] == true,
-            errorCode: data["platformCode"] != null
-                ? data["platformCode"].toString()
-                : "guard",
-            errorMessage: data["message"]?.toString() ?? "",
-          );
-        } catch (e) {
-          var errorCode = "network_error";
-          var errorMessage = "";
-          if (e is DioException) {
+
+      String? accountId;
+      if (guard.configured && guardPlatforms.contains(site.id)) {
+        // 发送时按需注册：未注册则用本地保存的登录 cookie 自动注册
+        accountId = await guard.ensureAccount(site.id);
+      }
+
+      if (accountId != null) {
+        Future<DanmakuSendResult> sendOnce(String id) async {
+          try {
+            final data = await guard.sendDanmaku(
+              platform: site.id,
+              accountId: id,
+              roomId: _guardRoomId,
+              webRid: _guardWebRid,
+              content: content,
+              extra: _guardExtraArgs(),
+            );
+            return DanmakuSendResult(
+              success: data["success"] == true,
+              errorCode: data["platformCode"] != null
+                  ? data["platformCode"].toString()
+                  : "guard",
+              errorMessage: data["message"]?.toString() ?? "",
+            );
+          } on DioException catch (e) {
+            if (e.response?.statusCode == 404) {
+              // 服务端会话丢失：用本地 cookie 重新注册并当场重试一次
+              final newId = await guard.reregister(site.id);
+              if (newId != null && newId != id) {
+                return sendOnce(newId);
+              }
+            }
             final data = e.response?.data;
             final msg = data is Map ? data["message"] : null;
-            if (msg is String && msg.isNotEmpty) {
-              errorCode = "guard";
-              errorMessage = msg;
-            }
-            if (e.response?.statusCode == 404) {
-              // 服务端会话丢失（容器重启/崩溃），用本地 cookie 自愈式重新注册
-              unawaited(guard.rehydrate());
-            }
+            return DanmakuSendResult(
+              success: false,
+              errorCode: "guard",
+              errorMessage: msg is String && msg.isNotEmpty
+                  ? msg
+                  : "网络请求失败",
+            );
           }
-          result = DanmakuSendResult(
-            success: false,
-            errorCode: errorCode,
-            errorMessage: errorMessage,
-          );
         }
+
+        result = await sendOnce(accountId);
       } else {
         result = await liveDanmaku.sendMessage(content);
       }

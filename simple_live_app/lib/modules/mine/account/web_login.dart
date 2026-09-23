@@ -6,6 +6,9 @@ import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:get/get.dart';
 
 class WebLoginArgs {
+  static const String desktopUserAgent =
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36";
+
   final String title;
   final String startUrl;
   final String cookieUrl;
@@ -17,14 +20,18 @@ class WebLoginArgs {
   final String? redirectMatch;
   final String? fragmentKey;
 
+  /// 非空时用该 UA 覆盖 WebView 默认 UA（如虎牙需强制桌面页登录）
+  final String? userAgent;
+
   WebLoginArgs({
     required this.title,
     required this.startUrl,
     required this.cookieUrl,
-    required this.requiredCookies,
     required this.onSuccess,
+    required this.requiredCookies,
     this.redirectMatch,
     this.fragmentKey,
+    this.userAgent,
   });
 }
 
@@ -148,6 +155,7 @@ class WebLoginPage extends GetView<WebLoginController> {
       initialUrlRequest: URLRequest(url: WebUri(args.startUrl)),
       initialSettings: InAppWebViewSettings(
         useShouldOverrideUrlLoading: !redirectMode,
+        userAgent: args.userAgent,
       ),
       onLoadStop: controller.onLoadStop,
       onLoadStart: controller.onLoadStart,

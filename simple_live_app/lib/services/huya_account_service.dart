@@ -59,6 +59,7 @@ class HuyaAccountService extends GetxService {
         title: "虎牙账号登录",
         startUrl: "https://www.huya.com",
         cookieUrl: "https://www.huya.com",
+        userAgent: WebLoginArgs.desktopUserAgent,
         requiredCookies: ["udb_biztoken"],
         onSuccess: (cookieStr) {
           cookie = cookieStr;

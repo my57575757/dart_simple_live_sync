@@ -122,6 +122,7 @@ class AccountController extends GetxController {
         title: "抖音账号登录",
         startUrl: "https://live.douyin.com",
         cookieUrl: "https://live.douyin.com",
+        userAgent: WebLoginArgs.desktopUserAgent,
         requiredCookies: ["sessionid"],
         onSuccess: (cookieStr) {
           DouyinAccountService.instance.setLoginCookie(cookieStr);

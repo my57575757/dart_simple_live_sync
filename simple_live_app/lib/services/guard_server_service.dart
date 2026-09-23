@@ -38,6 +38,35 @@ class GuardServerService extends GetxService {
     "huya": LocalStorageService.kHuyaCookie,
   };
 
+  String _accountIdKey(String platform) =>
+      "${LocalStorageService.kGuardAccountIdPrefix}$platform";
+
+  /// 发送前确保平台账号已在服务端注册。本地无 accountId 时用保存的
+  /// cookie 自动注册；返回 null 表示未配置/未登录，调用方走直连。
+  Future<String?> ensureAccount(String platform) async {
+    if (!configured) return null;
+    final saved = LocalStorageService.instance.getValue(
+      _accountIdKey(platform),
+      "",
+    );
+    if (saved.isNotEmpty) return saved;
+    return reregister(platform);
+  }
+
+  /// 用本地保存的 cookie 重新注册并落库新的 accountId
+  Future<String?> reregister(String platform) async {
+    final cookieKey = _platformCookieKeys[platform];
+    if (cookieKey == null) return null;
+    final cookie = LocalStorageService.instance.getValue(cookieKey, "");
+    if (cookie.trim().isEmpty) return null;
+    final accountId = await registerAccount(platform, cookie);
+    await LocalStorageService.instance.setValue(
+      _accountIdKey(platform),
+      accountId,
+    );
+    return accountId;
+  }
+
   /// 服务重启/首次配置后用本地 cookie 自愈式重新注册，恢复 accountId
   Future<void> rehydrate() async {
     if (!configured) return;
