@@ -89,6 +89,27 @@ class HttpClient {
     }
   }
 
+  /// Get请求，返回完整Response（用于读取响应头）
+  Future<Response> getResponse(
+    String url, {
+    Map<String, dynamic>? header,
+  }) async {
+    try {
+      var result = await dio.get(
+        url,
+        options: Options(
+          responseType: ResponseType.plain,
+          headers: header ?? {},
+          followRedirects: false,
+          validateStatus: (status) => (status ?? 0) < 400,
+        ),
+      );
+      return result;
+    } catch (e) {
+      throw CoreError("发送GET请求失败");
+    }
+  }
+
   /// Post请求，返回Map
   /// * [url] 请求链接
   /// * [queryParameters] 请求参数
