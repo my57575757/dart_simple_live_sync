@@ -9,7 +9,9 @@ import 'package:simple_live_app/models/sync_client_info_model.dart';
 import 'package:simple_live_app/requests/sync_client_request.dart';
 import 'package:simple_live_app/services/bilibili_account_service.dart';
 import 'package:simple_live_app/services/douyin_account_service.dart';
+import 'package:simple_live_app/services/douyu_account_service.dart';
 import 'package:simple_live_app/services/db_service.dart';
+import 'package:simple_live_app/services/huya_account_service.dart';
 import 'package:simple_live_app/services/sync_service.dart';
 import 'package:simple_live_app/services/twitch_account_service.dart';
 
@@ -148,6 +150,69 @@ class SyncDeviceControllerMy extends BaseController {
     }
   }
 
+  void syncDouyuAccount({
+    String dataStr = "",
+    bool isOverlay = true,
+  }) async {
+    try {
+      if(isOverlay) {
+        SmartDialog.showLoading(msg: "同步中...");
+      }
+      var douyu = ""==dataStr?DouyuAccountService.instance.cookie:dataStr;
+      await request.syncDouyuAccount(client, douyu);
+      if(isOverlay) {
+        SmartDialog.showToast("已同步斗鱼账号");
+      }
+    } catch (e) {
+      SmartDialog.showToast("同步失败:$e");
+      Log.logPrint(e);
+    } finally {
+      SmartDialog.dismiss();
+    }
+  }
+
+  void syncHuyaAccount({
+    String dataStr = "",
+    bool isOverlay = true,
+  }) async {
+    try {
+      if(isOverlay) {
+        SmartDialog.showLoading(msg: "同步中...");
+      }
+      var huya = ""==dataStr?HuyaAccountService.instance.cookie:dataStr;
+      await request.syncHuyaAccount(client, huya);
+      if(isOverlay) {
+        SmartDialog.showToast("已同步虎牙账号");
+      }
+    } catch (e) {
+      SmartDialog.showToast("同步失败:$e");
+      Log.logPrint(e);
+    } finally {
+      SmartDialog.dismiss();
+    }
+  }
+
+  void syncDouyinAccount({
+    String dataStr = "",
+    bool isOverlay = true,
+  }) async {
+    try {
+      if(isOverlay) {
+        SmartDialog.showLoading(msg: "同步中...");
+      }
+      var douyin = ""==dataStr?DouyinAccountService.instance.loginCookie:dataStr;
+      await request.syncDouyinAccount(client, douyin);
+      if(isOverlay) {
+        SmartDialog.showToast("已同步抖音账号");
+      }
+    } catch (e) {
+      SmartDialog.showToast("同步失败:$e");
+      Log.logPrint(e);
+    } finally {
+      SmartDialog.dismiss();
+    }
+  }
+
   void syncTwitchAccount({
     dynamic dataStr = "",
     bool isOverlay = true,
@@ -158,15 +223,18 @@ class SyncDeviceControllerMy extends BaseController {
       }
       String clientId;
       String token;
+      String login;
       if ("" != dataStr) {
         var data = dataStr is String ? json.decode(dataStr) : dataStr;
         clientId = (data['clientId'] ?? "").toString();
         token = (data['token'] ?? "").toString();
+        login = (data['login'] ?? "").toString();
       } else {
         clientId = TwitchAccountService.instance.clientId;
         token = TwitchAccountService.instance.oauthToken;
+        login = TwitchAccountService.instance.userLogin;
       }
-      await request.syncTwitchAccount(client, clientId, token);
+      await request.syncTwitchAccount(client, clientId, token, login);
       if(isOverlay) {
         SmartDialog.showToast("已同步 Twitch 账号");
       }

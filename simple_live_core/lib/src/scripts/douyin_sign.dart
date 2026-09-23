@@ -10692,7 +10692,7 @@ function getMSSDKSignature(msStub, userAgent) {
       "live_id": "1",
       "aid": "6383",
       "version_code": 180800,
-      "webcast_sdk_version": "1.3.0",
+      "webcast_sdk_version": "1.0.15",
       "room_id": roomId,
       "sub_room_id": "",
       "sub_channel_id": "",

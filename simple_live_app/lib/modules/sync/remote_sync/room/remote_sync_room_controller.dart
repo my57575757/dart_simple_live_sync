@@ -206,6 +206,7 @@ class RemoteSyncRoomController extends BaseController {
       TwitchAccountService.instance.setConfig(
         clientId: (jsonBody['clientId'] ?? "").toString(),
         oauthToken: (jsonBody['token'] ?? "").toString(),
+        userLogin: (jsonBody['login'] ?? "").toString(),
       );
       SmartDialog.showToast('已同步 Twitch 账号');
     } catch (e) {
@@ -366,6 +367,7 @@ class RemoteSyncRoomController extends BaseController {
         content: json.encode({
           "clientId": TwitchAccountService.instance.clientId,
           "token": TwitchAccountService.instance.oauthToken,
+          "login": TwitchAccountService.instance.userLogin,
         }),
       );
       if (resp.isSuccess) {

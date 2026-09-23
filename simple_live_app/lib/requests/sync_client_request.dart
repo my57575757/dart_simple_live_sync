@@ -126,10 +126,59 @@ class SyncClientRequest {
     }
   }
 
+  Future<bool> syncDouyuAccount(SyncClinet client, String cookie) async {
+    var url = "http://${client.address}:${client.port}/sync/account/douyu";
+    var data = await HttpClient.instance.postJson(
+      url,
+      data: {
+        "cookie": cookie,
+      },
+    );
+
+    if (data["status"]) {
+      return true;
+    } else {
+      throw data["message"];
+    }
+  }
+
+  Future<bool> syncHuyaAccount(SyncClinet client, String cookie) async {
+    var url = "http://${client.address}:${client.port}/sync/account/huya";
+    var data = await HttpClient.instance.postJson(
+      url,
+      data: {
+        "cookie": cookie,
+      },
+    );
+
+    if (data["status"]) {
+      return true;
+    } else {
+      throw data["message"];
+    }
+  }
+
+  Future<bool> syncDouyinAccount(SyncClinet client, String cookie) async {
+    var url = "http://${client.address}:${client.port}/sync/account/douyin";
+    var data = await HttpClient.instance.postJson(
+      url,
+      data: {
+        "cookie": cookie,
+      },
+    );
+
+    if (data["status"]) {
+      return true;
+    } else {
+      throw data["message"];
+    }
+  }
+
   Future<bool> syncTwitchAccount(
     SyncClinet client,
     String clientId,
     String token,
+    String login,
   ) async {
     var url = "http://${client.address}:${client.port}/sync/account/twitch";
     var data = await HttpClient.instance.postJson(
@@ -137,6 +186,7 @@ class SyncClientRequest {
       data: {
         "clientId": clientId,
         "token": token,
+        "login": login,
       },
     );
 
@@ -177,7 +227,7 @@ class SyncClientRequest {
 
   Future<void> addUserData(String parmsStr, String syncUrl) async{
     var url = syncUrl+"/simpleLive/addUserData";
-    var data = await HttpClient.instance.postJson(
+    await HttpClient.instance.postJson(
       url,
       data: parmsStr,
     );
@@ -185,7 +235,7 @@ class SyncClientRequest {
 
   Future<void> delUserData(String parmsStr, String syncUrl) async{
     var url = syncUrl+"/simpleLive/delUserData";
-    var data = await HttpClient.instance.postJson(
+    await HttpClient.instance.postJson(
       url,
       data: parmsStr,
     );

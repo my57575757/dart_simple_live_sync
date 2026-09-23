@@ -15,7 +15,9 @@ import 'package:simple_live_app/models/db/follow_user_tag.dart';
 import 'package:simple_live_app/models/db/history.dart';
 import 'package:simple_live_app/services/bilibili_account_service.dart';
 import 'package:simple_live_app/services/douyin_account_service.dart';
+import 'package:simple_live_app/services/douyu_account_service.dart';
 import 'package:simple_live_app/services/db_service.dart';
+import 'package:simple_live_app/services/huya_account_service.dart';
 import 'package:simple_live_app/services/twitch_account_service.dart';
 import 'package:udp/udp.dart';
 import 'package:shelf/shelf.dart' as shelf;
@@ -200,6 +202,9 @@ class SyncService extends GetxService {
       serverRouter.post('/sync/blocked_word', _syncBlockedWordReuqest);
       serverRouter.post('/sync/account/bilibili', _syncBiliAccountReuqest);
       serverRouter.post('/sync/account/ttwid', _syncTtwidRequest);
+      serverRouter.post('/sync/account/douyu', _syncDouyuAccountRequest);
+      serverRouter.post('/sync/account/huya', _syncHuyaAccountRequest);
+      serverRouter.post('/sync/account/douyin', _syncDouyinAccountRequest);
       serverRouter.post('/sync/account/twitch', _syncTwitchAccountRequest);
 
       var server = await shelf_io.serve(
@@ -415,6 +420,66 @@ class SyncService extends GetxService {
     }
   }
 
+  Future<shelf.Response> _syncDouyuAccountRequest(shelf.Request request) async {
+    try {
+      var body = await request.readAsString();
+      Log.d('_syncDouyuAccountRequest: $body');
+      var jsonBody = json.decode(body);
+      var cookie = jsonBody['cookie'];
+      DouyuAccountService.instance.setSyncedCookie(cookie);
+      SmartDialog.showToast('已同步斗鱼账号');
+      return toJsonResponse({
+        'status': true,
+        'message': 'success',
+      });
+    } catch (e) {
+      return toJsonResponse({
+        'status': false,
+        'message': e.toString(),
+      });
+    }
+  }
+
+  Future<shelf.Response> _syncHuyaAccountRequest(shelf.Request request) async {
+    try {
+      var body = await request.readAsString();
+      Log.d('_syncHuyaAccountRequest: $body');
+      var jsonBody = json.decode(body);
+      var cookie = jsonBody['cookie'];
+      HuyaAccountService.instance.setSyncedCookie(cookie);
+      SmartDialog.showToast('已同步虎牙账号');
+      return toJsonResponse({
+        'status': true,
+        'message': 'success',
+      });
+    } catch (e) {
+      return toJsonResponse({
+        'status': false,
+        'message': e.toString(),
+      });
+    }
+  }
+
+  Future<shelf.Response> _syncDouyinAccountRequest(shelf.Request request) async {
+    try {
+      var body = await request.readAsString();
+      Log.d('_syncDouyinAccountRequest: $body');
+      var jsonBody = json.decode(body);
+      var cookie = jsonBody['cookie'];
+      DouyinAccountService.instance.setLoginCookie(cookie);
+      SmartDialog.showToast('已同步抖音账号');
+      return toJsonResponse({
+        'status': true,
+        'message': 'success',
+      });
+    } catch (e) {
+      return toJsonResponse({
+        'status': false,
+        'message': e.toString(),
+      });
+    }
+  }
+
   Future<shelf.Response> _syncTwitchAccountRequest(shelf.Request request) async {
     try {
       var body = await request.readAsString();
@@ -423,6 +488,7 @@ class SyncService extends GetxService {
       TwitchAccountService.instance.setConfig(
         clientId: (jsonBody['clientId'] ?? "").toString(),
         oauthToken: (jsonBody['token'] ?? "").toString(),
+        userLogin: (jsonBody['login'] ?? "").toString(),
       );
       SmartDialog.showToast('已同步 Twitch 账号');
       return toJsonResponse({

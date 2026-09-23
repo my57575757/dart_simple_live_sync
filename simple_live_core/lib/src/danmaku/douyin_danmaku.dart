@@ -49,31 +49,23 @@ class DouyinDanmaku extends LiveDanmaku {
   Future start(dynamic args) async {
     danmakuArgs = args as DouyinDanmakuArgs;
     var ts = DateTime.now().millisecondsSinceEpoch;
+    var uuid = danmakuArgs.userId;
+    var internalExt =
+        "internal_src:dim|wss_push_room_id:${danmakuArgs.roomId}"
+        "|wss_push_did:$uuid|first_req_ms:${ts - 1}|fetch_time:$ts"
+        "|seq:1|wss_info:0-$ts-0-0";
     var uri = Uri.parse(serverUrl).replace(
       scheme: "wss",
       queryParameters: {
         "app_name": "douyin_web",
         "version_code": "180800",
-        "webcast_sdk_version": "1.3.0",
-        "update_version_code": "1.3.0",
+        "webcast_sdk_version": "1.0.15",
+        "update_version_code": "1.0.15",
         "compress": "gzip",
-        // "internal_ext":
-        //     "internal_src:dim|wss_push_room_id:${danmakuArgs.roomId}|wss_push_did:${danmakuArgs.userId}|dim_log_id:20230626152702E8F63662383A350588E1|fetch_time:1687764422114|seq:1|wss_info:0-1687764422114-0-0|wrds_kvs:WebcastRoomRankMessage-1687764036509597990_InputPanelComponentSyncData-1687736682345173033_WebcastRoomStatsMessage-1687764414427812578",
-        "cursor": "h-1_t-${ts}_r-1_d-1_u-1",
-        "host": "https://live.douyin.com",
-        "aid": "6383",
-        "live_id": "1",
-        "did_rule": "3",
-        "debug": "false",
-        "maxCacheMessageNumber": "20",
-        "endpoint": "live_pc",
-        "support_wrds": "1",
-        "im_path": "/webcast/im/fetch/",
-        "user_unique_id": danmakuArgs.userId,
         "device_platform": "web",
         "cookie_enabled": "true",
-        "screen_width": "1920",
-        "screen_height": "1080",
+        "screen_width": "2560",
+        "screen_height": "1440",
         "browser_language": "zh-CN",
         "browser_platform": "Win32",
         "browser_name": "Mozilla",
@@ -83,10 +75,22 @@ class DouyinDanmaku extends LiveDanmaku {
         ),
         "browser_online": "true",
         "tz_name": "Asia/Shanghai",
+        "cursor": "u-1_h-1_t-${ts}_r-1_d-1",
+        "internal_ext": internalExt,
+        "host": "https://live.douyin.com",
+        "aid": "6383",
+        "live_id": "1",
+        "did_rule": "3",
+        "endpoint": "live_pc",
+        "support_wrds": "1",
+        "im_path": "/webcast/im/fetch/",
+        "user_unique_id": uuid,
         "identity": "audience",
+        "need_persist_msg_count": "15",
+        "insert_task_id": "",
+        "live_reason": "",
         "room_id": danmakuArgs.roomId,
         "heartbeatDuration": "0",
-        //"signature": "00000000"
       },
     );
 
@@ -94,12 +98,11 @@ class DouyinDanmaku extends LiveDanmaku {
 
     var url = "$uri&signature=$sign";
     var backupUrl = url.replaceAll("webcast3-ws-web-lq", "webcast5-ws-web-lf");
-    print(url);
     webScoketUtils = WebScoketUtils(
       url: url,
       backupUrl: backupUrl,
       headers: {
-        "User-Agnet": DouyinSite.kDefaultUserAgent,
+        "User-Agent": DouyinSite.kDefaultUserAgent,
         "Cookie": danmakuArgs.cookie,
         "Origin": "https://live.douyin.com",
       },
@@ -186,7 +189,7 @@ class DouyinDanmaku extends LiveDanmaku {
     var obj = PushFrame();
     obj.payloadType = 'ack';
     obj.logId = logId;
-    obj.payloadType = internalExt;
+    obj.payload = utf8.encode(internalExt);
     webScoketUtils?.sendMessage(obj.writeToBuffer());
   }
 

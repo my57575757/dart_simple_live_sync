@@ -66,6 +66,33 @@ class SyncDevicePage extends GetView<SyncDeviceController> {
                 ),
                 AppStyle.divider,
                 ListTile(
+                  leading: const Icon(Icons.live_tv),
+                  title: const Text("同步斗鱼账号"),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () {
+                    controller.syncDouyuAccount();
+                  },
+                ),
+                AppStyle.divider,
+                ListTile(
+                  leading: const Icon(Icons.sports_esports),
+                  title: const Text("同步虎牙账号"),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () {
+                    controller.syncHuyaAccount();
+                  },
+                ),
+                AppStyle.divider,
+                ListTile(
+                  leading: const Icon(Icons.music_note),
+                  title: const Text("同步抖音账号"),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () {
+                    controller.syncDouyinAccount();
+                  },
+                ),
+                AppStyle.divider,
+                ListTile(
                   leading: const Icon(Remix.twitch_line),
                   title: const Text("同步 Twitch 账号"),
                   trailing: const Icon(Icons.chevron_right),

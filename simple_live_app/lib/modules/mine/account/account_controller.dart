@@ -12,6 +12,7 @@ import 'package:simple_live_app/services/douyu_account_service.dart';
 import 'package:simple_live_app/services/huya_account_service.dart';
 import 'package:simple_live_app/services/twitch_account_service.dart';
 import 'package:simple_live_core/simple_live_core.dart';
+import 'package:simple_live_core/src/common/core_error.dart';
 
 class AccountController extends GetxController {
   void bilibiliTap() async {
@@ -184,6 +185,9 @@ class AccountController extends GetxController {
     var tokenController = TextEditingController(
       text: TwitchAccountService.instance.oauthToken,
     );
+    var loginController = TextEditingController(
+      text: TwitchAccountService.instance.userLogin,
+    );
     Get.dialog(
       AlertDialog(
         title: const Text("Twitch 接口配置（可选）"),
@@ -193,14 +197,18 @@ class AccountController extends GetxController {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               const Text(
-                "默认匿名模式可直接使用。若匿名接口受限，可在 dev.twitch.tv/console 注册应用，填写 Client ID 与 App Access Token 后切换到官方 Helix 接口。留空保存即恢复匿名模式。",
+                "默认匿名模式可直接观看。发弹幕需要「用户令牌」：\n"
+                "1. 推荐点下方「授权登录」：先在 dev.twitch.tv/console 注册应用，"
+                "把 OAuth Redirect URLs 填为 http://localhost，再把 Client ID 填到下面；\n"
+                "2. 也可手工粘贴用户令牌与登录名（如 twitchtokengenerator.com 生成）。\n"
+                "注意：应用令牌（App Access Token）不能发弹幕。",
                 style: TextStyle(fontSize: 12, color: Colors.grey),
               ),
               const SizedBox(height: 12),
               TextField(
                 controller: clientIdController,
                 decoration: const InputDecoration(
-                  hintText: "Client ID（留空使用内置值）",
+                  hintText: "Client ID（授权登录必填）",
                   border: OutlineInputBorder(),
                 ),
               ),
@@ -209,7 +217,15 @@ class AccountController extends GetxController {
                 controller: tokenController,
                 maxLines: 2,
                 decoration: const InputDecoration(
-                  hintText: "OAuth App Access Token",
+                  hintText: "OAuth User Access Token",
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: loginController,
+                decoration: const InputDecoration(
+                  hintText: "Twitch 登录名（小写，发弹幕必填）",
                   border: OutlineInputBorder(),
                 ),
               ),
@@ -217,6 +233,18 @@ class AccountController extends GetxController {
           ),
         ),
         actions: [
+          TextButton(
+            onPressed: () {
+              var cid = clientIdController.text.trim();
+              if (cid.isEmpty) {
+                SmartDialog.showToast("请先填写 Client ID");
+                return;
+              }
+              Get.back();
+              TwitchAccountService.instance.startOAuth(clientId: cid);
+            },
+            child: const Text("授权登录"),
+          ),
           TextButton(
             onPressed: () => Get.back(),
             child: const Text("取消"),
@@ -227,18 +255,33 @@ class AccountController extends GetxController {
               TwitchAccountService.instance.setConfig(
                 clientId: clientIdController.text.trim(),
                 oauthToken: tokenController.text.trim(),
+                userLogin: loginController.text.trim().toLowerCase(),
               );
-              SmartDialog.showToast(
-                TwitchAccountService.instance.configured.value
-                    ? "已切换到 Helix 接口"
-                    : "已保存，使用匿名模式",
-              );
+              if (TwitchAccountService.instance.configured.value) {
+                _validateTwitchConfig();
+              } else {
+                SmartDialog.showToast("已保存，使用匿名模式");
+              }
             },
             child: const Text("确定"),
           ),
         ],
       ),
     );
+  }
+
+  void _validateTwitchConfig() async {
+    try {
+      var login = await TwitchAccountService.instance.validateCurrentConfig();
+      SmartDialog.showToast("Twitch 配置有效，登录名：$login");
+    } on CoreError catch (e) {
+      var msg = e.statusCode == 400
+          ? "该 Token 是应用令牌（App Access Token），无法发弹幕，请点「授权登录」获取用户令牌"
+          : e.statusCode == 401
+              ? "Client ID 与 Token 不匹配：请填写 Token 所属应用的 Client ID"
+              : "Twitch Token 校验失败";
+      Utils.showAlertDialog(msg, title: "Twitch 配置提示");
+    } catch (_) {}
   }
 
   void doDouyinCookieConfig() {

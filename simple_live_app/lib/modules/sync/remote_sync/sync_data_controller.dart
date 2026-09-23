@@ -9,6 +9,8 @@ import 'package:simple_live_app/requests/sync_client_request.dart';
 import 'package:simple_live_app/services/bilibili_account_service.dart';
 import 'package:simple_live_app/services/db_service.dart';
 import 'package:simple_live_app/services/douyin_account_service.dart';
+import 'package:simple_live_app/services/douyu_account_service.dart';
+import 'package:simple_live_app/services/huya_account_service.dart';
 import 'package:simple_live_app/services/twitch_account_service.dart';
 
 class SyncDataController extends BaseController {
@@ -24,9 +26,13 @@ class SyncDataController extends BaseController {
       var shieldList = AppSettingsController.instance.shieldList.toList();
       var bilibili = BiliBiliAccountService.instance.cookie;
       var ttwid = DouyinAccountService.instance.cookie;
+      var douyu = DouyuAccountService.instance.cookie;
+      var huya = HuyaAccountService.instance.cookie;
+      var douyin = DouyinAccountService.instance.loginCookie;
       var twitch = {
         'clientId': TwitchAccountService.instance.clientId,
         'token': TwitchAccountService.instance.oauthToken,
+        'login': TwitchAccountService.instance.userLogin,
       };
       var jsonData = {
         'userData': users,
@@ -34,6 +40,9 @@ class SyncDataController extends BaseController {
         'historesData': histores,
         'bilibiliData': bilibili,
         'ttwid': ttwid,
+        'douyuData': douyu,
+        'huyaData': huya,
+        'douyinData': douyin,
         'twitchData': twitch,
       };
       var params = {

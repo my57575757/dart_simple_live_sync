@@ -79,6 +79,9 @@ class LocalSyncController extends BaseController {
     var historesData = jsonMap['historesData'] ?? "";
     var bilibiliData = jsonMap['bilibiliData'] ?? "";
     var ttwid = jsonMap['ttwid'] ?? "";
+    var douyuData = jsonMap['douyuData'] ?? "";
+    var huyaData = jsonMap['huyaData'] ?? "";
+    var douyinData = jsonMap['douyinData'] ?? "";
     var twitchData = jsonMap['twitchData'] ?? "";
     if(""!=userData){
       controller.syncFollow(dataStr: userData,isOverlay: false);
@@ -94,6 +97,15 @@ class LocalSyncController extends BaseController {
     }
     if(""!=ttwid){
       controller.syncTtwid(dataStr: ttwid,isOverlay: false);
+    }
+    if(""!=douyuData){
+      controller.syncDouyuAccount(dataStr: douyuData,isOverlay: false);
+    }
+    if(""!=huyaData){
+      controller.syncHuyaAccount(dataStr: huyaData,isOverlay: false);
+    }
+    if(""!=douyinData){
+      controller.syncDouyinAccount(dataStr: douyinData,isOverlay: false);
     }
     if(""!=twitchData){
       controller.syncTwitchAccount(dataStr: twitchData,isOverlay: false);

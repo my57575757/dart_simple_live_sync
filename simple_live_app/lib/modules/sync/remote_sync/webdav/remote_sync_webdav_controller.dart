@@ -215,6 +215,7 @@ class RemoteSyncWebDAVController extends BaseController {
         'data': {
           'clientId': TwitchAccountService.instance.clientId,
           'token': TwitchAccountService.instance.oauthToken,
+          'login': TwitchAccountService.instance.userLogin,
         }
       };
       final twitchAccountJsonFile =
@@ -320,6 +321,7 @@ class RemoteSyncWebDAVController extends BaseController {
           TwitchAccountService.instance.setConfig(
             clientId: (jsonData['clientId'] ?? "").toString(),
             oauthToken: (jsonData['token'] ?? "").toString(),
+            userLogin: (jsonData['login'] ?? "").toString(),
           );
           Log.i('已同步 Twitch 账号');
         } catch (e) {

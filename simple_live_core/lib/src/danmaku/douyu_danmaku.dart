@@ -106,7 +106,7 @@ class DouyuDanmaku extends LiveDanmaku {
     if (did.isEmpty) {
       did = _randomDid();
     }
-    var uid = cookieValue(cookie, "acf_uid");
+    var username = cookieValue(cookie, "acf_username");
 
     String url;
     try {
@@ -118,6 +118,10 @@ class DouyuDanmaku extends LiveDanmaku {
           "Referer": "https://www.douyu.com/${danmakuArgs.roomId}",
         },
       );
+      // 该接口响应头为 text/html，Dio 不会自动解析 JSON
+      if (resp is String) {
+        resp = json.decode(resp);
+      }
       var info = resp["data"] ?? resp;
       var wssList = info["wss"] as List;
       var pick = wssList[Random().nextInt(wssList.length)];
@@ -151,8 +155,8 @@ class DouyuDanmaku extends LiveDanmaku {
     var stt = buildStt({
       "type": "loginreq",
       "roomid": danmakuArgs.roomId.toString(),
-      "dfl": "sn@=105/ss@=1",
-      "username": uid,
+      "dfl": "sn@A=105/ss@A=1",
+      "username": username,
       "password": "",
       "ltkid": cookieValue(cookie, "acf_ltkid"),
       "biz": "1",
@@ -165,10 +169,11 @@ class DouyuDanmaku extends LiveDanmaku {
       "apd": "",
       "rt": now.toString(),
       "vk": generateVk(now, did),
+      "jwt": cookieValue(cookie, "acf_dmjwt_token"),
       "ver": "20220825",
       "aver": "218101901",
       "dmbt": "chrome",
-      "dmbv": "123",
+      "dmbv": "153",
     });
     _sendChannel!.sink.add(frameStt(stt));
   }
@@ -428,6 +433,14 @@ class DouyuDanmaku extends LiveDanmaku {
 
       var type = jsonData["type"]?.toString();
       if (type == "chatmsg") {
+        // 自己发出的弹幕由收听端广播回环；发送连接本身不回推 chatmsg
+        if (_pendingAck != null &&
+            !_pendingAck!.isCompleted &&
+            jsonData["uid"]?.toString() ==
+                cookieValue(danmakuArgs.cookie, "acf_uid") &&
+            jsonData["txt"]?.toString() == _pendingContent) {
+          _pendingAck!.complete();
+        }
         if (jsonData["dms"] == null) {
           return;
         }

@@ -141,6 +141,9 @@ class LocalStorageService extends GetxService {
   /// Twitch OAuth Token
   static const String kTwitchToken = "TwitchToken";
 
+  /// Twitch 自身登录名
+  static const String kTwitchUserLogin = "TwitchUserLogin";
+
   ///主题色
   static const String kStyleColor = "kStyleColor";
 

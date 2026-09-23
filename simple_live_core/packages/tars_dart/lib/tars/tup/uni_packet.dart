@@ -47,6 +47,7 @@ class UniPacket extends UniAttribute {
   }
 
   UniPacket() {
+    version = Const.PACKET_TYPE_TUP3;
     package.iVersion = Const.PACKET_TYPE_TUP3;
   }
 

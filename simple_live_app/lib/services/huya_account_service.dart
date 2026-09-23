@@ -64,4 +64,14 @@ class HuyaAccountService extends GetxService {
     name.value = "未登录";
     setSite();
   }
+
+  /// 同步自其他设备/云端的 cookie
+  void setSyncedCookie(String cookieStr) {
+    cookie = cookieStr;
+    LocalStorageService.instance
+        .setValue(LocalStorageService.kHuyaCookie, cookieStr);
+    logined.value = cookieStr.contains("udb_biztoken");
+    name.value = logined.value ? _uid : "未登录";
+    setSite();
+  }
 }

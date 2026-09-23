@@ -38,6 +38,7 @@ class TwitchDanmaku extends LiveDanmaku {
 
   WebSocketChannel? _channel;
   bool _closed = false;
+  bool _loginFailed = false;
 
   late TwitchDanmakuArgs danmakuArgs;
 
@@ -48,6 +49,7 @@ class TwitchDanmaku extends LiveDanmaku {
   Future start(dynamic args) async {
     danmakuArgs = args as TwitchDanmakuArgs;
     _closed = false;
+    _loginFailed = false;
     _channel = WebSocketChannel.connect(
       Uri.parse("wss://irc-ws.chat.twitch.tv:443"),
     );
@@ -124,6 +126,11 @@ class TwitchDanmaku extends LiveDanmaku {
       var command = tokens[1];
       if (command == "PRIVMSG") {
         _parsePrivmsg(tagsRaw, tokens[0], trailing);
+      } else if (command == "NOTICE" &&
+          (tokens.length < 3 || tokens[2] == "*") &&
+          trailing.contains("Login authentication failed")) {
+        _loginFailed = true;
+        onClose?.call("Twitch 登录失败：Token 无效或不是用户令牌");
       } else if (command == "366") {
         onReady?.call();
       }
@@ -243,6 +250,13 @@ class TwitchDanmaku extends LiveDanmaku {
         success: false,
         errorCode: "not_login",
         errorMessage: "未配置 Twitch 账号",
+      );
+    }
+    if (_loginFailed) {
+      return DanmakuSendResult(
+        success: false,
+        errorCode: "login_failed",
+        errorMessage: "Twitch 登录失败，请检查 Token 是否为用户令牌",
       );
     }
     var safeMessage = truncateIrcMessage(sanitizeIrcMessage(message));

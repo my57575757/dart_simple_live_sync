@@ -531,18 +531,45 @@ class TwitchSite implements LiveSite {
     );
   }
 
+  /// 无参 /users 自查登录名的结果状态码；null 表示未尝试或成功
+  int? loginResolveStatus;
+
   Future<void> _ensureUserLogin() async {
     if (oauthToken.isEmpty || userLogin.isNotEmpty) {
       return;
     }
+    loginResolveStatus = null;
+    try {
+      var result = await HttpClient.instance.getJson(
+        "https://api.twitch.tv/helix/users",
+        header: _helixHeader,
+      );
+      var data = result["data"] as List;
+      if (data.isNotEmpty) {
+        userLogin = data[0]["login"].toString();
+      }
+    } on CoreError catch (e) {
+      // 400: app access token（无关联用户）；401: client-id 与 token 不匹配
+      loginResolveStatus = e.statusCode;
+    } catch (_) {
+      // 网络异常等不阻断进房
+    }
+  }
+
+  /// 配置保存后体检：用 token 反查所属用户登录名
+  /// 成功时写回 userLogin 并返回；token 无用户身份（400）或
+  /// Client-ID 不匹配（401）时抛 CoreError
+  Future<String> validateAndResolveLogin() async {
     var result = await HttpClient.instance.getJson(
       "https://api.twitch.tv/helix/users",
       header: _helixHeader,
     );
     var data = result["data"] as List;
-    if (data.isNotEmpty) {
-      userLogin = data[0]["login"].toString();
+    if (data.isEmpty) {
+      throw CoreError("Token 无效");
     }
+    userLogin = data[0]["login"].toString();
+    return userLogin;
   }
 
   Future<LiveRoomDetail> _helixRoomDetail(String roomId) async {

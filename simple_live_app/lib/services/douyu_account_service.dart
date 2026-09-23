@@ -64,4 +64,14 @@ class DouyuAccountService extends GetxService {
     name.value = "未登录";
     setSite();
   }
+
+  /// 同步自其他设备/云端的 cookie
+  void setSyncedCookie(String cookieStr) {
+    cookie = cookieStr;
+    LocalStorageService.instance
+        .setValue(LocalStorageService.kDouyuCookie, cookieStr);
+    logined.value = cookieStr.contains("acf_stk") && cookieStr.contains("acf_uid");
+    name.value = logined.value ? _uid : "未登录";
+    setSite();
+  }
 }

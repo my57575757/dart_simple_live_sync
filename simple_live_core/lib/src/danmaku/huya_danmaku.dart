@@ -67,6 +67,11 @@ class HuyaDanmaku extends LiveDanmaku {
     return m?.group(1) ?? "";
   }
 
+  String get _guidStr {
+    var m = RegExp(r"guid=([^;]+)").firstMatch(danmakuArgs.cookie);
+    return m?.group(1) ?? "";
+  }
+
   @override
   Future start(dynamic args) async {
     danmakuArgs = args as HuyaDanmakuArgs;
@@ -178,11 +183,10 @@ class HuyaDanmaku extends LiveDanmaku {
     var req = HuyaSendMessageReq();
     req.tUserId = HuyaUserId()
       ..lUid = int.tryParse(_uidStr) ?? 0
+      ..sGuid = _guidStr
       ..sHuYaUA = kHuyaUA
       ..sCookie = danmakuArgs.cookie
-      ..sDeviceInfo = "Chrome";
-    req.lTid = danmakuArgs.ayyuid;
-    req.lSid = danmakuArgs.ayyuid;
+      ..sDeviceInfo = "chrome";
     req.lPid = danmakuArgs.ayyuid;
     req.sContent = message;
 
@@ -267,18 +271,10 @@ class HuyaDanmaku extends LiveDanmaku {
         if (completer == null) {
           return;
         }
-        try {
-          var rsp = packet.getByClass("tReq", HuyaSendMessageRsp());
-          _pendingWup.remove(id);
-          if (!completer.isCompleted) {
-            completer.complete(rsp.iStatus);
-          }
-        } catch (e) {
-          CoreLog.error(e);
-          _pendingWup.remove(id);
-          if (!completer.isCompleted) {
-            completer.complete(-1);
-          }
+        _pendingWup.remove(id);
+        if (!completer.isCompleted) {
+          // 响应携带 tRsp 即服务器受理；其内容为弹幕广播体，无独立状态码
+          completer.complete(packet.containsKey("tRsp") ? 0 : -1);
         }
         return;
       }

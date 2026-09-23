@@ -100,6 +100,61 @@ class HuyaMessageTagInfo extends TarsStruct {
   }
 }
 
+class HuyaUidNickName extends TarsStruct {
+  int lUid = 0;
+  String sNickName = "";
+
+  @override
+  void readFrom(TarsInputStream _is) {
+    lUid = _is.read(lUid, 0, false);
+    sNickName = _is.read(sNickName, 1, false);
+  }
+
+  @override
+  void writeTo(TarsOutputStream _os) {
+    _os.write(lUid, 0);
+    _os.write(sNickName, 1);
+  }
+
+  @override
+  Object deepCopy() => HuyaUidNickName()
+    ..lUid = lUid
+    ..sNickName = sNickName;
+
+  @override
+  void displayAsString(StringBuffer sb, int level) {
+    TarsDisplayer(sb, level: level).DisplayString(sNickName, "sNickName");
+  }
+}
+
+class HuyaSendMessageFormat extends TarsStruct {
+  int iSenceType = 0;
+  int lFormatId = 0;
+  int lSizeTemplateId = 0;
+
+  @override
+  void readFrom(TarsInputStream _is) {
+    iSenceType = _is.read(iSenceType, 0, false);
+    lFormatId = _is.read(lFormatId, 1, false);
+    lSizeTemplateId = _is.read(lSizeTemplateId, 2, false);
+  }
+
+  @override
+  void writeTo(TarsOutputStream _os) {
+    _os.write(iSenceType, 0);
+    _os.write(lFormatId, 1);
+    _os.write(lSizeTemplateId, 2);
+  }
+
+  @override
+  Object deepCopy() => HuyaSendMessageFormat();
+
+  @override
+  void displayAsString(StringBuffer sb, int level) {
+    TarsDisplayer(sb, level: level).DisplayInt(iSenceType, "iSenceType");
+  }
+}
+
 class HuyaSendMessageReq extends TarsStruct {
   HuyaUserId tUserId = HuyaUserId();
   int lTid = 0;
@@ -108,8 +163,11 @@ class HuyaSendMessageReq extends TarsStruct {
   int iShowMode = 0;
   HuyaContentFormat tFormat = HuyaContentFormat();
   HuyaBulletFormat tBulletFormat = HuyaBulletFormat();
-  List<HuyaMessageTagInfo> vTagInfo = [HuyaMessageTagInfo()];
+  List<HuyaUidNickName> vAtSomeone = [HuyaUidNickName()];
   int lPid = 0;
+  List<HuyaMessageTagInfo> vTagInfo = [HuyaMessageTagInfo()];
+  HuyaSendMessageFormat tSenceFormat = HuyaSendMessageFormat();
+  int iMessageMode = 0;
 
   @override
   void readFrom(TarsInputStream _is) {
@@ -120,8 +178,11 @@ class HuyaSendMessageReq extends TarsStruct {
     iShowMode = _is.read(iShowMode, 4, false);
     tFormat = _is.read(tFormat, 5, false);
     tBulletFormat = _is.read(tBulletFormat, 6, false);
-    vTagInfo = _is.read(vTagInfo, 7, false);
+    vAtSomeone = _is.read(vAtSomeone, 7, false);
     lPid = _is.read(lPid, 8, false);
+    vTagInfo = _is.read(vTagInfo, 9, false);
+    tSenceFormat = _is.read(tSenceFormat, 10, false);
+    iMessageMode = _is.read(iMessageMode, 11, false);
   }
 
   @override
@@ -133,8 +194,11 @@ class HuyaSendMessageReq extends TarsStruct {
     _os.write(iShowMode, 4);
     _os.write(tFormat, 5);
     _os.write(tBulletFormat, 6);
-    _os.writeList(vTagInfo, 7);
+    _os.writeList(vAtSomeone, 7);
     _os.write(lPid, 8);
+    _os.writeList(vTagInfo, 9);
+    _os.write(tSenceFormat, 10);
+    _os.write(iMessageMode, 11);
   }
 
   @override
@@ -143,30 +207,5 @@ class HuyaSendMessageReq extends TarsStruct {
   @override
   void displayAsString(StringBuffer sb, int level) {
     TarsDisplayer(sb, level: level).DisplayString(sContent, "sContent");
-  }
-}
-
-class HuyaSendMessageRsp extends TarsStruct {
-  int iStatus = 0;
-  String sNotice = "";
-
-  @override
-  void readFrom(TarsInputStream _is) {
-    iStatus = _is.read(iStatus, 0, false);
-    sNotice = _is.read(sNotice, 1, false);
-  }
-
-  @override
-  void writeTo(TarsOutputStream _os) {
-    _os.write(iStatus, 0);
-    _os.write(sNotice, 1);
-  }
-
-  @override
-  Object deepCopy() => HuyaSendMessageRsp()..iStatus = iStatus;
-
-  @override
-  void displayAsString(StringBuffer sb, int level) {
-    TarsDisplayer(sb, level: level).DisplayInt(iStatus, "iStatus");
   }
 }

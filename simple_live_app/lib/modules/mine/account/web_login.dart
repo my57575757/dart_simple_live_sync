@@ -9,12 +9,19 @@ class WebLoginArgs {
   final List<String> requiredCookies;
   final void Function(String cookie) onSuccess;
 
+  /// 非空时启用重定向提取模式：导航到此前缀开头的 URL 时拦截，
+  /// 从 URL fragment 中取出 [fragmentKey] 对应的值交给 onSuccess
+  final String? redirectMatch;
+  final String? fragmentKey;
+
   WebLoginArgs({
     required this.title,
     required this.startUrl,
     required this.cookieUrl,
     required this.requiredCookies,
     required this.onSuccess,
+    this.redirectMatch,
+    this.fragmentKey,
   });
 }
 
@@ -52,6 +59,26 @@ class WebLoginController extends GetxController {
       _checking = false;
     }
   }
+
+  /// 重定向提取模式：匹配则拦截并解析 fragment；返回 null 表示放行
+  NavigationActionPolicy? handleNavigation(Uri uri) {
+    if (_finished ||
+        args.redirectMatch == null ||
+        !uri.toString().startsWith(args.redirectMatch!)) {
+      return null;
+    }
+    var value = Uri.splitQueryString(uri.fragment)[args.fragmentKey];
+    if (value == null || value.isEmpty) {
+      return null;
+    }
+    _finished = true;
+    try {
+      args.onSuccess(value);
+    } finally {
+      Get.back();
+    }
+    return NavigationActionPolicy.CANCEL;
+  }
 }
 
 class WebLoginPage extends GetView<WebLoginController> {
@@ -68,6 +95,17 @@ class WebLoginPage extends GetView<WebLoginController> {
           useShouldOverrideUrlLoading: true,
         ),
         onLoadStop: controller.onLoadStop,
+        // 不提供该回调时首个文档导航会被插件中止（白屏），必须显式放行
+        shouldOverrideUrlLoading: (controller, action) async {
+          var url = action.request.url;
+          if (url != null) {
+            var policy = this.controller.handleNavigation(Uri.parse(url.toString()));
+            if (policy != null) {
+              return policy;
+            }
+          }
+          return NavigationActionPolicy.ALLOW;
+        },
       ),
     );
   }
