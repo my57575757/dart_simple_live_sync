@@ -1,6 +1,8 @@
 import 'package:get/get.dart';
 import 'package:simple_live_app/app/constant.dart';
+import 'package:simple_live_app/app/log.dart';
 import 'package:simple_live_app/app/sites.dart';
+import 'package:simple_live_app/services/guard_server_service.dart';
 import 'package:simple_live_app/services/local_storage_service.dart';
 import 'package:simple_live_core/simple_live_core.dart';
 
@@ -58,6 +60,22 @@ class DouyinAccountService extends GetxService {
     logined.value = cookie.contains("sessionid");
     loginName.value = logined.value ? "已登录" : "未登录";
     setSite();
+    _registerGuardAccount();
+  }
+
+  void _registerGuardAccount() {
+    final cookie = loginCookie;
+    if (cookie.trim().isEmpty) return;
+    final guard = GuardServerService.instance;
+    if (!guard.configured) return;
+    guard.registerAccount("douyin", cookie).then((accountId) {
+      LocalStorageService.instance.setValue(
+        "${LocalStorageService.kGuardAccountIdPrefix}douyin",
+        accountId,
+      );
+    }).catchError((e) {
+      Log.logPrint("注册弹幕签名服务失败: $e");
+    });
   }
 
   void logout() {
