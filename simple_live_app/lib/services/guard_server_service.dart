@@ -68,15 +68,6 @@ class GuardServerService extends GetxService {
     return res.data["data"]["accountId"].toString();
   }
 
-  Future<String> getStatus(String accountId) async {
-    final dio = Dio(BaseOptions(baseUrl: serverUrl, connectTimeout: const Duration(seconds: 10)));
-    final res = await dio.get<dynamic>(
-      "/api/account/$accountId",
-      options: _options,
-    );
-    return res.data["data"]["status"].toString();
-  }
-
   Future<Map<String, dynamic>> sendDanmaku({
     required String platform,
     required String accountId,
