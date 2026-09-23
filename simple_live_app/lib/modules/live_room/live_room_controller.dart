@@ -321,14 +321,24 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
             errorMessage: data["message"]?.toString() ?? "",
           );
         } catch (e) {
-          if (e is DioException && e.response?.statusCode == 404) {
-            // 服务端会话丢失（容器重启/崩溃），用本地 cookie 自愈式重新注册
-            unawaited(guard.rehydrate());
+          var errorCode = "network_error";
+          var errorMessage = "";
+          if (e is DioException) {
+            final data = e.response?.data;
+            final msg = data is Map ? data["message"] : null;
+            if (msg is String && msg.isNotEmpty) {
+              errorCode = "guard";
+              errorMessage = msg;
+            }
+            if (e.response?.statusCode == 404) {
+              // 服务端会话丢失（容器重启/崩溃），用本地 cookie 自愈式重新注册
+              unawaited(guard.rehydrate());
+            }
           }
           result = DanmakuSendResult(
             success: false,
-            errorCode: "network_error",
-            errorMessage: "",
+            errorCode: errorCode,
+            errorMessage: errorMessage,
           );
         }
       } else {
@@ -530,7 +540,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
         return result.errorMessage.isNotEmpty ? result.errorMessage : "弹幕发送失败";
       }
     }
-    return "弹幕发送失败";
+    return result.errorMessage.isNotEmpty ? result.errorMessage : "弹幕发送失败";
   }
 
   /// 接收到WebSocket信息
