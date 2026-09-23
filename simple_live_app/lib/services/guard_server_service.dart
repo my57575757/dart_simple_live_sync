@@ -1,5 +1,8 @@
+import 'dart:async';
+
 import 'package:dio/dio.dart';
 import 'package:get/get.dart';
+import 'package:simple_live_app/app/log.dart';
 import 'package:simple_live_app/services/local_storage_service.dart';
 
 class GuardServerService extends GetxService {
@@ -26,6 +29,31 @@ class GuardServerService extends GetxService {
         .setValue(LocalStorageService.kGuardServerUrl, serverUrl);
     await LocalStorageService.instance
         .setValue(LocalStorageService.kGuardServerToken, this.token);
+    unawaited(rehydrate());
+  }
+
+  static const _platformCookieKeys = {
+    "douyin": LocalStorageService.kDouyinLoginCookie,
+    "bilibili": LocalStorageService.kBilibiliCookie,
+    "huya": LocalStorageService.kHuyaCookie,
+  };
+
+  /// 服务重启/首次配置后用本地 cookie 自愈式重新注册，恢复 accountId
+  Future<void> rehydrate() async {
+    if (!configured) return;
+    for (final entry in _platformCookieKeys.entries) {
+      final cookie = LocalStorageService.instance.getValue(entry.value, "");
+      if (cookie.trim().isEmpty) continue;
+      try {
+        final accountId = await registerAccount(entry.key, cookie);
+        await LocalStorageService.instance.setValue(
+          "${LocalStorageService.kGuardAccountIdPrefix}${entry.key}",
+          accountId,
+        );
+      } catch (e) {
+        Log.logPrint("重新注册弹幕签名服务失败(${entry.key}): $e");
+      }
+    }
   }
 
   Options get _options => Options(headers: {"Authorization": "Bearer $token"});

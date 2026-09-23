@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -151,6 +152,9 @@ Future initServices() async {
   Get.put(FollowService());
 
   Get.put(UpdateService());
+
+  // 服务重启后会话仅存内存，启动时用本地 cookie 自愈式重新注册
+  unawaited(GuardServerService.instance.rehydrate());
 
   initCoreLog();
 }

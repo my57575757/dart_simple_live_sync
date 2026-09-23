@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
@@ -320,6 +321,10 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
             errorMessage: data["message"]?.toString() ?? "",
           );
         } catch (e) {
+          if (e is DioException && e.response?.statusCode == 404) {
+            // 服务端会话丢失（容器重启/崩溃），用本地 cookie 自愈式重新注册
+            unawaited(guard.rehydrate());
+          }
           result = DanmakuSendResult(
             success: false,
             errorCode: "network_error",
