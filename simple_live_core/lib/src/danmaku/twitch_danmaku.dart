@@ -261,7 +261,7 @@ class TwitchDanmaku extends LiveDanmaku {
     }
     var safeMessage = truncateIrcMessage(sanitizeIrcMessage(message));
     _send("PRIVMSG #${danmakuArgs.channel} :$safeMessage");
-    return DanmakuSendResult(success: true, needLocalEcho: true);
+    return DanmakuSendResult(success: true);
   }
 
   @override

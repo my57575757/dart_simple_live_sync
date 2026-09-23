@@ -7,14 +7,10 @@ class DanmakuSendResult {
   final String errorCode;
   final String errorMessage;
 
-  /// 服务器不回环自身消息时为 true（Twitch），由本地插入消息
-  final bool needLocalEcho;
-
   DanmakuSendResult({
     required this.success,
     this.errorCode = "",
     this.errorMessage = "",
-    this.needLocalEcho = false,
   });
 }
 

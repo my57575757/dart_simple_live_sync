@@ -286,21 +286,7 @@ Widget buildFullControls(
                     ),
                   ),
                   IconButton(
-                    onPressed: () async {
-                      if (!controller.danmakuLogined) {
-                        await controller.showDanmakuLoginDialog();
-                        return;
-                      }
-                      var text = await Utils.showEditTextDialog(
-                        "",
-                        title: "发送弹幕",
-                        hintText: "说点什么…",
-                      );
-                      if (text == null || text.trim().isEmpty) {
-                        return;
-                      }
-                      await controller.sendDanmaku(text);
-                    },
+                    onPressed: () => controller.showDanmakuInputDialog(),
                     icon: const Icon(
                       Remix.chat_3_line,
                       color: Colors.white,

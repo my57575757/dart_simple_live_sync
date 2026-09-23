@@ -100,10 +100,12 @@ class AccountPage extends GetView<AccountController> {
               ),
               title: const Text("Twitch"),
               subtitle: Text(TwitchAccountService.instance.configured.value
-                  ? "已配置 Helix 接口"
-                  : "匿名模式（无需配置）"),
+                  ? TwitchAccountService.instance.userLogin.isNotEmpty
+                      ? TwitchAccountService.instance.userLogin
+                      : "已登录"
+                  : "未登录"),
               trailing: TwitchAccountService.instance.configured.value
-                  ? const Icon(Icons.delete_outline)
+                  ? const Icon(Icons.logout)
                   : const Icon(Icons.chevron_right),
               onTap: controller.twitchTap,
             ),

@@ -30,12 +30,17 @@ class LiveMessage {
 
   /// 弹幕颜色
   final LiveMessageColor color;
+
+  /// 是否为当前用户自己发送的消息
+  final bool isSelf;
+
   LiveMessage({
     required this.type,
     required this.userName,
     required this.message,
     this.data,
     required this.color,
+    this.isSelf = false,
   });
 
   @override
@@ -46,6 +51,7 @@ class LiveMessage {
       "message": message,
       "data": data.toString(),
       "color": color.toString(),
+      "isSelf": isSelf,
     });
   }
 }

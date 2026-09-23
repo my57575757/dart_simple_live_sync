@@ -1,5 +1,8 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
+import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:get/get.dart';
 
 class WebLoginArgs {
@@ -33,8 +36,29 @@ class WebLoginController extends GetxController {
   /// Cookie 检查进行中占位标志；在 await 之前同步置位，杜绝两次 onLoadStop 交叠
   bool _checking = false;
 
+  /// 重定向模式：Twitch 授权按钮会被周期性完整性校验反复禁用，
+  /// 用户手动点击常落在禁用窗口；轮询在启用窗口自动点击一次
+  Timer? _pollTimer;
+
+  void _startPolling(InAppWebViewController controller) {
+    _pollTimer?.cancel();
+    _pollTimer = Timer.periodic(const Duration(seconds: 2), (_) async {
+      if (_finished) return;
+      try {
+        await controller.evaluateJavascript(source: _autoAuthorizeScript);
+      } catch (_) {}
+    });
+  }
+
   void onLoadStop(InAppWebViewController controller, Uri? uri) async {
-    if (_finished || _checking) {
+    // 重定向提取模式：轮询处理授权按钮
+    if (args.redirectMatch != null) {
+      if (_finished) return;
+      _startPolling(controller);
+      return;
+    }
+    // 空 cookieUrl 时不能检查（requiredCookies 为空时 every 会空真误判成功）
+    if (args.cookieUrl.isEmpty || _finished || _checking) {
       return;
     }
     _checking = true;
@@ -60,24 +84,53 @@ class WebLoginController extends GetxController {
     }
   }
 
-  /// 重定向提取模式：匹配则拦截并解析 fragment；返回 null 表示放行
-  NavigationActionPolicy? handleNavigation(Uri uri) {
+  /// 重定向提取模式：匹配则拦截并解析 fragment；返回 true 表示已处理
+  bool handleNavigation(Uri uri) {
     if (_finished ||
         args.redirectMatch == null ||
         !uri.toString().startsWith(args.redirectMatch!)) {
-      return null;
-    }
-    var value = Uri.splitQueryString(uri.fragment)[args.fragmentKey];
-    if (value == null || value.isEmpty) {
-      return null;
+      return false;
     }
     _finished = true;
+    var value = Uri.splitQueryString(uri.fragment)[args.fragmentKey];
+    if (value == null || value.isEmpty) {
+      // 已回到重定向 URI 但没有令牌（如用户拒绝授权）
+      SmartDialog.showToast("未获得授权");
+      _pollTimer?.cancel();
+      Get.back();
+      return true;
+    }
     try {
       args.onSuccess(value);
     } finally {
+      _pollTimer?.cancel();
       Get.back();
     }
-    return NavigationActionPolicy.CANCEL;
+    return true;
+  }
+
+  /// onLoadStart 兜底拦截：部分机型 302 到 localhost 时
+  /// shouldOverrideUrlLoading 不触发
+  void onLoadStart(InAppWebViewController controller, Uri? uri) {
+    if (args.redirectMatch != null && !_finished) {
+      // onLoadStop 在部分页面不触发，提前启动轮询
+      _startPolling(controller);
+    }
+    if (uri == null ||
+        _finished ||
+        args.redirectMatch == null ||
+        !uri.toString().startsWith(args.redirectMatch!)) {
+      return;
+    }
+    // 必须在 Get.back() 之前停止加载，否则页面销毁后操作 controller
+    controller.stopLoading();
+    handleNavigation(uri);
+  }
+
+  @override
+  void onClose() {
+    _pollTimer?.cancel();
+    super.onClose();
   }
 }
 
@@ -87,26 +140,61 @@ class WebLoginPage extends GetView<WebLoginController> {
   @override
   Widget build(BuildContext context) {
     var args = controller.args;
+    // 重定向提取模式（Twitch）：不用 CDP Fetch 实现的
+    // shouldOverrideUrlLoading（POST→302 到 localhost 时会静默挂起），
+    // 改依赖 WebView2 NavigationStarting 触发的 onLoadStart，最可靠
+    var redirectMode = args.redirectMatch != null;
+    var webView = InAppWebView(
+      initialUrlRequest: URLRequest(url: WebUri(args.startUrl)),
+      initialSettings: InAppWebViewSettings(
+        useShouldOverrideUrlLoading: !redirectMode,
+      ),
+      onLoadStop: controller.onLoadStop,
+      onLoadStart: controller.onLoadStart,
+      // 不提供该回调时首个文档导航会被插件中止（白屏），必须显式放行
+      shouldOverrideUrlLoading: redirectMode
+          ? null
+          : (controller, action) async {
+              return NavigationActionPolicy.ALLOW;
+            },
+    );
     return Scaffold(
       appBar: AppBar(title: Text(args.title)),
-      body: InAppWebView(
-        initialUrlRequest: URLRequest(url: WebUri(args.startUrl)),
-        initialSettings: InAppWebViewSettings(
-          useShouldOverrideUrlLoading: true,
-        ),
-        onLoadStop: controller.onLoadStop,
-        // 不提供该回调时首个文档导航会被插件中止（白屏），必须显式放行
-        shouldOverrideUrlLoading: (controller, action) async {
-          var url = action.request.url;
-          if (url != null) {
-            var policy = this.controller.handleNavigation(Uri.parse(url.toString()));
-            if (policy != null) {
-              return policy;
-            }
-          }
-          return NavigationActionPolicy.ALLOW;
-        },
+      body: Column(
+        children: [
+          if (redirectMode)
+            Container(
+              width: double.infinity,
+              color: Theme.of(context).colorScheme.primaryContainer,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              child: Text(
+                "若点击「授权」无反应，请稍候，页面会在按钮可用时自动确认授权。",
+                style: TextStyle(
+                  fontSize: 12,
+                  color: Theme.of(context).colorScheme.onPrimaryContainer,
+                ),
+              ),
+            ),
+          Expanded(child: webView),
+        ],
       ),
     );
   }
 }
+
+/// 授权按钮进入启用窗口时自动点击一次（仅点击一次，防止重复提交）
+const String _autoAuthorizeScript = r'''
+(function(){
+  if(window.__autoAuthorized) return;
+  var btns=document.querySelectorAll('button');
+  for(var i=0;i<btns.length;i++){
+    var b=btns[i];
+    var t=String(b.innerText||"");
+    if(!b.disabled&&(t.indexOf("授权")>-1||t.indexOf("Authorize")>-1)){
+      window.__autoAuthorized=true;
+      b.click();
+      return;
+    }
+  }
+})()
+''';

@@ -99,6 +99,27 @@ class TwitchAccountService extends GetxService {
     setSite();
   }
 
+  /// 退出登录：保留 Client ID，下次可一键授权
+  void logout() {
+    oauthToken = "";
+    userLogin = "";
+    LocalStorageService.instance
+        .setValue(LocalStorageService.kTwitchToken, "");
+    LocalStorageService.instance
+        .setValue(LocalStorageService.kTwitchUserLogin, "");
+    configured.value = false;
+    setSite();
+  }
+
+  /// 已保存 Client ID 时直接发起授权，返回 true；否则需先配置
+  bool login() {
+    if (clientId.isEmpty) {
+      return false;
+    }
+    startOAuth(clientId: clientId);
+    return true;
+  }
+
   /// OAuth 重定向地址；用户需在 Twitch 开发者后台把它加入
   /// 应用的 OAuth Redirect URLs
   static const String kOAuthRedirectUri = "http://localhost";

@@ -168,13 +168,16 @@ class AccountController extends GetxController {
 
   void twitchTap() async {
     if (TwitchAccountService.instance.configured.value) {
-      var result = await Utils.showAlertDialog("确定要清除 Twitch 接口配置吗？", title: "清除配置");
+      var result = await Utils.showAlertDialog("确定要退出 Twitch 账号吗？", title: "退出登录");
       if (result) {
-        TwitchAccountService.instance.clearConfig();
-        SmartDialog.showToast("已清除配置，使用匿名模式");
+        TwitchAccountService.instance.logout();
+        SmartDialog.showToast("已退出 Twitch 登录");
       }
     } else {
-      showTwitchConfigDialog();
+      // 已保存 Client ID：直接走官方授权页；否则引导首次配置
+      if (!TwitchAccountService.instance.login()) {
+        showTwitchConfigDialog();
+      }
     }
   }
 
@@ -259,8 +262,8 @@ class AccountController extends GetxController {
               );
               if (TwitchAccountService.instance.configured.value) {
                 _validateTwitchConfig();
-              } else {
-                SmartDialog.showToast("已保存，使用匿名模式");
+              } else if (TwitchAccountService.instance.clientId.isNotEmpty) {
+                TwitchAccountService.instance.login();
               }
             },
             child: const Text("确定"),

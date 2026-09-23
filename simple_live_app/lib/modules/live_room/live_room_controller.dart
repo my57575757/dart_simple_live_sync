@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:get/get.dart';
 import 'package:media_kit/media_kit.dart';
@@ -19,6 +20,7 @@ import 'package:simple_live_app/app/utils.dart';
 import 'package:simple_live_app/models/db/follow_user.dart';
 import 'package:simple_live_app/models/db/history.dart';
 import 'package:simple_live_app/modules/live_room/player/player_controller.dart';
+import 'package:simple_live_app/modules/live_room/self_echo_tracker.dart';
 import 'package:simple_live_app/modules/settings/danmu_settings_page.dart';
 import 'package:simple_live_app/routes/route_path.dart';
 import 'package:simple_live_app/services/db_service.dart';
@@ -86,6 +88,9 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
 
   /// 聊天信息
   RxList<LiveMessage> messages = RxList<LiveMessage>();
+
+  /// 自我消息本地回显与服务器回环去重
+  final SelfEchoTracker selfEchoTracker = SelfEchoTracker();
 
   /// 弹幕发送中
   var sendingDanmaku = false.obs;
@@ -265,14 +270,15 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     try {
       var result = await liveDanmaku.sendMessage(content);
       if (result.success) {
-        if (result.needLocalEcho) {
-          onWSMessage(LiveMessage(
-            type: LiveMessageType.chat,
-            userName: currentUserName,
-            message: content,
-            color: LiveMessageColor.white,
-          ));
-        }
+        // 统一本地回显：保证各平台自己的弹幕都能即时在聊天区可见
+        selfEchoTracker.add(content);
+        onWSMessage(LiveMessage(
+          type: LiveMessageType.chat,
+          userName: currentUserName,
+          message: content,
+          color: LiveMessageColor.white,
+          isSelf: true,
+        ));
       } else {
         SmartDialog.showToast(
           danmakuErrorText(site.id, result),
@@ -290,6 +296,38 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     } finally {
       sendingDanmaku.value = false;
     }
+  }
+
+  /// 全屏时按回车弹出弹幕输入框
+  @override
+  void handleKeyboardKey(KeyEvent event) {
+    if (event is KeyDownEvent &&
+        fullScreenState.value &&
+        !lockControlsState.value &&
+        !smallWindowState.value &&
+        (event.logicalKey == LogicalKeyboardKey.enter ||
+            event.logicalKey == LogicalKeyboardKey.numpadEnter)) {
+      showDanmakuInputDialog();
+      return;
+    }
+    super.handleKeyboardKey(event);
+  }
+
+  /// 弹幕输入对话框；全屏键盘回车与控制栏按钮共用
+  Future<void> showDanmakuInputDialog() async {
+    if (!danmakuLogined) {
+      await showDanmakuLoginDialog();
+      return;
+    }
+    var text = await Utils.showEditTextDialog(
+      "",
+      title: "发送弹幕",
+      hintText: "说点什么…",
+    );
+    if (text == null || text.trim().isEmpty) {
+      return;
+    }
+    await sendDanmaku(text);
   }
 
   /// 当前平台账号是否已登录；竖屏底部栏与全屏弹框入口同源
@@ -381,27 +419,34 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   /// 接收到WebSocket信息
   void onWSMessage(LiveMessage msg) {
     if (msg.type == LiveMessageType.chat) {
+      // 服务器把自己的消息回环推送：命中本地回显登记则丢弃，避免双显
+      if (!msg.isSelf && selfEchoTracker.consume(msg.message)) {
+        return;
+      }
+
       if (messages.length > 200 && !disableAutoScroll.value) {
         messages.removeAt(0);
       }
 
-      // 关键词屏蔽检查
-      for (var keyword in AppSettingsController.instance.shieldList) {
-        Pattern? pattern;
-        if (Utils.isRegexFormat(keyword)) {
-          String removedSlash = Utils.removeRegexFormat(keyword);
-          try {
-            pattern = RegExp(removedSlash);
-          } catch (e) {
-            // should avoid this during add keyword
-            Log.d("关键词：$keyword 正则格式错误");
+      // 关键词屏蔽检查（自己的消息不屏蔽）
+      if (!msg.isSelf) {
+        for (var keyword in AppSettingsController.instance.shieldList) {
+          Pattern? pattern;
+          if (Utils.isRegexFormat(keyword)) {
+            String removedSlash = Utils.removeRegexFormat(keyword);
+            try {
+              pattern = RegExp(removedSlash);
+            } catch (e) {
+              // should avoid this during add keyword
+              Log.d("关键词：$keyword 正则格式错误");
+            }
+          } else {
+            pattern = keyword;
           }
-        } else {
-          pattern = keyword;
-        }
-        if (pattern != null && msg.message.contains(pattern)) {
-          Log.d("关键词：$keyword\n已屏蔽消息内容：${msg.message}");
-          return;
+          if (pattern != null && msg.message.contains(pattern)) {
+            Log.d("关键词：$keyword\n已屏蔽消息内容：${msg.message}");
+            return;
+          }
         }
       }
 

@@ -2,11 +2,9 @@ import 'package:simple_live_app/modules/live_room/live_room_controller.dart';
 import 'package:simple_live_core/simple_live_core.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-DanmakuSendResult result(String code, {bool needEcho = false}) =>
-    DanmakuSendResult(
+DanmakuSendResult result(String code) => DanmakuSendResult(
       success: false,
       errorCode: code,
-      needLocalEcho: needEcho,
     );
 
 void main() {

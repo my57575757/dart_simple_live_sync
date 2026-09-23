@@ -41,11 +41,10 @@ void main() {
   });
 
   group("sendMessage", () {
-    test("未 start 直接发送返回 network_error 且不本地补显", () async {
+    test("未 start 直接发送返回 network_error", () async {
       var result = await TwitchDanmaku().sendMessage("hello");
       expect(result.success, isFalse);
       expect(result.errorCode, "network_error");
-      expect(result.needLocalEcho, isFalse);
     });
     test("已关闭连接返回 network_error", () async {
       var danmaku = TwitchDanmaku();
@@ -53,7 +52,6 @@ void main() {
       var result = await danmaku.sendMessage("hello");
       expect(result.success, isFalse);
       expect(result.errorCode, "network_error");
-      expect(result.needLocalEcho, isFalse);
     });
   });
 }

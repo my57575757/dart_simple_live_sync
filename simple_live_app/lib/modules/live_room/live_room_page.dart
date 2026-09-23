@@ -628,67 +628,69 @@ class LiveRoomPage extends GetView<LiveRoomController> {
       );
     }
 
-    return Obx(
-      () => AppSettingsController.instance.chatBubbleStyle.value
-          ? Row(
-              mainAxisAlignment: MainAxisAlignment.start,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Flexible(
-                  child: Container(
-                    decoration: BoxDecoration(
-                      color: Colors.blueGrey.withAlpha(25),
-                      //borderRadius: AppStyle.radius8,
-                      borderRadius: const BorderRadius.only(
-                        topRight: Radius.circular(12),
-                        bottomLeft: Radius.circular(12),
-                        bottomRight: Radius.circular(12),
-                      ),
-                    ),
-                    padding:
-                        AppStyle.edgeInsetsA4.copyWith(left: 12, right: 12),
-                    child: Text.rich(
-                      TextSpan(
-                        text: "${message.userName}：",
-                        style: TextStyle(
-                          color: Colors.grey,
-                          fontSize:
-                              AppSettingsController.instance.chatTextSize.value,
-                        ),
-                        children: [
-                          TextSpan(
-                            text: message.message,
-                            style: TextStyle(
-                              color: Get.isDarkMode
-                                  ? Colors.white
-                                  : AppColors.black333,
-                            ),
-                          )
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-              ],
+    return Obx(() {
+      var textWidget = Text.rich(
+        TextSpan(
+          text: "${message.userName}：",
+          style: TextStyle(
+            color: Colors.grey,
+            fontSize: AppSettingsController.instance.chatTextSize.value,
+          ),
+          children: [
+            TextSpan(
+              text: message.message,
+              style: TextStyle(
+                color: Get.isDarkMode ? Colors.white : AppColors.black333,
+              ),
             )
-          : Text.rich(
-              TextSpan(
-                text: "${message.userName}：",
-                style: TextStyle(
-                  color: Colors.grey,
-                  fontSize: AppSettingsController.instance.chatTextSize.value,
+          ],
+        ),
+      );
+
+      if (AppSettingsController.instance.chatBubbleStyle.value) {
+        return Row(
+          mainAxisAlignment: MainAxisAlignment.start,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Flexible(
+              child: Container(
+                decoration: BoxDecoration(
+                  color: message.isSelf
+                      ? Colors.orange.withAlpha(30)
+                      : Colors.blueGrey.withAlpha(25),
+                  //borderRadius: AppStyle.radius8,
+                  borderRadius: const BorderRadius.only(
+                    topRight: Radius.circular(12),
+                    bottomLeft: Radius.circular(12),
+                    bottomRight: Radius.circular(12),
+                  ),
+                  border: message.isSelf
+                      ? Border.all(color: Colors.orange.shade400)
+                      : null,
                 ),
-                children: [
-                  TextSpan(
-                    text: message.message,
-                    style: TextStyle(
-                      color: Get.isDarkMode ? Colors.white : AppColors.black333,
-                    ),
-                  )
-                ],
+                padding:
+                    AppStyle.edgeInsetsA4.copyWith(left: 12, right: 12),
+                child: textWidget,
               ),
             ),
-    );
+          ],
+        );
+      }
+
+      // 非气泡样式下，自己的消息同样用框圈住
+      if (message.isSelf) {
+        return Container(
+          decoration: BoxDecoration(
+            color: Colors.orange.withAlpha(25),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: Colors.orange.shade400),
+          ),
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+          child: textWidget,
+        );
+      }
+      return textWidget;
+    });
   }
 
   Widget buildSuperChats() {
