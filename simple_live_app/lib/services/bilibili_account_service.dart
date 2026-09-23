@@ -86,6 +86,18 @@ class BiliBiliAccountService extends GetxService {
   }
 
   void logout() async {
+    final accountId = LocalStorageService.instance.getValue(
+      "${LocalStorageService.kGuardAccountIdPrefix}bilibili",
+      "",
+    );
+    await LocalStorageService.instance.removeValue(
+      "${LocalStorageService.kGuardAccountIdPrefix}bilibili",
+    );
+    if (accountId.isNotEmpty && GuardServerService.instance.configured) {
+      GuardServerService.instance
+          .deleteAccount(accountId)
+          .catchError((e) => Log.logPrint("删除签名服务会话失败: $e"));
+    }
     cookie = "";
     uid = 0;
     name.value = "未登录";

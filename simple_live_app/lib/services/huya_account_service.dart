@@ -74,7 +74,19 @@ class HuyaAccountService extends GetxService {
     );
   }
 
-  void logout() {
+  void logout() async {
+    final accountId = LocalStorageService.instance.getValue(
+      "${LocalStorageService.kGuardAccountIdPrefix}huya",
+      "",
+    );
+    await LocalStorageService.instance.removeValue(
+      "${LocalStorageService.kGuardAccountIdPrefix}huya",
+    );
+    if (accountId.isNotEmpty && GuardServerService.instance.configured) {
+      GuardServerService.instance
+          .deleteAccount(accountId)
+          .catchError((e) => Log.logPrint("删除签名服务会话失败: $e"));
+    }
     cookie = "";
     LocalStorageService.instance
         .setValue(LocalStorageService.kHuyaCookie, "");

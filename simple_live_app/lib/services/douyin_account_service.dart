@@ -78,7 +78,19 @@ class DouyinAccountService extends GetxService {
     });
   }
 
-  void logout() {
+  void logout() async {
+    final accountId = LocalStorageService.instance.getValue(
+      "${LocalStorageService.kGuardAccountIdPrefix}douyin",
+      "",
+    );
+    await LocalStorageService.instance.removeValue(
+      "${LocalStorageService.kGuardAccountIdPrefix}douyin",
+    );
+    if (accountId.isNotEmpty && GuardServerService.instance.configured) {
+      GuardServerService.instance
+          .deleteAccount(accountId)
+          .catchError((e) => Log.logPrint("删除签名服务会话失败: $e"));
+    }
     loginCookie = "";
     LocalStorageService.instance
         .setValue(LocalStorageService.kDouyinLoginCookie, "");
