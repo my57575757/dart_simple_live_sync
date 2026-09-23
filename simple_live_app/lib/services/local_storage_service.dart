@@ -216,7 +216,9 @@ class LocalStorageService extends GetxService {
   T getValue<T>(dynamic key, T defaultValue) {
     try {
       var value = settingsBox.get(key, defaultValue: defaultValue) as T;
-      Log.d("Get LocalStorage：$key\r\n$value");
+      final loggedValue =
+          key == kGuardServerToken ? "<hidden>" : value;
+      Log.d("Get LocalStorage：$key\r\n$loggedValue");
       return value;
     } catch (e) {
       Log.logPrint(e);
@@ -225,7 +227,9 @@ class LocalStorageService extends GetxService {
   }
 
   Future setValue<T>(dynamic key, T value) async {
-    Log.d("Set LocalStorage：$key\r\n$value");
+    final loggedValue =
+        key == kGuardServerToken ? "<hidden>" : value;
+    Log.d("Set LocalStorage：$key\r\n$loggedValue");
     return await settingsBox.put(key, value);
   }
 
