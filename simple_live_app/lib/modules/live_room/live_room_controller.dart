@@ -26,7 +26,6 @@ import 'package:simple_live_app/routes/route_path.dart';
 import 'package:simple_live_app/services/db_service.dart';
 import 'package:simple_live_app/services/follow_service.dart';
 import 'package:simple_live_app/services/guard_server_service.dart';
-import 'package:simple_live_app/services/local_storage_service.dart';
 import 'package:simple_live_app/services/bilibili_account_service.dart';
 import 'package:simple_live_app/services/douyu_account_service.dart';
 import 'package:simple_live_app/services/huya_account_service.dart';
@@ -265,6 +264,45 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     return detail.value?.roomId ?? roomId;
   }
 
+  static const _guardPlatforms = ["douyin", "bilibili", "huya"];
+
+  /// 进入直播间观看时，让服务端页面进入对应房间（仅已登录、已配置时）
+  Future<void> _enterGuardRoom() async {
+    final guard = GuardServerService.instance;
+    if (!guard.configured || !_guardPlatforms.contains(site.id)) return;
+    if (!danmakuLogined) return;
+    try {
+      final accountId = await guard.ensureAccount(site.id);
+      if (accountId == null) return;
+      await guard.enterRoom(
+        accountId: accountId,
+        roomId: _guardRoomId,
+        webRid: _guardWebRid,
+        extra: _guardExtraArgs(),
+      );
+    } catch (e) {
+      Log.logPrint("弹幕服务进入直播间失败: $e");
+    }
+  }
+
+  /// 退出直播间时让服务端页面回到空白页；best-effort，失败只记日志
+  Future<void> _exitGuardRoom() async {
+    final guard = GuardServerService.instance;
+    if (!guard.configured || !_guardPlatforms.contains(site.id)) return;
+    final accountId = guard.savedAccountId(site.id);
+    if (accountId == null) return;
+    try {
+      await guard.exitRoom(
+        accountId: accountId,
+        roomId: _guardRoomId,
+        webRid: _guardWebRid,
+        extra: _guardExtraArgs(),
+      );
+    } catch (e) {
+      Log.logPrint("弹幕服务退出直播间失败: $e");
+    }
+  }
+
   Future<void> sendDanmaku(String text) async {
     var content = text.trim();
     if (content.isEmpty) {
@@ -277,11 +315,10 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     sendingDanmaku.value = true;
     try {
       DanmakuSendResult result;
-      const guardPlatforms = ["douyin", "bilibili", "huya"];
       final guard = GuardServerService.instance;
 
       String? accountId;
-      if (guard.configured && guardPlatforms.contains(site.id)) {
+      if (guard.configured && _guardPlatforms.contains(site.id)) {
         // 发送时按需注册：未注册则用本地保存的登录 cookie 自动注册
         accountId = await guard.ensureAccount(site.id);
       }
@@ -654,6 +691,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       initDanmau();
       liveDanmaku.start(detail.value?.danmakuData);
       startLiveDurationTimer(); // 启动开播时长定时器
+      unawaited(_enterGuardRoom());
     } catch (e) {
       Log.logPrint(e);
       //SmartDialog.showToast(e.toString());
@@ -1393,6 +1431,8 @@ ${error?.stackTrace}''');
     WidgetsBinding.instance.removeObserver(this);
     scrollController.removeListener(scrollListener);
     autoExitTimer?.cancel();
+
+    unawaited(_exitGuardRoom());
 
     liveDanmaku.stop();
     danmakuController = null;

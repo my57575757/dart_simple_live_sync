@@ -85,6 +85,14 @@ class GuardServerService extends GetxService {
     }
   }
 
+  String? savedAccountId(String platform) {
+    final saved = LocalStorageService.instance.getValue(
+      _accountIdKey(platform),
+      "",
+    );
+    return saved.isEmpty ? null : saved;
+  }
+
   Options get _options => Options(headers: {"Authorization": "Bearer $token"});
 
   Future<String> registerAccount(String platform, String cookie) async {
@@ -123,5 +131,49 @@ class GuardServerService extends GetxService {
   Future<void> deleteAccount(String accountId) async {
     final dio = Dio(BaseOptions(baseUrl: serverUrl));
     await dio.delete<dynamic>("/api/account/$accountId", options: _options);
+  }
+
+  Future<void> enterRoom({
+    required String accountId,
+    required String roomId,
+    String webRid = "",
+    Map<String, dynamic>? extra,
+  }) async {
+    final dio = Dio(BaseOptions(
+      baseUrl: serverUrl,
+      connectTimeout: const Duration(seconds: 30),
+    ));
+    await dio.post<dynamic>(
+      "/api/room/enter",
+      data: {
+        "accountId": accountId,
+        "roomId": roomId,
+        "webRid": webRid,
+        "extra": extra ?? {},
+      },
+      options: _options,
+    );
+  }
+
+  Future<void> exitRoom({
+    required String accountId,
+    required String roomId,
+    String webRid = "",
+    Map<String, dynamic>? extra,
+  }) async {
+    final dio = Dio(BaseOptions(
+      baseUrl: serverUrl,
+      connectTimeout: const Duration(seconds: 10),
+    ));
+    await dio.post<dynamic>(
+      "/api/room/exit",
+      data: {
+        "accountId": accountId,
+        "roomId": roomId,
+        "webRid": webRid,
+        "extra": extra ?? {},
+      },
+      options: _options,
+    );
   }
 }
