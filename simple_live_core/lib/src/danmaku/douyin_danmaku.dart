@@ -45,9 +45,36 @@ class DouyinDanmaku extends LiveDanmaku {
   late DouyinDanmakuArgs danmakuArgs;
   WebScoketUtils? webScoketUtils;
 
+  /// 登录用户真实 uid；未登录或解析失败时为空
+  String _selfUid = "";
+
+  static final _selfUidRegex = RegExp(
+    r'\\?"user_id\\?":\\?"(\d+)\\?",\\?"user_type\\?":\d+,\\?"user_is_auth\\?":\d+,\\?"user_is_login\\?":1',
+  );
+
+  /// 带登录 cookie 拉房间页，从 odin 中解析登录用户真实 uid
+  Future<void> _resolveSelfUid() async {
+    try {
+      final response = await HttpClient.instance.getResponse(
+        "https://live.douyin.com/${danmakuArgs.webRid}",
+        header: {
+          "User-Agent": DouyinSite.kDefaultUserAgent,
+          "Cookie": danmakuArgs.cookie,
+        },
+      );
+      final html = response.data?.toString() ?? "";
+      _selfUid = _selfUidRegex.firstMatch(html)?.group(1) ?? "";
+    } catch (e) {
+      CoreLog.error(e);
+    }
+  }
+
   @override
   Future start(dynamic args) async {
     danmakuArgs = args as DouyinDanmakuArgs;
+    if (danmakuArgs.cookie.contains("sessionid")) {
+      unawaited(_resolveSelfUid());
+    }
     var ts = DateTime.now().millisecondsSinceEpoch;
     var uuid = danmakuArgs.userId;
     var internalExt =
@@ -157,6 +184,9 @@ class DouyinDanmaku extends LiveDanmaku {
 
   void unPackWebcastChatMessage(List<int> payload) {
     var chatMessage = ChatMessage.fromBuffer(payload);
+    var senderId = chatMessage.user.idStr.isNotEmpty
+        ? chatMessage.user.idStr
+        : chatMessage.user.id.toString();
     onMessage?.call(
       LiveMessage(
         type: LiveMessageType.chat,
@@ -167,6 +197,7 @@ class DouyinDanmaku extends LiveDanmaku {
         //     : LiveMessageColor.numberToColor(color),
         message: chatMessage.content,
         userName: chatMessage.user.nickName,
+        isSelf: _selfUid.isNotEmpty && senderId == _selfUid,
       ),
     );
   }

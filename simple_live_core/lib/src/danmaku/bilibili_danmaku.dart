@@ -261,6 +261,7 @@ class BiliBiliDanmaku extends LiveDanmaku {
           var color = asT<int?>(obj["info"][0][3]) ?? 0;
           if (obj["info"][2] != null && obj["info"][2].length != 0) {
             var username = obj["info"][2][1].toString();
+            var senderUid = asT<int?>(obj["info"][2][0]) ?? 0;
             var liveMsg = LiveMessage(
               type: LiveMessageType.chat,
               userName: username,
@@ -268,6 +269,7 @@ class BiliBiliDanmaku extends LiveDanmaku {
               color: color == 0
                   ? LiveMessageColor.white
                   : LiveMessageColor.numberToColor(color),
+              isSelf: senderUid != 0 && senderUid == danmakuArgs.uid,
             );
             onMessage?.call(liveMsg);
           }

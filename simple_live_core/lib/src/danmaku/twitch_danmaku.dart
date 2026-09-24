@@ -167,6 +167,8 @@ class TwitchDanmaku extends LiveDanmaku {
       userName: userName,
       message: text,
       color: color,
+      isSelf: danmakuArgs.userLogin.isNotEmpty &&
+          nick == danmakuArgs.userLogin,
     ));
   }
 

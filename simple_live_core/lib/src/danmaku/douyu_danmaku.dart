@@ -445,11 +445,14 @@ class DouyuDanmaku extends LiveDanmaku {
           return;
         }
         var col = int.tryParse(jsonData["col"].toString()) ?? 0;
+        var selfUid = cookieValue(danmakuArgs.cookie, "acf_uid");
         var liveMsg = LiveMessage(
           type: LiveMessageType.chat,
           userName: jsonData["nn"].toString(),
           message: jsonData["txt"].toString(),
           color: getColor(col),
+          isSelf:
+              selfUid.isNotEmpty && jsonData["uid"]?.toString() == selfUid,
         );
 
         onMessage?.call(liveMsg);

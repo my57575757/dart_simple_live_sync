@@ -21,7 +21,6 @@ import 'package:simple_live_app/app/utils.dart';
 import 'package:simple_live_app/models/db/follow_user.dart';
 import 'package:simple_live_app/models/db/history.dart';
 import 'package:simple_live_app/modules/live_room/player/player_controller.dart';
-import 'package:simple_live_app/modules/live_room/self_echo_tracker.dart';
 import 'package:simple_live_app/modules/settings/danmu_settings_page.dart';
 import 'package:simple_live_app/routes/route_path.dart';
 import 'package:simple_live_app/services/db_service.dart';
@@ -92,30 +91,8 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   /// 聊天信息
   RxList<LiveMessage> messages = RxList<LiveMessage>();
 
-  /// 自我消息本地回显与服务器回环去重
-  final SelfEchoTracker selfEchoTracker = SelfEchoTracker();
-
   /// 弹幕发送中
   var sendingDanmaku = false.obs;
-
-  String get currentUserName {
-    switch (site.id) {
-      case Constant.kBiliBili:
-        return BiliBiliAccountService.instance.name.value;
-      case Constant.kDouyu:
-        return DouyuAccountService.instance.name.value;
-      case Constant.kHuya:
-        return HuyaAccountService.instance.name.value;
-      case Constant.kDouyin:
-        return DouyinAccountService.instance.loginName.value;
-      case Constant.kTwitch:
-        return detail.value?.danmakuData is TwitchDanmakuArgs
-            ? (detail.value!.danmakuData as TwitchDanmakuArgs).userLogin
-            : "";
-      default:
-        return "";
-    }
-  }
 
   /// 清晰度数据
   RxList<LivePlayQuality> qualites = RxList<LivePlayQuality>();
@@ -351,17 +328,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       } else {
         result = await liveDanmaku.sendMessage(content);
       }
-      if (result.success) {
-        // 统一本地回显：保证各平台自己的弹幕都能即时在聊天区可见
-        selfEchoTracker.add(content);
-        onWSMessage(LiveMessage(
-          type: LiveMessageType.chat,
-          userName: currentUserName,
-          message: content,
-          color: LiveMessageColor.white,
-          isSelf: true,
-        ));
-      } else {
+      if (!result.success) {
         SmartDialog.showToast(
           danmakuErrorText(site.id, result),
         );
@@ -553,11 +520,6 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   /// 接收到WebSocket信息
   void onWSMessage(LiveMessage msg) {
     if (msg.type == LiveMessageType.chat) {
-      // 服务器把自己的消息回环推送：命中本地回显登记则丢弃，避免双显
-      if (!msg.isSelf && selfEchoTracker.consume(msg.message)) {
-        return;
-      }
-
       if (messages.length > 200 && !disableAutoScroll.value) {
         messages.removeAt(0);
       }
@@ -602,6 +564,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
             msg.color.g,
             msg.color.b,
           ),
+          selfSend: msg.isSelf,
         ),
       ]);
     } else if (msg.type == LiveMessageType.online) {

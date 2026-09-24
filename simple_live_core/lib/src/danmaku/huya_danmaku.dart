@@ -290,6 +290,7 @@ class HuyaDanmaku extends LiveDanmaku {
           var content = messageNotice.content;
 
           var color = messageNotice.bulletFormat.fontColor;
+          var selfUid = int.tryParse(_uidStr) ?? 0;
 
           onMessage?.call(
             LiveMessage(
@@ -299,6 +300,7 @@ class HuyaDanmaku extends LiveDanmaku {
                   : LiveMessageColor.numberToColor(color),
               message: content,
               userName: uname,
+              isSelf: selfUid != 0 && messageNotice.userInfo.uid == selfUid,
             ),
           );
         } else if (wSPushMessage.uri == 8006) {
