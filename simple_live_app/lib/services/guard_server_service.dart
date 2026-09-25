@@ -155,6 +155,29 @@ class GuardServerService extends GetxService {
     );
   }
 
+  Future<Map<String, dynamic>> heartbeat({
+    required String accountId,
+    required String roomId,
+    String webRid = "",
+    Map<String, dynamic>? extra,
+  }) async {
+    final dio = Dio(BaseOptions(
+      baseUrl: serverUrl,
+      connectTimeout: const Duration(seconds: 10),
+    ));
+    final res = await dio.post<dynamic>(
+      "/api/room/heartbeat",
+      data: {
+        "accountId": accountId,
+        "roomId": roomId,
+        "webRid": webRid,
+        "extra": extra ?? {},
+      },
+      options: _options,
+    );
+    return Map<String, dynamic>.from(res.data["data"] as Map);
+  }
+
   Future<void> exitRoom({
     required String accountId,
     required String roomId,

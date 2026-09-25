@@ -137,6 +137,8 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   // 开播时长状态变量
   var liveDuration = "00:00:00".obs;
   Timer? _liveDurationTimer;
+  // guard 心跳：观看期间每 20s 续租，服务端租约超时才退房
+  Timer? _guardHeartbeatTimer;
 
   @override
   void onInit() {
@@ -293,13 +295,51 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
           extra: _guardExtraArgs(),
         );
       }
+      _startGuardHeartbeat(accountId);
     } catch (e) {
       Log.logPrint("弹幕服务进入直播间失败: $e");
     }
   }
 
-  /// 退出直播间时让服务端页面回到空白页；best-effort，失败只记日志
+  void _startGuardHeartbeat(String accountId) {
+    _guardHeartbeatTimer?.cancel();
+    final guard = GuardServerService.instance;
+
+    Future<void> beat({bool retried = false}) async {
+      try {
+        await guard.heartbeat(
+          accountId: accountId,
+          roomId: _guardRoomId,
+          webRid: _guardWebRid,
+          extra: _guardExtraArgs(),
+        );
+      } on DioException catch (e) {
+        if (!retried && e.response?.statusCode == 404) {
+          // 服务端会话丢失：重新注册并用新账号重启心跳
+          final newId = await guard.reregister(site.id);
+          if (newId != null) {
+            _startGuardHeartbeat(newId);
+            return;
+          }
+        }
+        Log.logPrint("弹幕服务心跳失败: ${e.message}");
+      }
+    }
+
+    _guardHeartbeatTimer = Timer.periodic(
+      const Duration(seconds: 20),
+      (_) => beat(),
+    );
+  }
+
+  void _stopGuardHeartbeat() {
+    _guardHeartbeatTimer?.cancel();
+    _guardHeartbeatTimer = null;
+  }
+
+  /// 退出直播间时让服务端页面回到首页；best-effort，失败只记日志
   Future<void> _exitGuardRoom() async {
+    _stopGuardHeartbeat();
     final guard = GuardServerService.instance;
     if (!guard.configured || !_guardPlatforms.contains(site.id)) return;
     final accountId = guard.savedAccountId(site.id);
