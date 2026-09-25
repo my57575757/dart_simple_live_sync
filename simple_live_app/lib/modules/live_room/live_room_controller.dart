@@ -307,12 +307,18 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
 
     Future<void> beat({bool retried = false}) async {
       try {
-        await guard.heartbeat(
+        final data = await guard.heartbeat(
           accountId: accountId,
           roomId: _guardRoomId,
           webRid: _guardWebRid,
           extra: _guardExtraArgs(),
         );
+        if (data["inRoom"] != true) {
+          // 同账号已在其他端进入别的直播间：本端退让停止心跳，
+          // 避免互相踢；等用户在本端主动发弹幕时再抢占
+          _stopGuardHeartbeat();
+          return;
+        }
       } on DioException catch (e) {
         if (!retried && e.response?.statusCode == 404) {
           // 服务端会话丢失：重新注册并用新账号重启心跳
@@ -416,6 +422,10 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
         }
 
         result = await sendOnce(accountId);
+        if (result.success) {
+          // 主动发送已在服务端抢占房间，恢复本端心跳保活
+          _startGuardHeartbeat(accountId);
+        }
       } else {
         result = await liveDanmaku.sendMessage(content);
       }
