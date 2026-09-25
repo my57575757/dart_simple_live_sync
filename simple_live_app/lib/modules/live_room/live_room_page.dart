@@ -16,6 +16,7 @@ import 'package:simple_live_app/app/utils.dart';
 import 'package:simple_live_app/modules/live_room/live_room_controller.dart';
 import 'package:simple_live_app/modules/live_room/player/player_controls.dart';
 import 'package:simple_live_app/services/follow_service.dart';
+import 'package:simple_live_app/services/windows_ime_reset.dart';
 import 'package:simple_live_app/widgets/desktop_refresh_button.dart';
 import 'package:simple_live_app/widgets/follow_user_item.dart';
 import 'package:simple_live_app/widgets/keep_alive_wrapper.dart';
@@ -140,7 +141,7 @@ class LiveRoomPage extends GetView<LiveRoomController> {
         ),
         buildUserProfile(context),
         buildMessageArea(),
-        buildSendDanmakuBar(context),
+        SendDanmakuBar(roomController: controller),
         buildBottomActions(context),
       ],
     );
@@ -182,7 +183,7 @@ class LiveRoomPage extends GetView<LiveRoomController> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              buildSendDanmakuBar(context),
+              SendDanmakuBar(roomController: controller),
               Row(
                 children: [
                   TextButton.icon(
@@ -408,64 +409,6 @@ class LiveRoomPage extends GetView<LiveRoomController> {
             ),
           ],
         ),
-      ),
-    );
-  }
-
-  Widget buildSendDanmakuBar(BuildContext context) {
-    var inputController = TextEditingController();
-    return Container(
-      padding: AppStyle.edgeInsetsH12.copyWith(top: 6, bottom: 6),
-      color: Theme.of(context).cardColor,
-      child: Row(
-        children: [
-          Expanded(
-            child: TextField(
-              controller: inputController,
-              maxLength: 200,
-              textInputAction: TextInputAction.send,
-              decoration: InputDecoration(
-                hintText: "说点什么…",
-                counterText: "",
-                isDense: true,
-                contentPadding: AppStyle.edgeInsetsA12,
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(20),
-                ),
-              ),
-              onSubmitted: (v) async {
-                if (!controller.danmakuLogined) {
-                  controller.showDanmakuLoginDialog();
-                  return;
-                }
-                await controller.sendDanmaku(v);
-                inputController.clear();
-              },
-            ),
-          ),
-          AppStyle.hGap8,
-          Obx(
-            () => IconButton(
-              onPressed: controller.sendingDanmaku.value
-                  ? null
-                  : () async {
-                      if (!controller.danmakuLogined) {
-                        controller.showDanmakuLoginDialog();
-                        return;
-                      }
-                      await controller.sendDanmaku(inputController.text);
-                      inputController.clear();
-                    },
-              icon: controller.sendingDanmaku.value
-                  ? const SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.send),
-            ),
-          ),
-        ],
       ),
     );
   }
@@ -1012,5 +955,95 @@ class LiveRoomPage extends GetView<LiveRoomController> {
       return "${m.toString().padLeft(2, '0')}分钟${s.toString().padLeft(2, '0')}秒";
     }
     return "${s.toString().padLeft(2, '0')}秒";
+  }
+}
+
+class SendDanmakuBar extends StatefulWidget {
+  final LiveRoomController roomController;
+  const SendDanmakuBar({required this.roomController, Key? key})
+      : super(key: key);
+
+  @override
+  State<SendDanmakuBar> createState() => _SendDanmakuBarState();
+}
+
+class _SendDanmakuBarState extends State<SendDanmakuBar> {
+  // 只创建一次：避免父级重建时换新 controller 导致输入框重配、打断 IME（搜狗偶发不生效）
+  final inputController = TextEditingController();
+  LiveRoomController get roomController => widget.roomController;
+
+  @override
+  void dispose() {
+    inputController.dispose();
+    super.dispose();
+  }
+
+  Future<void> submit(String v) async {
+    if (!roomController.danmakuLogined) {
+      roomController.showDanmakuLoginDialog();
+      return;
+    }
+    await roomController.sendDanmaku(v);
+    inputController.clear();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: AppStyle.edgeInsetsH12.copyWith(top: 6, bottom: 6),
+      color: Theme.of(context).cardColor,
+      child: Row(
+        children: [
+          Expanded(
+            child: TextField(
+              controller: inputController,
+              maxLength: 200,
+              textInputAction: TextInputAction.send,
+              decoration: InputDecoration(
+                hintText: "说点什么…",
+                counterText: "",
+                isDense: true,
+                contentPadding: AppStyle.edgeInsetsA12,
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(20),
+                ),
+              ),
+              onSubmitted: submit,
+            ),
+          ),
+          if (Platform.isWindows)
+            IconButton(
+              tooltip: "重置中文输入法（中文打不出时点此）",
+              onPressed: () {
+                final n = resetWindowsIme();
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(
+                      n > 0 ? "已重置输入法状态，请重试输入" : "重置未生效，请重启应用",
+                    ),
+                    duration: const Duration(seconds: 2),
+                  ),
+                );
+              },
+              icon: const Icon(Icons.keyboard_command_key),
+            ),
+          AppStyle.hGap8,
+          Obx(
+            () => IconButton(
+              onPressed: roomController.sendingDanmaku.value
+                  ? null
+                  : () => submit(inputController.text),
+              icon: roomController.sendingDanmaku.value
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.send),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }

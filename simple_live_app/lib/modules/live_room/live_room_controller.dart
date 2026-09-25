@@ -272,14 +272,27 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     if (!guard.configured || !_guardPlatforms.contains(site.id)) return;
     if (!danmakuLogined) return;
     try {
-      final accountId = await guard.ensureAccount(site.id);
+      var accountId = await guard.ensureAccount(site.id);
       if (accountId == null) return;
-      await guard.enterRoom(
-        accountId: accountId,
-        roomId: _guardRoomId,
-        webRid: _guardWebRid,
-        extra: _guardExtraArgs(),
-      );
+      try {
+        await guard.enterRoom(
+          accountId: accountId,
+          roomId: _guardRoomId,
+          webRid: _guardWebRid,
+          extra: _guardExtraArgs(),
+        );
+      } on DioException catch (e) {
+        if (e.response?.statusCode != 404) rethrow;
+        // 服务端会话丢失：重新注册后再进一次
+        accountId = await guard.reregister(site.id);
+        if (accountId == null) return;
+        await guard.enterRoom(
+          accountId: accountId,
+          roomId: _guardRoomId,
+          webRid: _guardWebRid,
+          extra: _guardExtraArgs(),
+        );
+      }
     } catch (e) {
       Log.logPrint("弹幕服务进入直播间失败: $e");
     }
@@ -324,7 +337,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       }
 
       if (accountId != null) {
-        Future<DanmakuSendResult> sendOnce(String id) async {
+        Future<DanmakuSendResult> sendOnce(String id, {bool retried = false}) async {
           try {
             final data = await guard.sendDanmaku(
               platform: site.id,
@@ -342,11 +355,12 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
               errorMessage: data["message"]?.toString() ?? "",
             );
           } on DioException catch (e) {
-            if (e.response?.statusCode == 404) {
-              // 服务端会话丢失：用本地 cookie 重新注册并当场重试一次
+            if (e.response?.statusCode == 404 && !retried) {
+              // 服务端会话丢失（如容器重启）：accountId 由 cookie 哈希决定，
+              // 重新注册得到的 ID 与原 ID 相同，故不能比较 ID，注册成功即重试一次
               final newId = await guard.reregister(site.id);
-              if (newId != null && newId != id) {
-                return sendOnce(newId);
+              if (newId != null) {
+                return sendOnce(newId, retried: true);
               }
             }
             final data = e.response?.data;
