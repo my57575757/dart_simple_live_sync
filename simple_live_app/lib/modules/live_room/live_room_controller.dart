@@ -856,14 +856,13 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     // 初始化播放器并设置 ao 参数
     await initializePlayer();
 
-    await player.open(Playlist(mediaList));
+    await player.open(Playlist(mediaList, index: currentLineIndex));
   }
 
-  void setPlayer() async {
-    currentLineInfo.value = "线路${currentLineIndex + 1}";
-    errorMsg.value = "";
-
-    await player.jump(currentLineIndex);
+  // 不能用 player.jump：jump 内部的 play() 在 EOF 时会先 seek，
+  // 旧版 libmpv 在 EOF 状态 seek 会断言失败导致原生崩溃
+  void setPlayer() {
+    initPlaylist();
   }
 
   @override
