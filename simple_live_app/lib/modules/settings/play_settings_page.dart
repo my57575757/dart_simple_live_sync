@@ -8,6 +8,7 @@ import 'package:simple_live_app/widgets/settings/settings_card.dart';
 import 'package:simple_live_app/widgets/settings/settings_menu.dart';
 import 'package:simple_live_app/widgets/settings/settings_number.dart';
 import 'package:simple_live_app/widgets/settings/settings_switch.dart';
+import 'package:simple_live_app/services/background_audio_service.dart';
 
 class PlaySettingsPage extends GetView<AppSettingsController> {
   const PlaySettingsPage({Key? key}) : super(key: key);
@@ -126,6 +127,20 @@ class PlaySettingsPage extends GetView<AppSettingsController> {
                     value: controller.playerForceHttps.value,
                     onChanged: (e) {
                       controller.setPlayerForceHttps(e);
+                    },
+                  ),
+                ),
+                AppStyle.divider,
+                Obx(
+                  () => SettingsSwitch(
+                    title: "关屏后台播放声音",
+                    subtitle: "锁屏后继续播放直播声音，通知栏显示播放通知",
+                    value: controller.backgroundAudioPlay.value,
+                    onChanged: (e) async {
+                      if (e) {
+                        await BackgroundAudioService.instance.ensurePermission();
+                      }
+                      controller.setBackgroundAudioPlay(e);
                     },
                   ),
                 ),

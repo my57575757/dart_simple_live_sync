@@ -27,6 +27,7 @@ import 'package:simple_live_app/services/db_service.dart';
 import 'package:simple_live_app/services/follow_service.dart';
 import 'package:simple_live_app/services/guard_server_service.dart';
 import 'package:simple_live_app/services/bilibili_account_service.dart';
+import 'package:simple_live_app/services/background_audio_service.dart';
 import 'package:simple_live_app/services/douyu_account_service.dart';
 import 'package:simple_live_app/services/huya_account_service.dart';
 import 'package:simple_live_app/services/douyin_account_service.dart';
@@ -157,6 +158,13 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     var volumeVal = DBService.instance.getVolume(id);
     double volume = volumeVal!.toDouble();
     player.setVolume(volume);
+
+    BackgroundAudioService.instance.setStopRequestedHandler(() async {
+      _audioServiceActive = false;
+      BackgroundAudioService.instance.markStopped();
+      await player.pause();
+    });
+
     super.onInit();
   }
 
@@ -216,6 +224,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     //messages.clear();
     superChats.clear();
     liveDanmaku.stop();
+    _danmakuSuspended = false;
 
     loadData();
   }
@@ -857,12 +866,87 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     await initializePlayer();
 
     await player.open(Playlist(mediaList, index: currentLineIndex));
+
+    // 后台状态下被重开（断线重试等）时，新流会自行播放，需重新应用后台策略
+    if ((Platform.isAndroid || Platform.isIOS) &&
+        isBackground &&
+        !pipActive) {
+      await onBackgroundPlaybackPolicyChanged();
+    }
   }
 
   // 不能用 player.jump：jump 内部的 play() 在 EOF 时会先 seek，
   // 旧版 libmpv 在 EOF 状态 seek 会断言失败导致原生崩溃
   void setPlayer() {
     initPlaylist();
+  }
+
+  /// 弹幕连接是否因进入后台（非 PiP）被挂起
+  bool _danmakuSuspended = false;
+
+  /// 音频前台服务是否在运行
+  bool _audioServiceActive = false;
+
+  /// 关屏听声：Android 且设置开关已开启
+  bool get _backgroundAudioEnabled =>
+      Platform.isAndroid &&
+      AppSettingsController.instance.backgroundAudioPlay.value;
+
+  /// 前后台 / PiP 状态变化后的播放策略
+  /// PiP：Activity 虽 paused，但视频必须继续，不暂停、不开音频服务
+  /// 后台 + 开关：关视频轨、停弹幕，启动前台服务继续播放声音
+  /// 后台 + 未开启：完全暂停
+  @override
+  Future<void> onBackgroundPlaybackPolicyChanged() async {
+    if (!Platform.isAndroid && !Platform.isIOS) {
+      return;
+    }
+    if (pipActive) {
+      return;
+    }
+
+    if (!isBackground) {
+      if (_audioServiceActive) {
+        _audioServiceActive = false;
+        await BackgroundAudioService.instance.stop();
+      }
+      await (player.platform as NativePlayer).setProperty('vid', 'auto');
+      await player.play();
+      if (_danmakuSuspended) {
+        _danmakuSuspended = false;
+        final data = detail.value?.danmakuData;
+        if (data != null) {
+          unawaited(liveDanmaku.start(data));
+        }
+      }
+    } else if (_backgroundAudioEnabled) {
+      if (!_danmakuSuspended) {
+        _danmakuSuspended = true;
+        liveDanmaku.stop();
+      }
+      await (player.platform as NativePlayer).setProperty('vid', 'no');
+      await player.play();
+      if (!_audioServiceActive) {
+        _audioServiceActive = true;
+        await BackgroundAudioService.instance.start(
+          title: detail.value?.title ?? "Simple Live",
+          subtitle: detail.value?.userName ?? "",
+        );
+      }
+    } else {
+      if (!_danmakuSuspended) {
+        _danmakuSuspended = true;
+        liveDanmaku.stop();
+      }
+      await player.pause();
+    }
+  }
+
+  Future<void> _stopAudioServiceIfActive() async {
+    if (_audioServiceActive) {
+      _audioServiceActive = false;
+      await BackgroundAudioService.instance.stop();
+    }
   }
 
   @override
@@ -884,6 +968,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     // 遍历线路，如果全部链接都断开就是直播结束了
     if (playUrls.length - 1 == currentLineIndex) {
       liveStatus.value = false;
+      unawaited(_stopAudioServiceIfActive());
     } else {
       changePlayLine(currentLineIndex + 1);
 
@@ -910,6 +995,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     if (playUrls.length - 1 == currentLineIndex) {
       errorMsg.value = "播放失败";
       SmartDialog.showToast("播放失败:$error");
+      unawaited(_stopAudioServiceIfActive());
     } else {
       //currentLineIndex += 1;
       //setPlayer();
@@ -1422,6 +1508,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     resetZoom();
 
     // 重新设置 LiveDanmaku
+    _danmakuSuspended = false;
     liveDanmaku = site.liveSite.getDanmaku();
 
     // 停止播放
@@ -1450,11 +1537,13 @@ ${error?.stackTrace}''');
       //进入后台，关闭弹幕
       danmakuController?.clear();
       isBackground = true;
+      unawaited(onBackgroundPlaybackPolicyChanged());
     } else
     //返回前台
     if (state == AppLifecycleState.resumed) {
       Log.d("返回前台");
       isBackground = false;
+      unawaited(onBackgroundPlaybackPolicyChanged());
     }
   }
 
@@ -1498,6 +1587,11 @@ ${error?.stackTrace}''');
     unawaited(_exitGuardRoom());
 
     liveDanmaku.stop();
+    if (_audioServiceActive) {
+      _audioServiceActive = false;
+      unawaited(BackgroundAudioService.instance.stop());
+    }
+    BackgroundAudioService.instance.setStopRequestedHandler(null);
     danmakuController = null;
     _liveDurationTimer?.cancel(); // 页面关闭时取消定时器
     super.onClose();

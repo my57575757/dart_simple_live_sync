@@ -84,6 +84,9 @@ class AppSettingsController extends GetxController {
     playerForceHttps.value = LocalStorageService.instance
         .getValue(LocalStorageService.kPlayerForceHttps, false);
 
+    backgroundAudioPlay.value = LocalStorageService.instance
+        .getValue(LocalStorageService.kBackgroundAudioPlay, false);
+
     autoFullScreen.value = LocalStorageService.instance
         .getValue(LocalStorageService.kAutoFullScreen, false);
 
@@ -548,5 +551,12 @@ class AppSettingsController extends GetxController {
     playerForceHttps.value = e;
     LocalStorageService.instance
         .setValue(LocalStorageService.kPlayerForceHttps, e);
+  }
+
+  var backgroundAudioPlay = false.obs;
+  void setBackgroundAudioPlay(bool e) {
+    backgroundAudioPlay.value = e;
+    LocalStorageService.instance
+        .setValue(LocalStorageService.kBackgroundAudioPlay, e);
   }
 }

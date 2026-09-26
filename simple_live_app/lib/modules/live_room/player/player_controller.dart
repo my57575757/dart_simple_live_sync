@@ -239,6 +239,12 @@ mixin PlayerDanmakuMixin on PlayerStateMixin {
 mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
   final DeviceInfoPlugin deviceInfo = DeviceInfoPlugin();
 
+  /// 是否处于画中画：PiP 时 Activity 虽为 paused，但视频必须继续播放
+  bool pipActive = false;
+
+  /// 前后台 / PiP 状态变化后的播放策略钩子，由具体控制器覆盖
+  Future<void> onBackgroundPlaybackPolicyChanged() async {}
+
   final pip = Floating();
   StreamSubscription<PiPStatus>? _pipSubscription;
 
@@ -458,16 +464,28 @@ mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
     } else {
       ratio = const Rational.landscape();
     }
-    await pip.enable(
-      ImmediatePiP(
-        aspectRatio: ratio,
-      ),
-    );
+    // 用户明确进入 PiP，先乐观置位：紧接着的 paused 回调需据此跳过后台策略
+    pipActive = true;
+    try {
+      await pip.enable(
+        ImmediatePiP(
+          aspectRatio: ratio,
+        ),
+      );
+    } catch (e) {
+      pipActive = false;
+      rethrow;
+    }
 
     _pipSubscription ??= pip.pipStatusStream.listen((event) {
       if (event == PiPStatus.disabled) {
+        pipActive = false;
         danmakuController?.clear();
         showDanmakuState.value = danmakuStateBeforePIP;
+        unawaited(onBackgroundPlaybackPolicyChanged());
+      } else if (event == PiPStatus.enabled) {
+        pipActive = true;
+        unawaited(onBackgroundPlaybackPolicyChanged());
       }
       Log.w(event.toString());
     });

@@ -54,6 +54,7 @@ class DouyuDanmaku extends LiveDanmaku {
 
   @override
   Future start(dynamic args) async {
+    _stopped = false;
     danmakuArgs = args is DouyuDanmakuArgs
         ? args
         : DouyuDanmakuArgs(roomId: int.tryParse(args.toString()) ?? 0);
