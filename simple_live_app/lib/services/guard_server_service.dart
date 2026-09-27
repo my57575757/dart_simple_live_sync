@@ -154,7 +154,8 @@ class GuardServerService extends GetxService {
     await dio.delete<dynamic>("/api/account/$accountId", options: _options);
   }
 
-  Future<void> enterRoom({
+  /// 进入直播间；返回房间状态：joined 已加入粉丝团、starGuard 星守护房间
+  Future<Map<String, dynamic>> enterRoom({
     required String accountId,
     required String roomId,
     String webRid = "",
@@ -164,7 +165,7 @@ class GuardServerService extends GetxService {
       baseUrl: serverUrl,
       connectTimeout: const Duration(seconds: 30),
     ));
-    await dio.post<dynamic>(
+    final res = await dio.post<dynamic>(
       "/api/room/enter",
       data: {
         "accountId": accountId,
@@ -174,6 +175,7 @@ class GuardServerService extends GetxService {
       },
       options: _options,
     );
+    return Map<String, dynamic>.from(res.data["data"] as Map);
   }
 
   Future<Map<String, dynamic>> heartbeat({

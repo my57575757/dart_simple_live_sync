@@ -451,7 +451,7 @@ Widget buildGuardActions(LiveRoomController controller) {
             ),
           ),
           IconButton(
-            tooltip: "粉丝团灯牌",
+            tooltip: controller.guardStarRoom.value ? "点点星光" : "粉丝团灯牌",
             onPressed: busy ? null : () => controller.sendFansBadge(),
             icon: const Icon(
               Remix.medal_line,

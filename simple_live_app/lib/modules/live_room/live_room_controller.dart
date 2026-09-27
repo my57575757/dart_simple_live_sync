@@ -286,22 +286,26 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       var accountId = await guard.ensureAccount(site.id);
       if (accountId == null) return;
       try {
-        await guard.enterRoom(
-          accountId: accountId,
-          roomId: _guardRoomId,
-          webRid: _guardWebRid,
-          extra: _guardExtraArgs(),
+        _applyGuardStatus(
+          await guard.enterRoom(
+            accountId: accountId,
+            roomId: _guardRoomId,
+            webRid: _guardWebRid,
+            extra: _guardExtraArgs(),
+          ),
         );
       } on DioException catch (e) {
         if (e.response?.statusCode != 404) rethrow;
         // 服务端会话丢失：重新注册后再进一次
         accountId = await guard.reregister(site.id);
         if (accountId == null) return;
-        await guard.enterRoom(
-          accountId: accountId,
-          roomId: _guardRoomId,
-          webRid: _guardWebRid,
-          extra: _guardExtraArgs(),
+        _applyGuardStatus(
+          await guard.enterRoom(
+            accountId: accountId,
+            roomId: _guardRoomId,
+            webRid: _guardWebRid,
+            extra: _guardExtraArgs(),
+          ),
         );
       }
       _startGuardHeartbeat(accountId);
@@ -355,6 +359,8 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   /// 退出直播间时让服务端页面回到首页；best-effort，失败只记日志
   Future<void> _exitGuardRoom() async {
     _stopGuardHeartbeat();
+    guardJoined.value = false;
+    guardStarRoom.value = false;
     final guard = GuardServerService.instance;
     if (!guard.configured || !_guardPlatforms.contains(site.id)) return;
     final accountId = guard.savedAccountId(site.id);
@@ -465,6 +471,15 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
 
   final sendingAction = false.obs;
 
+  // enter 返回的房间状态：已加入粉丝团 / 星守护房间
+  final guardJoined = false.obs;
+  final guardStarRoom = false.obs;
+
+  void _applyGuardStatus(Map<String, dynamic> status) {
+    guardJoined.value = status["joined"] == true;
+    guardStarRoom.value = status["starGuard"] == true;
+  }
+
   Future<void> _sendGuardAction(String action) async {
     if (sendingAction.value) return;
     final guard = GuardServerService.instance;
@@ -497,6 +512,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       if (data["success"] != true) {
         SmartDialog.showToast(data["message"]?.toString() ?? "操作失败");
       } else {
+        if (action == "join_club") guardJoined.value = true;
         // 主动操作已在服务端抢占房间，恢复本端心跳保活
         _startGuardHeartbeat(accountId);
       }
@@ -517,12 +533,15 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   Future<void> like() => _sendGuardAction("like");
 
   Future<void> sendFansBadge() async {
+    final isStarRoom = site.id == "douyin" && guardStarRoom.value;
     final priceText = site.id == "douyin"
-        ? "普通房间送粉丝团灯牌（1 抖币）；星守护房间将送出点点星光（8 抖币）"
+        ? (isStarRoom
+            ? "星守护房间将送出点点星光（8 抖币）"
+            : "送出粉丝团灯牌（1 抖币）")
         : "免费";
     final confirmed = await Get.dialog<bool>(
       AlertDialog(
-        title: const Text("送出粉丝团灯牌"),
+        title: Text(isStarRoom ? "送出点点星光" : "送出粉丝团灯牌"),
         content: Text("$priceText，确认送给主播吗？"),
         actions: [
           TextButton(
@@ -542,9 +561,14 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   }
 
   Future<void> joinFansClub() async {
+    // 客户端先拦一道；服务端入团接口同样校验已入团状态
+    if (guardJoined.value) {
+      SmartDialog.showToast("你已经加入该主播的粉丝团，无需重复加入");
+      return;
+    }
     final contentText = site.id == "douyin"
         ? "将消耗 1 抖币，确认加入主播的粉丝团吗？"
-        : "将投喂 1 个人气票（100 金瓜子），确认加入主播的粉丝团吗？";
+        : "将消耗 100 金瓜子（1 电池）购买粉丝团灯牌，确认加入主播的粉丝团吗？";
     final confirmed = await Get.dialog<bool>(
       AlertDialog(
         title: const Text("加入粉丝团"),
