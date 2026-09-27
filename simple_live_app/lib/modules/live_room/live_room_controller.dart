@@ -533,6 +533,14 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   Future<void> like() => _sendGuardAction("like");
 
   Future<void> sendFansBadge() async {
+    // 灯牌为粉丝团成员专属：未入团或粉丝团已失效时，先引导入团
+    // （服务端 sendFansBadge 同样会拒绝非成员）
+    if (site.id == "douyin" && !guardJoined.value) {
+      SmartDialog.showToast("请先加入主播的粉丝团");
+      await joinFansClub();
+      return;
+    }
+
     final isStarRoom = site.id == "douyin" && guardStarRoom.value;
     final priceText = site.id == "douyin"
         ? (isStarRoom
