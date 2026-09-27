@@ -128,6 +128,27 @@ class GuardServerService extends GetxService {
     return Map<String, dynamic>.from(res.data["data"] as Map);
   }
 
+  /// 直播间互动动作：like 点赞、fans_badge 送粉丝团灯牌
+  Future<Map<String, dynamic>> sendAction({
+    required String accountId,
+    required String roomId,
+    String webRid = "",
+    required String action,
+  }) async {
+    final dio = Dio(BaseOptions(baseUrl: serverUrl, connectTimeout: const Duration(seconds: 30)));
+    final res = await dio.post<dynamic>(
+      "/api/action",
+      data: {
+        "accountId": accountId,
+        "roomId": roomId,
+        "webRid": webRid,
+        "action": action,
+      },
+      options: _options,
+    );
+    return Map<String, dynamic>.from(res.data["data"] as Map);
+  }
+
   Future<void> deleteAccount(String accountId) async {
     final dio = Dio(BaseOptions(baseUrl: serverUrl));
     await dio.delete<dynamic>("/api/account/$accountId", options: _options);

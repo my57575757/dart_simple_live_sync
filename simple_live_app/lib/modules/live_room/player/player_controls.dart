@@ -292,6 +292,42 @@ Widget buildFullControls(
                       color: Colors.white,
                     ),
                   ),
+                  Obx(() {
+                    final enabled = controller.guardActionEnabled;
+                    final busy = controller.sendingAction.value;
+                    return Visibility(
+                      visible: enabled,
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          IconButton(
+                            tooltip: "点赞",
+                            onPressed: busy ? null : () => controller.like(),
+                            icon: const Icon(
+                              Remix.thumb_up_line,
+                              color: Colors.white,
+                            ),
+                          ),
+                          IconButton(
+                            tooltip: "粉丝团灯牌",
+                            onPressed: busy ? null : () => controller.sendFansBadge(),
+                            icon: const Icon(
+                              Remix.medal_line,
+                              color: Colors.white,
+                            ),
+                          ),
+                          IconButton(
+                            tooltip: "加入粉丝团",
+                            onPressed: busy ? null : () => controller.joinFansClub(),
+                            icon: const Icon(
+                              Remix.team_line,
+                              color: Colors.white,
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  }),
                   Obx(
                     () => Padding(
                       padding: const EdgeInsets.only(left: 8.0),

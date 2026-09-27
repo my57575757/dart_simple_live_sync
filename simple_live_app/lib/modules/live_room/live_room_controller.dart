@@ -457,7 +457,114 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     }
   }
 
-  /// 全屏时按回车弹出弹幕输入框
+  /// 点赞/送灯牌是否可用：仅抖音、B站，且已配置签名服务并登录
+  bool get guardActionEnabled =>
+      GuardServerService.instance.configured &&
+      (site.id == "douyin" || site.id == "bilibili") &&
+      danmakuLogined;
+
+  final sendingAction = false.obs;
+
+  Future<void> _sendGuardAction(String action) async {
+    if (sendingAction.value) return;
+    final guard = GuardServerService.instance;
+    sendingAction.value = true;
+    try {
+      var accountId = await guard.ensureAccount(site.id);
+      if (accountId == null) {
+        SmartDialog.showToast("请先登录并配置弹幕签名服务");
+        return;
+      }
+
+      Future<Map<String, dynamic>> runOnce(String id, {bool retried = false}) async {
+        try {
+          return await guard.sendAction(
+            accountId: id,
+            roomId: _guardRoomId,
+            webRid: _guardWebRid,
+            action: action,
+          );
+        } on DioException catch (e) {
+          if (e.response?.statusCode == 404 && !retried) {
+            final newId = await guard.reregister(site.id);
+            if (newId != null) return runOnce(newId, retried: true);
+          }
+          rethrow;
+        }
+      }
+
+      final data = await runOnce(accountId);
+      if (data["success"] != true) {
+        SmartDialog.showToast(data["message"]?.toString() ?? "操作失败");
+      } else {
+        // 主动操作已在服务端抢占房间，恢复本端心跳保活
+        _startGuardHeartbeat(accountId);
+      }
+    } on DioException catch (e) {
+      final data = e.response?.data;
+      final msg = data is Map ? data["message"] : null;
+      SmartDialog.showToast(
+        msg is String && msg.isNotEmpty ? msg : "网络请求失败",
+      );
+    } catch (e) {
+      Log.logPrint("直播间互动操作异常: $e");
+      SmartDialog.showToast("操作失败，请稍后重试");
+    } finally {
+      sendingAction.value = false;
+    }
+  }
+
+  Future<void> like() => _sendGuardAction("like");
+
+  Future<void> sendFansBadge() async {
+    final priceText = site.id == "douyin"
+        ? "普通房间送粉丝团灯牌（1 抖币）；星守护房间将送出点点星光（8 抖币）"
+        : "免费";
+    final confirmed = await Get.dialog<bool>(
+      AlertDialog(
+        title: const Text("送出粉丝团灯牌"),
+        content: Text("$priceText，确认送给主播吗？"),
+        actions: [
+          TextButton(
+            onPressed: () => Get.back(result: false),
+            child: const Text("取消"),
+          ),
+          TextButton(
+            onPressed: () => Get.back(result: true),
+            child: const Text("送出"),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true) {
+      await _sendGuardAction("fans_badge");
+    }
+  }
+
+  Future<void> joinFansClub() async {
+    final contentText = site.id == "douyin"
+        ? "将消耗 1 抖币，确认加入主播的粉丝团吗？"
+        : "将投喂 1 个人气票（100 金瓜子），确认加入主播的粉丝团吗？";
+    final confirmed = await Get.dialog<bool>(
+      AlertDialog(
+        title: const Text("加入粉丝团"),
+        content: Text(contentText),
+        actions: [
+          TextButton(
+            onPressed: () => Get.back(result: false),
+            child: const Text("取消"),
+          ),
+          TextButton(
+            onPressed: () => Get.back(result: true),
+            child: const Text("加入"),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true) {
+      await _sendGuardAction("join_club");
+    }
+  }
   @override
   void handleKeyboardKey(KeyEvent event) {
     if (event is KeyDownEvent &&
