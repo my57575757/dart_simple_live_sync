@@ -155,7 +155,7 @@ class HuyaSendMessageFormat extends TarsStruct {
   }
 }
 
-class HuyaSendMessageReq extends TarsStruct {
+class HuyaSendMessageBody extends TarsStruct {
   HuyaUserId tUserId = HuyaUserId();
   int lTid = 0;
   int lSid = 0;
@@ -167,7 +167,6 @@ class HuyaSendMessageReq extends TarsStruct {
   int lPid = 0;
   List<HuyaMessageTagInfo> vTagInfo = [HuyaMessageTagInfo()];
   HuyaSendMessageFormat tSenceFormat = HuyaSendMessageFormat();
-  int iMessageMode = 0;
 
   @override
   void readFrom(TarsInputStream _is) {
@@ -178,11 +177,10 @@ class HuyaSendMessageReq extends TarsStruct {
     iShowMode = _is.read(iShowMode, 4, false);
     tFormat = _is.read(tFormat, 5, false);
     tBulletFormat = _is.read(tBulletFormat, 6, false);
-    vAtSomeone = _is.read(vAtSomeone, 7, false);
+    vAtSomeone = _is.readList(vAtSomeone, 7, false);
     lPid = _is.read(lPid, 8, false);
-    vTagInfo = _is.read(vTagInfo, 9, false);
+    vTagInfo = _is.readList(vTagInfo, 9, false);
     tSenceFormat = _is.read(tSenceFormat, 10, false);
-    iMessageMode = _is.read(iMessageMode, 11, false);
   }
 
   @override
@@ -198,14 +196,39 @@ class HuyaSendMessageReq extends TarsStruct {
     _os.write(lPid, 8);
     _os.writeList(vTagInfo, 9);
     _os.write(tSenceFormat, 10);
-    _os.write(iMessageMode, 11);
   }
 
   @override
-  Object deepCopy() => HuyaSendMessageReq()..sContent = sContent;
+  Object deepCopy() => HuyaSendMessageBody()..sContent = sContent;
 
   @override
   void displayAsString(StringBuffer sb, int level) {
     TarsDisplayer(sb, level: level).DisplayString(sContent, "sContent");
+  }
+}
+
+class HuyaSendMessageReq extends TarsStruct {
+  HuyaSendMessageBody tBody = HuyaSendMessageBody();
+  int iMessageMode = 0;
+
+  @override
+  void readFrom(TarsInputStream _is) {
+    tBody = _is.read(tBody, 0, false);
+    iMessageMode = _is.read(iMessageMode, 11, false);
+  }
+
+  @override
+  void writeTo(TarsOutputStream _os) {
+    _os.write(tBody, 0);
+    _os.write(iMessageMode, 11);
+  }
+
+  @override
+  Object deepCopy() => HuyaSendMessageReq()..tBody = tBody;
+
+  @override
+  void displayAsString(StringBuffer sb, int level) {
+    TarsDisplayer(sb, level: level)
+        .DisplayString(tBody.sContent, "sContent");
   }
 }

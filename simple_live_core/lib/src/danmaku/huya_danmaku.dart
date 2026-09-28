@@ -7,6 +7,7 @@ import 'package:simple_live_core/simple_live_core.dart';
 import 'package:simple_live_core/src/common/web_socket_util.dart';
 import 'package:simple_live_core/src/model/tars/huya_danmaku.dart';
 import 'package:simple_live_core/src/model/tars/huya_send_message_req.dart';
+import 'package:simple_live_core/src/model/tars/huya_send_message_rsp.dart';
 import 'package:simple_live_core/src/model/tars/huya_user_id.dart';
 import 'package:simple_live_core/src/model/tars/huya_verify_cookie.dart';
 import 'package:tars_dart/tars/codec/tars_input_stream.dart';
@@ -53,7 +54,7 @@ class HuyaDanmaku extends LiveDanmaku {
 
   late HuyaDanmakuArgs danmakuArgs;
 
-  static const String kHuyaUA = "webh5&2004231432&websocket";
+  static const String kHuyaUA = "webh5&2609241143&websocket";
 
   int _requestId = 0;
   bool _verified = false;
@@ -181,21 +182,39 @@ class HuyaDanmaku extends LiveDanmaku {
     }
 
     var req = HuyaSendMessageReq();
-    req.tUserId = HuyaUserId()
+    var body = req.tBody;
+    body.tUserId = HuyaUserId()
       ..lUid = int.tryParse(_uidStr) ?? 0
       ..sGuid = _guidStr
       ..sHuYaUA = kHuyaUA
       ..sCookie = danmakuArgs.cookie
       ..sDeviceInfo = "chrome";
-    req.lPid = danmakuArgs.ayyuid;
-    req.sContent = message;
+    body.lTid = danmakuArgs.topSid;
+    body.lSid = danmakuArgs.subSid;
+    body.sContent = message;
+    body.tFormat = HuyaContentFormat()
+      ..iFontColor = 255
+      ..iFontSize = 4
+      ..iNickNameFontColor = 255
+      ..iDarkFontColor = 255
+      ..iDarkNickNameFontColor = 255;
+    body.tBulletFormat = HuyaBulletFormat()
+      ..iFontColor = 255
+      ..iFontSize = 4
+      ..iTextSpeed = 1;
+    body.vAtSomeone = [];
+    body.lPid = danmakuArgs.subSid;
+    body.vTagInfo = [];
 
     var wup = TarsUniPacket();
     wup.servantName = "liveui";
     wup.funcName = "sendMessage";
     var id = ++_requestId;
     wup.requestId = id;
-    wup.put("tReq", req);
+    // WS liveui 的 tReq 参数直接读取结构字段流；put 会多包一层 struct 外壳
+    var ros = TarsOutputStream();
+    req.writeTo(ros);
+    wup.newData["tReq"] = ros.toUint8List();
     var vData = wup.encode();
 
     var cmd = TarsOutputStream();
@@ -273,8 +292,15 @@ class HuyaDanmaku extends LiveDanmaku {
         }
         _pendingWup.remove(id);
         if (!completer.isCompleted) {
-          // 响应携带 tRsp 即服务器受理；其内容为弹幕广播体，无独立状态码
-          completer.complete(packet.containsKey("tRsp") ? 0 : -1);
+          if (!packet.newData.containsKey("tRsp")) {
+            completer.complete(-1);
+            return;
+          }
+          var rsp = HuyaSendMessageRsp();
+          rsp.readFrom(
+            TarsInputStream(packet.newData["tRsp"]!),
+          );
+          completer.complete(rsp.tStatus.iStatus);
         }
         return;
       }
