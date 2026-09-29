@@ -43,6 +43,21 @@ class WebLoginController extends GetxController {
   /// Cookie 检查进行中占位标志；在 await 之前同步置位，杜绝两次 onLoadStop 交叠
   bool _checking = false;
 
+  /// TTGW 444 封锁页（Access Denied / Oncall ID）自动重载退避秒数
+  static const List<int> _blockRetryDelays = [3, 5, 10, 15];
+  int _blockRetries = 0;
+
+  /// 封锁页特征同时命中才判定，避免误伤正常页面
+  static const String _blockDetectScript = r'''
+(function(){
+  var b = document.body ? document.body.innerText : "";
+  var t = (document.title || "") + "|" + b.slice(0, 300);
+  return t.indexOf("Access Denied") > -1 &&
+         t.indexOf("X-TT-System-Error") > -1 &&
+         t.indexOf("Oncall ID") > -1;
+})()
+''';
+
   /// 重定向模式：Twitch 授权按钮会被周期性完整性校验反复禁用，
   /// 用户手动点击常落在禁用窗口；轮询在启用窗口自动点击一次
   Timer? _pollTimer;
@@ -69,6 +84,18 @@ class WebLoginController extends GetxController {
       return;
     }
     _checking = true;
+    // 抖音边缘网关对匿名请求按 IP 限速，超限返回 444 封锁页；
+    // 退避后自动重载，封锁窗口通常数秒至数分钟
+    bool blocked = false;
+    try {
+      blocked = await controller.evaluateJavascript(
+        source: _blockDetectScript,
+      ) as bool;
+    } catch (_) {}
+    if (blocked) {
+      await _reloadAfterBlock(controller);
+      return;
+    }
     var cookies = await cookieManager.getCookies(
       url: WebUri(args.cookieUrl),
     );
@@ -89,6 +116,22 @@ class WebLoginController extends GetxController {
       // 尚未集齐必需 Cookie，放行后续 onLoadStop 继续检查
       _checking = false;
     }
+  }
+
+  Future<void> _reloadAfterBlock(InAppWebViewController controller) async {
+    if (_blockRetries >= _blockRetryDelays.length) {
+      _checking = false;
+      SmartDialog.showToast("访问受限，请稍后关闭页面重新登录");
+      return;
+    }
+    final seconds = _blockRetryDelays[_blockRetries];
+    _blockRetries++;
+    SmartDialog.showToast("访问受限，$seconds 秒后自动重试");
+    await Future.delayed(Duration(seconds: seconds));
+    _checking = false;
+    try {
+      await controller.reload();
+    } catch (_) {}
   }
 
   /// 重定向提取模式：匹配则拦截并解析 fragment；返回 true 表示已处理
