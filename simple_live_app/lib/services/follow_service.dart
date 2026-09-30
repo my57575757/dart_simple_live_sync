@@ -17,6 +17,7 @@ import 'package:simple_live_app/app/utils.dart';
 import 'package:simple_live_app/models/db/follow_user.dart';
 import 'package:simple_live_app/models/db/follow_user_tag.dart';
 import 'package:simple_live_app/services/db_service.dart';
+import 'package:simple_live_core/simple_live_core.dart';
 
 class FollowService extends GetxService {
   StreamSubscription<dynamic>? subscription;
@@ -47,6 +48,9 @@ class FollowService extends GetxService {
   var updating = false.obs;
 
   Timer? updateTimer;
+
+  /// 抖音返回 444 后置为 true：停止自动获取抖音直播状态，由用户手动刷新解除
+  bool douyinBlocked = false;
 
   @override
   void onInit() {
@@ -148,7 +152,8 @@ class FollowService extends GetxService {
     }
   }
 
-  Future<void> loadData({bool updateStatus = true}) async {
+  Future<void> loadData(
+      {bool updateStatus = true, bool manual = false}) async {
     var list = DBService.instance.getFollowList();
     getAllTagList();
     if (list.isEmpty) {
@@ -158,7 +163,7 @@ class FollowService extends GetxService {
     }
     followList.assignAll(list);
     if (updateStatus) {
-      startUpdateStatus();
+      startUpdateStatus(manual: manual);
     }
   }
 
@@ -209,9 +214,15 @@ class FollowService extends GetxService {
   /// 等待重试的定时器
   final Set<Timer> _retryTimers = <Timer>{};
 
+  @visibleForTesting
+  int get retryTimerCount => _retryTimers.length;
+
   static const int _retryDelaySeconds = 15;
 
-  void startUpdateStatus() {
+  void startUpdateStatus({bool manual = false}) {
+    if (manual) {
+      douyinBlocked = false;
+    }
     _runGeneration++;
     var generation = _runGeneration;
     _settledIds.clear();
@@ -235,6 +246,12 @@ class FollowService extends GetxService {
     Future<void> worker() async {
       while (taskQueue.isNotEmpty) {
         var item = taskQueue.removeFirst();
+        if (item.siteId == Constant.kDouyin && douyinBlocked) {
+          item.liveStatus.value = 0;
+          item.liveStartTime = null;
+          _onItemSettled(item);
+          continue;
+        }
         await updateLiveStatus(item, generation: generation);
       }
     }
@@ -287,7 +304,12 @@ class FollowService extends GetxService {
       Log.logPrint(e);
       item.liveStatus.value = 0;
       item.liveStartTime = null;
-      _scheduleRetry(item, generation, e);
+      if (e is CoreError && e.statusCode == 444) {
+        // 抖音风控：停止自动获取其直播状态，由用户手动刷新
+        douyinBlocked = true;
+      } else {
+        _scheduleRetry(item, generation, e);
+      }
     }
     // 新一轮刷新已开始，本轮结果作废
     if (generation != _runGeneration) {
@@ -323,6 +345,7 @@ class FollowService extends GetxService {
     timer = Timer(const Duration(seconds: _retryDelaySeconds), () {
       _retryTimers.remove(timer);
       if (generation != _runGeneration ||
+          douyinBlocked ||
           !followList.any((e) => e.id == item.id)) {
         return;
       }

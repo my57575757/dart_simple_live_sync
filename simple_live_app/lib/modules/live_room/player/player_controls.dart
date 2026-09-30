@@ -908,7 +908,7 @@ void showFollowUser(LiveRoomController controller) {
       () => Stack(
         children: [
           RefreshIndicator(
-            onRefresh: FollowService.instance.loadData,
+            onRefresh: () => FollowService.instance.loadData(manual: true),
             child: ListView.builder(
               itemCount: FollowService.instance.liveList.length,
               itemBuilder: (_, i) {
@@ -938,7 +938,8 @@ void showFollowUser(LiveRoomController controller) {
               child: Obx(
                 () => DesktopRefreshButton(
                   refreshing: FollowService.instance.updating.value,
-                  onPressed: FollowService.instance.loadData,
+                  onPressed: () =>
+                      FollowService.instance.loadData(manual: true),
                 ),
               ),
             ),

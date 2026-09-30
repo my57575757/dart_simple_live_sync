@@ -133,7 +133,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
 
   /// 直播间加载失败
   var loadError = false.obs;
-  Error? error;
+  Object? error;
 
   // 开播时长状态变量
   var liveDuration = "00:00:00".obs;
@@ -908,7 +908,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       Log.logPrint(e);
       //SmartDialog.showToast(e.toString());
       loadError.value = true;
-      error = e as Error;
+      error = e;
     } finally {
       SmartDialog.dismiss(status: SmartStatus.loading);
     }
@@ -1493,7 +1493,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
         () => Stack(
           children: [
             RefreshIndicator(
-              onRefresh: FollowService.instance.loadData,
+              onRefresh: () => FollowService.instance.loadData(manual: true),
               child: ListView.builder(
                 itemCount: FollowService.instance.liveList.length,
                 itemBuilder: (_, i) {
@@ -1523,7 +1523,8 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
                 child: Obx(
                   () => DesktopRefreshButton(
                     refreshing: FollowService.instance.updating.value,
-                    onPressed: FollowService.instance.loadData,
+                    onPressed: () =>
+                        FollowService.instance.loadData(manual: true),
                   ),
                 ),
               ),
@@ -1663,7 +1664,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
 错误信息：
 ${error?.toString()}
 ----------------
-${error?.stackTrace}''');
+${error is Error ? (error as Error).stackTrace : ""}''');
     SmartDialog.showToast("已复制错误信息");
   }
 

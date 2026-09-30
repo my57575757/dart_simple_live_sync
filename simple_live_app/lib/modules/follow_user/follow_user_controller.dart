@@ -53,7 +53,7 @@ class FollowUserController extends BasePageController<FollowUser> {
 
   @override
   Future refreshData() async {
-    await FollowService.instance.loadData();
+    await FollowService.instance.loadData(manual: true);
     updateTagList();
     super.refreshData();
   }

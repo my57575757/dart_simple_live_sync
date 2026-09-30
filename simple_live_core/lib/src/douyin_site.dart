@@ -4,7 +4,6 @@ import 'dart:math';
 import 'package:dio/dio.dart';
 import 'package:simple_live_core/simple_live_core.dart';
 import 'package:simple_live_core/src/common/convert_helper.dart';
-import 'package:simple_live_core/src/common/core_error.dart';
 import 'package:simple_live_core/src/common/http_client.dart';
 import 'package:simple_live_core/src/scripts/douyin_sign.dart';
 
@@ -46,41 +45,16 @@ class DouyinSite implements LiveSite {
     "User-Agent": kDefaultUserAgent,
   };
 
-  /// 抖音对单位时间请求数有限制，超限后返回 444，约 15 秒后自动恢复
-  static const List<int> _rateLimitRetryDelaysMs = [1000, 3000, 8000];
-
-  Future<T> _withRateLimitRetry<T>(Future<T> Function() request) async {
-    Object? lastError;
-    for (var attempt = 0;
-        attempt <= _rateLimitRetryDelaysMs.length;
-        attempt++) {
-      try {
-        return await request();
-      } on CoreError catch (e) {
-        lastError = e;
-        if (e.statusCode != 444 ||
-            attempt == _rateLimitRetryDelaysMs.length) {
-          rethrow;
-        }
-        var delay = _rateLimitRetryDelaysMs[attempt] +
-            Random().nextInt(400) -
-            200;
-        await Future.delayed(Duration(milliseconds: delay < 0 ? 0 : delay));
-      }
-    }
-    throw lastError!;
-  }
-
   Future<String> _getText(
     String url, {
     Map<String, dynamic>? queryParameters,
     Map<String, dynamic>? header,
   }) {
-    return _withRateLimitRetry(() => HttpClient.instance.getText(
-          url,
-          queryParameters: queryParameters,
-          header: header,
-        ));
+    return HttpClient.instance.getText(
+      url,
+      queryParameters: queryParameters,
+      header: header,
+    );
   }
 
   Future<dynamic> _getJson(
@@ -88,11 +62,11 @@ class DouyinSite implements LiveSite {
     Map<String, dynamic>? queryParameters,
     Map<String, dynamic>? header,
   }) {
-    return _withRateLimitRetry(() => HttpClient.instance.getJson(
-          url,
-          queryParameters: queryParameters,
-          header: header,
-        ));
+    return HttpClient.instance.getJson(
+      url,
+      queryParameters: queryParameters,
+      header: header,
+    );
   }
 
   Future<Map<String, dynamic>> getRequestHeaders() async {
@@ -580,8 +554,25 @@ class DouyinSite implements LiveSite {
     return dyCookie;
   }
 
-  /// 通过webRid获取直播间Web信息
-  /// - [webRid] 直播间RID
+  /// 从直播间页面 HTML 中解析 state
+  static Map parseRoomStateFromHtml(String result) {
+    var renderData =
+        RegExp(
+          r'\{\\"state\\":\{\\"appStore.*?\]\\n',
+        ).firstMatch(result)?.group(0) ??
+        "";
+    if (renderData.isEmpty) {
+      throw CoreError("无法读取直播间页面信息，请稍后手动重试");
+    }
+    var str = renderData
+        .trim()
+        .replaceAll('\\"', '"')
+        .replaceAll(r"\\", r"\")
+        .replaceAll(']\\n', "");
+    var renderDataJson = json.decode(str);
+    return renderDataJson["state"];
+  }
+
   Future<Map> _getRoomDataByHtml(String webRid) async {
     var dyCookie = await _getWebCookie(webRid);
     var result = await _getText(
@@ -595,18 +586,7 @@ class DouyinSite implements LiveSite {
       },
     );
 
-    var renderData =
-        RegExp(
-          r'\{\\"state\\":\{\\"appStore.*?\]\\n',
-        ).firstMatch(result)?.group(0) ??
-        "";
-    var str = renderData
-        .trim()
-        .replaceAll('\\"', '"')
-        .replaceAll(r"\\", r"\")
-        .replaceAll(']\\n', "");
-    var renderDataJson = json.decode(str);
-    return renderDataJson["state"];
+    return parseRoomStateFromHtml(result);
   }
 
   /// 通过webRid获取直播间Web信息
