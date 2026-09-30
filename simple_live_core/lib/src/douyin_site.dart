@@ -343,66 +343,16 @@ class DouyinSite implements LiveSite {
     String webRid,
     String shareUrl,
   ) async {
+    // 无进场副作用：优先 GET HTML；失败再用 shareUrl 走 reflow
     try {
-      var result = await _getRoomDetailByWebRidApi(webRid);
-      return result;
+      return await _getRoomDetailByWebRidHtml(webRid);
     } catch (e) {
       CoreLog.error(e);
-      // 通过shareUrl获取信息
       if (shareUrl != "") {
         return await _getRoomDetailByShareUrl(shareUrl);
       }
+      rethrow;
     }
-    return await _getRoomDetailByWebRidHtml(webRid);
-  }
-
-  /// 通过WebRid访问直播间API，从API中获取直播间信息
-  /// - [webRid] 直播间RID
-  /// - 返回直播间信息
-  Future<LiveRoomDetail> _getRoomDetailByWebRidApi(String webRid) async {
-    // 读取房间信息
-    var data = await _getRoomDataByApi(webRid);
-
-    var roomData = data["data"][0];
-    var userData = data["user"];
-    var roomId = roomData["id_str"].toString();
-
-    // 读取用户唯一ID，用于弹幕连接
-    // 似乎这个参数不是必须的，先随机生成一个
-    //var userUniqueId = await _getUserUniqueId(webRid);
-    var userUniqueId = generateRandomNumber(12).toString();
-
-    var owner = roomData["owner"];
-
-    var roomStatus = (asT<int?>(roomData["status"]) ?? 0) == 2;
-
-    // 主要是为了获取cookie,用于弹幕websocket连接
-    var headers = await getRequestHeaders();
-    return LiveRoomDetail(
-      roomId: webRid,
-      title: roomData["title"].toString(),
-      cover: roomStatus ? roomData["cover"]["url_list"][0].toString() : "",
-      userName: roomStatus
-          ? owner["nickname"].toString()
-          : userData["nickname"].toString(),
-      userAvatar: roomStatus
-          ? owner["avatar_thumb"]["url_list"][0].toString()
-          : userData["avatar_thumb"]["url_list"][0].toString(),
-      online: roomStatus
-          ? asT<int?>(roomData["room_view_stats"]["display_value"]) ?? 0
-          : 0,
-      status: roomStatus,
-      url: "https://live.douyin.com/$webRid",
-      introduction: owner?["signature"]?.toString() ?? "",
-      notice: "",
-      danmakuData: DouyinDanmakuArgs(
-        webRid: webRid,
-        roomId: roomId,
-        userId: userUniqueId,
-        cookie: headers["cookie"],
-      ),
-      data: roomStatus ? roomData["stream_url"] : {},
-    );
   }
 
   /// 通过shareUrl访问直播间网页，从网页HTML中获取直播间信息
@@ -573,8 +523,16 @@ class DouyinSite implements LiveSite {
     return renderDataJson["state"];
   }
 
+  /// 从页面 state 中判定是否直播中（room.status==2）；字段缺失安全降级
+  static bool isRoomLiving(Map state) {
+    var room = state["roomStore"]?["roomInfo"]?["room"];
+    return (asT<int?>(room?["status"]) ?? 0) == 2;
+  }
+
   Future<Map> _getRoomDataByHtml(String webRid) async {
-    var dyCookie = await _getWebCookie(webRid);
+    // 已登录则直接用登录 cookie（受信任可过风控，且纯 GET 文档不触发 enter 进场）；
+    // 未登录再降级为匿名 ttwid
+    var dyCookie = cookie.isNotEmpty ? cookie : await _getWebCookie(webRid);
     var result = await _getText(
       "https://live.douyin.com/$webRid",
       queryParameters: {},
@@ -587,48 +545,6 @@ class DouyinSite implements LiveSite {
     );
 
     return parseRoomStateFromHtml(result);
-  }
-
-  /// 通过webRid获取直播间Web信息
-  /// - [webRid] 直播间RID
-  Future<Map> _getRoomDataByApi(String webRid) async {
-    String serverUrl = "https://live.douyin.com/webcast/room/web/enter/";
-
-    // 提前获取 headers
-    var requestHeader = await getRequestHeaders();
-
-    // 使用动态 Referer（包含房间号，参考 DouyinLiveRecorder）
-    requestHeader["Referer"] = "https://live.douyin.com/$webRid";
-
-    var uri = Uri.parse(serverUrl).replace(
-      scheme: "https",
-      port: 443,
-      queryParameters: {
-        "aid": '6383',
-        "app_name": "douyin_web",
-        "live_id": '1',
-        "device_platform": "web",
-        "language": "zh-CN",
-        "browser_language": "zh-CN",
-        "browser_platform": "Win32",
-        "browser_name": "Chrome",
-        "browser_version": "125.0.0.0",
-        "web_rid": webRid,
-        "msToken": "",
-      },
-    );
-    var requestUrl = DouyinSign.getAbogusUrl(uri.toString(), kDefaultUserAgent);
-
-    var result = await _getJson(
-      requestUrl,
-      header: requestHeader,
-    );
-
-    if (result is! Map) {
-      throw Exception("抖音接口返回格式异常");
-    }
-
-    return result["data"];
   }
 
   /// 通过roomId获取直播间信息
@@ -862,8 +778,13 @@ class DouyinSite implements LiveSite {
 
   @override
   Future<bool> getLiveStatus({required String roomId}) async {
-    var result = await getRoomDetail(roomId: roomId);
-    return result.status;
+    // 仅做无进场副作用的查询：GET HTML / reflow，不调 web enter 接口
+    var key = roomId.split(";")[0];
+    if (key.length > 16) {
+      var data = await _getRoomDataByRoomId(key);
+      return (asT<int?>(data["data"]?["room"]?["status"]) ?? 0) == 2;
+    }
+    return isRoomLiving(await _getRoomDataByHtml(key));
   }
 
   @override

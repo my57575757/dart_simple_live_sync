@@ -27,4 +27,36 @@ void main() {
       expect(state.containsKey('roomStore'), isTrue);
     });
   });
+
+  group('DouyinSite.isRoomLiving', () {
+    test('status=2 为直播中', () {
+      expect(
+        DouyinSite.isRoomLiving({
+          'roomStore': {
+            'roomInfo': {
+              'room': {'status': 2}
+            }
+          }
+        }),
+        isTrue,
+      );
+    });
+
+    test('status=4 为未直播', () {
+      expect(
+        DouyinSite.isRoomLiving({
+          'roomStore': {
+            'roomInfo': {
+              'room': {'status': 4}
+            }
+          }
+        }),
+        isFalse,
+      );
+    });
+
+    test('缺字段安全降级为未直播', () {
+      expect(DouyinSite.isRoomLiving({}), isFalse);
+    });
+  });
 }
