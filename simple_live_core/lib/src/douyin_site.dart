@@ -7,6 +7,13 @@ import 'package:simple_live_core/src/common/convert_helper.dart';
 import 'package:simple_live_core/src/common/http_client.dart';
 import 'package:simple_live_core/src/scripts/douyin_sign.dart';
 
+/// 房间页面 HTML 获取器（webRid + 当前 cookie -> 房间页 HTML 原文）
+/// 由宿主 App 注入以绕过 Dart 侧 TLS 指纹风控；为 null 时使用内置 Dio 路径
+typedef DouyinHtmlFetcher = Future<String> Function(
+  String webRid,
+  String cookie,
+);
+
 class DouyinSite implements LiveSite {
   @override
   String id = "douyin";
@@ -32,6 +39,9 @@ class DouyinSite implements LiveSite {
 
   /// 用户设置的 cookie
   String cookie = "";
+
+  /// 宿主注入的房间 HTML 获取器；null = 走 Dio（console / 不支持 webview 的平台）
+  DouyinHtmlFetcher? htmlFetcher;
 
   void _logDebug(String msg) {
     // 同时使用 print 和 CoreLog 确保日志输出
@@ -530,6 +540,13 @@ class DouyinSite implements LiveSite {
   }
 
   Future<Map> _getRoomDataByHtml(String webRid) async {
+    final fetcher = htmlFetcher;
+    if (fetcher != null) {
+      // 真实浏览器内核同源取页面（cookie 为空也合法：webview 已持有 ttwid）
+      final html = await fetcher(webRid, cookie);
+      return parseRoomStateFromHtml(html);
+    }
+
     // 已登录则直接用登录 cookie（受信任可过风控，且纯 GET 文档不触发 enter 进场）；
     // 未登录再降级为匿名 ttwid
     var dyCookie = cookie.isNotEmpty ? cookie : await _getWebCookie(webRid);

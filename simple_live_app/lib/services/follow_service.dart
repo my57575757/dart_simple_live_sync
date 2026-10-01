@@ -267,8 +267,8 @@ class FollowService extends GetxService {
     });
   }
 
-  /// 抖音请求节流：相邻两次抖音请求至少间隔 450ms，避免触发其 444 频率限制
-  static const int _douyinMinIntervalMs = 450;
+  /// 抖音请求节流：相邻两次抖音请求至少间隔 2s，避免触发风控
+  static const int _douyinMinIntervalMs = 2000;
   DateTime _lastDouyinRequestTime = DateTime.fromMillisecondsSinceEpoch(0);
 
   Future<void> _throttleDouyin() async {
