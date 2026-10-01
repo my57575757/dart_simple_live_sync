@@ -16,7 +16,6 @@ import 'package:simple_live_app/app/utils.dart';
 import 'package:simple_live_app/modules/live_room/live_room_controller.dart';
 import 'package:simple_live_app/modules/live_room/player/player_controls.dart';
 import 'package:simple_live_app/services/follow_service.dart';
-import 'package:simple_live_app/services/windows_ime_reset.dart';
 import 'package:simple_live_app/widgets/desktop_refresh_button.dart';
 import 'package:simple_live_app/widgets/follow_user_item.dart';
 import 'package:simple_live_app/widgets/keep_alive_wrapper.dart';
@@ -1014,22 +1013,6 @@ class _SendDanmakuBarState extends State<SendDanmakuBar> {
               onSubmitted: submit,
             ),
           ),
-          if (Platform.isWindows)
-            IconButton(
-              tooltip: "重置中文输入法（中文打不出时点此）",
-              onPressed: () {
-                final n = resetWindowsIme();
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Text(
-                      n > 0 ? "已重置输入法状态，请重试输入" : "重置未生效，请重启应用",
-                    ),
-                    duration: const Duration(seconds: 2),
-                  ),
-                );
-              },
-              icon: const Icon(Icons.keyboard_command_key),
-            ),
           AppStyle.hGap8,
           Obx(
             () => IconButton(
