@@ -125,4 +125,19 @@ void main() {
       );
     });
   });
+
+  group('buildSilenceMediaScript', () {
+    final script = DouyinWebViewService.buildSilenceMediaScript();
+
+    test('暂停并静音已有 video/audio', () {
+      expect(script, contains("querySelectorAll('video,audio')"));
+      expect(script, contains('.pause()'));
+      expect(script, contains('.muted=true'));
+    });
+
+    test('捕获阶段拦截后续 play，防止页面脚本重新播放', () {
+      expect(script, contains("addEventListener('play'"));
+      expect(script, contains('true'), reason: '必须用捕获阶段');
+    });
+  });
 }

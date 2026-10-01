@@ -102,6 +102,20 @@ class DouyinWebViewService extends GetxService {
       '(function(){var o=(window.__dyFetch||{})[${jsonEncode(token)}];'
       'return o?JSON.stringify(o):"null";})()';
 
+  /// 静音/暂停脚本：WebView 仅用于取 HTML，永不播放媒体。
+  /// 抖音首页会自动播放推荐直播，不禁止就会在隐藏窗口里发出声音、持续耗流量
+  static String buildSilenceMediaScript() => '''
+(function(){
+  function stop(m){m.muted=true;try{m.pause();}catch(e){}}
+  function stopAll(){
+    var list=document.querySelectorAll('video,audio');
+    for(var i=0;i<list.length;i++){stop(list[i]);}
+  }
+  document.addEventListener('play',function(e){stop(e.target);},true);
+  stopAll();
+})()
+''';
+
   HeadlessInAppWebView? _headless;
   InAppWebViewController? _controller;
   Future<void>? _starting;
@@ -147,10 +161,23 @@ class DouyinWebViewService extends GetxService {
   Future<void> _start() async {
     final firstLoad = Completer<void>();
     _reloadCompleter = Completer<void>();
+    Future<void> inject(InAppWebViewController controller) async {
+      try {
+        await controller.evaluateJavascript(
+          source: buildSilenceMediaScript(),
+        ).timeout(fetchTimeout);
+      } catch (e) {
+        Log.w('DouyinWebView inject silence script failed: $e');
+      }
+    }
+
     _headless = HeadlessInAppWebView(
       initialUrlRequest: URLRequest(url: WebUri(homeUrl)),
-      onLoadStop: (controller, url) {
+      // document-start 即注册 play 拦截，抢在页面自动播放脚本前面
+      onLoadStart: (controller, url) => inject(controller),
+      onLoadStop: (controller, url) async {
         _controller = controller;
+        await inject(controller);
         if (!firstLoad.isCompleted) firstLoad.complete();
         final reload = _reloadCompleter;
         if (reload != null && !reload.isCompleted) reload.complete();
