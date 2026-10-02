@@ -173,6 +173,11 @@ class DouyinWebViewService extends GetxService {
 
     _headless = HeadlessInAppWebView(
       initialUrlRequest: URLRequest(url: WebUri(homeUrl)),
+      // 必须伪装桌面 UA：移动 UA 会被服务端 302 到 webcast.amemv.com 移动 reflow 页，
+      // 页面内 fetch 跟随跨域重定向后因无 CORS 头失败（Windows WebView2 默认桌面 UA 不受影响）
+      initialSettings: InAppWebViewSettings(
+        userAgent: DouyinSite.kDefaultUserAgent,
+      ),
       // document-start 即注册 play 拦截，抢在页面自动播放脚本前面
       onLoadStart: (controller, url) => inject(controller),
       onLoadStop: (controller, url) async {
