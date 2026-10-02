@@ -20,6 +20,12 @@ class DouyinWebViewException implements Exception {
   String toString() => message;
 }
 
+/// 空 body 软封：抖音针对该设备会话（ttwid/设备指纹）返回 200 + 空响应，
+/// 非账号级，需清除 WebView2 用户数据目录换新设备会话
+class DouyinSoftBlockedException extends DouyinWebViewException {
+  DouyinSoftBlockedException(super.message);
+}
+
 /// 以真实浏览器内核（WebView2 / Android WebView）获取抖音房间页，
 /// 绕过 Dart HttpClient 的 TLS 指纹被风控识别的问题
 class DouyinWebViewService extends GetxService {
@@ -35,6 +41,13 @@ class DouyinWebViewService extends GetxService {
   /// 销毁后浏览器进程异步退出（持用户数据目录锁），启动失败时按此间隔退避重试
   static const Duration startRetryBackoff = Duration(seconds: 1);
   static const int maxStartAttempts = 3;
+
+  /// 清除用户数据目录时，进程尚未释放目录锁，按此间隔退避重试
+  static const Duration eraseRetryBackoff = Duration(seconds: 1);
+  static const int maxEraseAttempts = 3;
+
+  /// 连续空响应（软封）达到此次数后清除设备会话
+  static const int softBlockedEraseThreshold = 2;
 
   /// 正常房间页约 1.2MB；验证码中间页约 6.3KB
   static const int minValidHtmlLength = 20000;
@@ -67,7 +80,7 @@ class DouyinWebViewService extends GetxService {
       throw DouyinWebViewException('抖音返回 HTTP $statusCode，请稍后重试');
     }
     if (html.isEmpty) {
-      throw DouyinWebViewException(
+      throw DouyinSoftBlockedException(
         '抖音返回空白页面，可能已触发风控，请稍后重试或重新登录',
       );
     }
@@ -127,6 +140,11 @@ class DouyinWebViewService extends GetxService {
   Completer<void>? _reloadCompleter;
   String _syncedCookie = '';
   int _businessFailures = 0;
+  int _softBlockedFailures = 0;
+
+  /// 测试注入：覆盖单次删除动作，避免测试触碰真实 WebView2 目录
+  @visibleForTesting
+  Future<void> Function(Directory dir)? debugDeleteAttempt;
 
   /// 串行化：cookie 重注入/reload 与 fetch 不得交叠
   Future<void>? _lastTask;
@@ -302,12 +320,20 @@ class DouyinWebViewService extends GetxService {
           }
           validateResponse(obj['code'] as int?, obj['html'] as String);
           _businessFailures = 0;
+          _softBlockedFailures = 0;
           return obj['html'] as String;
         }
-      } on DouyinWebViewException {
-        _businessFailures++;
-        if (_businessFailures >= 3) {
-          unawaited(_rebuild());
+      } on DouyinWebViewException catch (e) {
+        if (e is DouyinSoftBlockedException) {
+          _softBlockedFailures++;
+          if (_softBlockedFailures >= softBlockedEraseThreshold) {
+            unawaited(_rebuild(clearUserData: true));
+          }
+        } else {
+          _businessFailures++;
+          if (_businessFailures >= 3) {
+            unawaited(_rebuild());
+          }
         }
         rethrow;
       } catch (e) {
@@ -319,7 +345,7 @@ class DouyinWebViewService extends GetxService {
     });
   }
 
-  Future<void> _rebuild() async {
+  Future<void> _rebuild({bool clearUserData = false}) async {
     final old = _headless;
     _headless = null;
     _controller = null;
@@ -327,11 +353,45 @@ class DouyinWebViewService extends GetxService {
     _reloadCompleter = null;
     _syncedCookie = '';
     _businessFailures = 0;
+    _softBlockedFailures = 0;
     try {
       await old?.dispose();
     } catch (_) {}
     // 不立即重建：WebView2 浏览器进程异步退出，退出前持有用户数据目录锁。
-    // 下次请求按需启动，启动失败再退避重试
+    // 软封时清除目录换新设备会话；下次请求按需启动，启动失败再退避重试
+    if (clearUserData && Platform.isWindows) {
+      await _eraseUserDataDir(_userDataDir);
+    }
+  }
+
+  /// 默认用户数据目录：WebView2 以 nullptr 创建时落在可执行文件旁
+  Directory get _userDataDir =>
+      Directory('${Platform.resolvedExecutable}.WebView2');
+
+  @visibleForTesting
+  Future<void> eraseUserDataDirForTesting(Directory dir) =>
+      _eraseUserDataDir(dir);
+
+  Future<void> _eraseUserDataDir(Directory dir) async {
+    Object? lastError;
+    for (var attempt = 0; attempt < maxEraseAttempts;attempt++) {
+      if (attempt > 0) {
+        await Future<void>.delayed(eraseRetryBackoff * attempt);
+      }
+      try {
+        final injected = debugDeleteAttempt;
+        if (injected != null) {
+          await injected(dir);
+        } else if (await dir.exists()) {
+          await dir.delete(recursive: true);
+        }
+        return;
+      } catch (e) {
+        lastError = e;
+        Log.w('DouyinWebView erase user data dir attempt ${attempt + 1} failed: $e');
+      }
+    }
+    Log.w('DouyinWebView erase user data dir gave up: $lastError');
   }
 
   @override

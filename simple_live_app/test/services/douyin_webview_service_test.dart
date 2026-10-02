@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:simple_live_app/services/douyin_webview_service.dart';
 import 'package:fake_async/fake_async.dart';
@@ -50,6 +51,19 @@ void main() {
       expect(
         () => DouyinWebViewService.validateResponse(200, ''),
         throwsA(isA<DouyinWebViewException>()),
+      );
+    });
+
+    test('空 html 抛软封异常（子类），用户文案保留', () {
+      expect(
+        () => DouyinWebViewService.validateResponse(200, ''),
+        throwsA(
+          isA<DouyinSoftBlockedException>().having(
+            (e) => e.message,
+            'message',
+            contains('空白页面'),
+          ),
+        ),
       );
     });
 
@@ -229,6 +243,127 @@ void main() {
         expect(error, isNull);
         expect(runCount, 2, reason: '首次失败后应退避重试一次');
         expect(html?.length ?? 0, greaterThan(20000));
+      });
+    });
+  });
+
+  group('软封轮换设备会话', () {
+    setUpAll(() {
+      InAppWebViewPlatform.instance = WindowsInAppWebViewPlatform();
+    });
+
+    const sharedChannel = MethodChannel(
+      'com.pichillilorenzo/flutter_headless_inappwebview',
+    );
+
+    test('默认删除器递归删除目录及内部文件', () async {
+      final dir = await Directory.systemTemp.createTemp('dywv_erase_');
+      addTearDown(() async {
+        if (await dir.exists()) await dir.delete(recursive: true);
+      });
+      final nested = Directory('${dir.path}/EBWebView/Default');
+      await nested.create(recursive: true);
+      await File('${nested.path}/Cookies').writeAsString('x');
+
+      final service = DouyinWebViewService();
+      await service.eraseUserDataDirForTesting(dir);
+
+      expect(await dir.exists(), isFalse);
+    });
+
+    test('删除遇占用（前两次失败）退避后第三次成功', () {
+      fakeAsync((async) {
+        var attempts = 0;
+        final service = DouyinWebViewService();
+        service.debugDeleteAttempt = (dir) async {
+          attempts++;
+          if (attempts < 3) throw StateError('directory in use');
+        };
+
+        Object? error;
+        unawaited(
+          service
+              .eraseUserDataDirForTesting(Directory(r'D:\fake'))
+              .then((_) {}, onError: (Object e) => error = e),
+        );
+        async.elapse(const Duration(seconds: 5));
+        async.flushMicrotasks();
+
+        expect(error, isNull);
+        expect(attempts, 3);
+      });
+    });
+
+    test('连续两次空响应（软封）后重建并清除数据目录', () {
+      fakeAsync((async) {
+        var eraseCalls = 0;
+        var runCount = 0;
+        final errorTypes = <Type>[];
+
+        MethodChannel controllerChannel(String id) =>
+            MethodChannel('com.pichillilorenzo/flutter_inappwebview_$id');
+
+        final service = DouyinWebViewService();
+        service.debugDeleteAttempt = (dir) async {
+          eraseCalls++;
+        };
+
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(sharedChannel, (call) async {
+          if (call.method != 'run') return null;
+          runCount++;
+          final args = (call.arguments as Map).cast<String, dynamic>();
+          final id = args['id'] as String;
+          // headless 自身通道（dispose 等），与 controller 通道不同名
+          final headlessChannel = MethodChannel(
+            'com.pichillilorenzo/flutter_headless_inappwebview_$id',
+          );
+          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+              .setMockMethodCallHandler(headlessChannel, (c) async => null);
+          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+              .setMockMethodCallHandler(controllerChannel(id), (
+                webCall,
+              ) async {
+            switch (webCall.method) {
+              case 'getUrl':
+                return 'https://live.douyin.com/';
+              case 'evaluateJavascript':
+                final source =
+                    (webCall.arguments as Map)['source'] as String;
+                if (source.contains('JSON.stringify')) {
+                  final state = jsonEncode({
+                    's': 'done',
+                    'code': 200,
+                    'html': '',
+                  });
+                  return jsonEncode(state);
+                }
+            }
+            return null;
+          });
+          Timer.run(service.completeFirstLoadForTesting);
+          return true;
+        });
+
+        unawaited(() async {
+          for (var i = 0; i < 2; i++) {
+            try {
+              await service.fetchRoomHtmlForTesting('699394970561', '');
+            } catch (e) {
+              errorTypes.add(e.runtimeType);
+            }
+          }
+        }());
+
+        async.elapse(const Duration(seconds: 10));
+        async.flushMicrotasks();
+
+        expect(
+          errorTypes,
+          equals([DouyinSoftBlockedException, DouyinSoftBlockedException]),
+          reason: 'runCount=$runCount eraseCalls=$eraseCalls',
+        );
+        expect(eraseCalls, 1, reason: '第二次软封后应清除一次数据目录');
       });
     });
   });
