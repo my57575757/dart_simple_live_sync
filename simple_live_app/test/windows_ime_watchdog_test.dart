@@ -30,4 +30,21 @@ void main() {
       expect(machine.poll(true), isNull);
     });
   });
+
+  group('KeyboardLayoutTransitionMachine', () {
+    test('首次 poll 只建立基线，不触发', () {
+      final machine = KeyboardLayoutTransitionMachine();
+
+      expect(machine.poll(12345), isFalse);
+      expect(machine.poll(12345), isFalse);
+    });
+
+    test('布局变化（切换输入法）时触发一次', () {
+      final machine = KeyboardLayoutTransitionMachine();
+      machine.poll(111);
+
+      expect(machine.poll(222), isTrue);
+      expect(machine.poll(222), isFalse);
+    });
+  });
 }

@@ -1,9 +1,16 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:simple_live_app/services/douyin_webview_service.dart';
+import 'package:fake_async/fake_async.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_inappwebview_platform_interface/flutter_inappwebview_platform_interface.dart';
+import 'package:flutter_inappwebview_windows/flutter_inappwebview_windows.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
   group('parseCookiePairs', () {
     test('正常多对', () {
       expect(
@@ -138,6 +145,91 @@ void main() {
     test('捕获阶段拦截后续 play，防止页面脚本重新播放', () {
       expect(script, contains("addEventListener('play'"));
       expect(script, contains('true'), reason: '必须用捕获阶段');
+    });
+  });
+
+  group('WebView2 启动失败重试', () {
+    setUpAll(() {
+      InAppWebViewPlatform.instance = WindowsInAppWebViewPlatform();
+    });
+
+    const sharedChannel = MethodChannel(
+      'com.pichillilorenzo/flutter_headless_inappwebview',
+    );
+
+    test('首次创建失败（用户数据目录锁）后退避重试，成功取回房间页', () {
+      fakeAsync((async) {
+        var runCount = 0;
+        var pollCount = 0;
+
+        MethodChannel controllerChannel(String id) =>
+            MethodChannel('com.pichillilorenzo/flutter_inappwebview_$id');
+
+        final service = DouyinWebViewService();
+
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(sharedChannel, (call) async {
+          if (call.method != 'run') return null;
+          runCount++;
+          final args = (call.arguments as Map).cast<String, dynamic>();
+          final id = args['id'] as String;
+          if (runCount == 1) {
+            throw PlatformException(
+              code: '0',
+              message: 'Cannot create the HeadlessInAppWebView instance!',
+            );
+          }
+          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+              .setMockMethodCallHandler(controllerChannel(id), (
+                webCall,
+              ) async {
+            switch (webCall.method) {
+              case 'getUrl':
+                return 'https://live.douyin.com/';
+              case 'evaluateJavascript':
+                final source = (webCall.arguments as Map)['source'] as String;
+                if (source.contains('JSON.stringify')) {
+                  pollCount++;
+                  if (pollCount == 1) {
+                    // 原生 dump() 会给 JS 字符串结果再加一层 JSON 引号
+                    return jsonEncode('{"s":"pending"}');
+                  }
+                  final state = jsonEncode({
+                    's': 'done',
+                    'code': 200,
+                    'html': 'x' * 30000,
+                  });
+                  return jsonEncode(state);
+                }
+            }
+            return null;
+          });
+          Timer.run(service.completeFirstLoadForTesting);
+          return true;
+        });
+
+        String? html;
+        Object? error;
+        unawaited(
+          () async {
+            try {
+              html = await service.fetchRoomHtmlForTesting(
+                '699394970561',
+                '',
+              );
+            } catch (e) {
+              error = e;
+            }
+          }(),
+        );
+
+        async.elapse(const Duration(seconds: 10));
+        async.flushMicrotasks();
+
+        expect(error, isNull);
+        expect(runCount, 2, reason: '首次失败后应退避重试一次');
+        expect(html?.length ?? 0, greaterThan(20000));
+      });
     });
   });
 }

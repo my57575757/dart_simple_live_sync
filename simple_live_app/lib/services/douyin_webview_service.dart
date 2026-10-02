@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart' show PlatformException;
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:get/get.dart';
 import 'package:simple_live_app/app/constant.dart';
@@ -30,6 +31,10 @@ class DouyinWebViewService extends GetxService {
   static const Duration initTimeout = Duration(seconds: 20);
   static const Duration fetchTimeout = Duration(seconds: 15);
   static const Duration pollInterval = Duration(milliseconds: 250);
+
+  /// 销毁后浏览器进程异步退出（持用户数据目录锁），启动失败时按此间隔退避重试
+  static const Duration startRetryBackoff = Duration(seconds: 1);
+  static const int maxStartAttempts = 3;
 
   /// 正常房间页约 1.2MB；验证码中间页约 6.3KB
   static const int minValidHtmlLength = 20000;
@@ -122,7 +127,6 @@ class DouyinWebViewService extends GetxService {
   Completer<void>? _reloadCompleter;
   String _syncedCookie = '';
   int _businessFailures = 0;
-  bool _closed = false;
 
   /// 串行化：cookie 重注入/reload 与 fetch 不得交叠
   Future<void>? _lastTask;
@@ -158,8 +162,42 @@ class DouyinWebViewService extends GetxService {
     });
   }
 
+  Completer<void>? _firstLoad;
+
   Future<void> _start() async {
     final firstLoad = Completer<void>();
+    _firstLoad = firstLoad;
+    HeadlessInAppWebView? headless;
+    Object? lastError;
+    for (var attempt = 0; attempt < maxStartAttempts; attempt++) {
+      if (attempt > 0) {
+        await Future<void>.delayed(startRetryBackoff * attempt);
+      }
+      try {
+        headless ??= _buildHeadless(firstLoad);
+        await headless.run();
+        _controller = headless.webViewController;
+        await firstLoad.future.timeout(initTimeout);
+        final site =
+            Sites.allSites[Constant.kDouyin]!.liveSite as DouyinSite;
+        await _applyCookie(site.cookie);
+        _headless = headless;
+        return;
+      } on PlatformException catch (e) {
+        lastError = e;
+        Log.w('DouyinWebView start attempt ${attempt + 1} failed: $e');
+      }
+    }
+    throw lastError!;
+  }
+
+  @visibleForTesting
+  void completeFirstLoadForTesting() {
+    final c = _firstLoad;
+    if (c != null && !c.isCompleted) c.complete();
+  }
+
+  HeadlessInAppWebView _buildHeadless(Completer<void> firstLoad) {
     _reloadCompleter = Completer<void>();
     Future<void> inject(InAppWebViewController controller) async {
       try {
@@ -171,7 +209,7 @@ class DouyinWebViewService extends GetxService {
       }
     }
 
-    _headless = HeadlessInAppWebView(
+    return HeadlessInAppWebView(
       initialUrlRequest: URLRequest(url: WebUri(homeUrl)),
       // 必须伪装桌面 UA：移动 UA 会被服务端 302 到 webcast.amemv.com 移动 reflow 页，
       // 页面内 fetch 跟随跨域重定向后因无 CORS 头失败（Windows WebView2 默认桌面 UA 不受影响）
@@ -188,11 +226,6 @@ class DouyinWebViewService extends GetxService {
         if (reload != null && !reload.isCompleted) reload.complete();
       },
     );
-    await _headless!.run();
-    await firstLoad.future.timeout(initTimeout);
-
-    final site = Sites.allSites[Constant.kDouyin]!.liveSite as DouyinSite;
-    await _applyCookie(site.cookie);
   }
 
   /// 注入/更换/清除 cookie 后 reload 同源首页；cookie 未变则空操作
@@ -223,6 +256,10 @@ class DouyinWebViewService extends GetxService {
   /// 平台通道调用超时包装：宿主进程被杀时通道可能永久不返回
   Future<T> _channelCall<T>(Future<T> Function() call) =>
       call().timeout(fetchTimeout);
+
+  @visibleForTesting
+  Future<String> fetchRoomHtmlForTesting(String webRid, String cookie) =>
+      _fetchRoomHtml(webRid, cookie);
 
   /// 供 DouyinSite.htmlFetcher 调用
   Future<String> _fetchRoomHtml(String webRid, String cookie) {
@@ -293,18 +330,12 @@ class DouyinWebViewService extends GetxService {
     try {
       await old?.dispose();
     } catch (_) {}
-    if (!_closed) {
-      try {
-        await _ensureStarted();
-      } catch (e) {
-        Log.w('DouyinWebView rebuild failed: $e');
-      }
-    }
+    // 不立即重建：WebView2 浏览器进程异步退出，退出前持有用户数据目录锁。
+    // 下次请求按需启动，启动失败再退避重试
   }
 
   @override
   void onClose() {
-    _closed = true;
     if (supported) {
       final site = Sites.allSites[Constant.kDouyin]!.liveSite as DouyinSite;
       site.htmlFetcher = null;

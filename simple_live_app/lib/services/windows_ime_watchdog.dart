@@ -43,6 +43,17 @@ class FocusTransitionMachine {
   }
 }
 
+/// 键盘布局（输入法）变化检测：首次仅建立基线
+class KeyboardLayoutTransitionMachine {
+  int? _hkl;
+
+  bool poll(int hkl) {
+    final previous = _hkl;
+    _hkl = hkl;
+    return previous != null && previous != hkl;
+  }
+}
+
 typedef _GetForegroundNative = IntPtr Function();
 typedef _GetForegroundDart = int Function();
 
@@ -57,6 +68,9 @@ typedef _GetAncestorDart = int Function(int hwnd, int flags);
 
 typedef _GetWindowNative = IntPtr Function(IntPtr hwnd, Uint32 cmd);
 typedef _GetWindowDart = int Function(int hwnd, int cmd);
+
+typedef _GetKeyboardLayoutNative = IntPtr Function(Uint32 thread);
+typedef _GetKeyboardLayoutDart = int Function(int thread);
 
 typedef _GetContextNative = IntPtr Function(IntPtr hwnd);
 typedef _GetContextDart = int Function(int hwnd);
@@ -76,6 +90,8 @@ typedef _AssociateContextExDart = int Function(int hwnd, int himc, int flags);
 class WindowsImeWatchdog extends GetxService {
   Timer? _timer;
   final FocusTransitionMachine _machine = FocusTransitionMachine();
+  final KeyboardLayoutTransitionMachine _layoutMachine =
+      KeyboardLayoutTransitionMachine();
   int? _rootHwnd;
   File? _logFile;
   int _logBytes = 0;
@@ -85,6 +101,7 @@ class WindowsImeWatchdog extends GetxService {
   late final int Function(int, Pointer<Uint32>) _getWindowThreadProcessId;
   late final int Function(int, int) _getAncestor;
   late final int Function(int, int) _getWindow;
+  late final int Function(int) _getKeyboardLayout;
   late final int Function(int) _immGetContext;
   late final int Function(int, int) _immReleaseContext;
   late final int Function(int, int, Pointer<NativeType>, int)
@@ -108,6 +125,9 @@ class WindowsImeWatchdog extends GetxService {
         'GetAncestor');
     _getWindow = user32.lookupFunction<_GetWindowNative, _GetWindowDart>(
         'GetWindow');
+    _getKeyboardLayout =
+        user32.lookupFunction<_GetKeyboardLayoutNative,
+            _GetKeyboardLayoutDart>('GetKeyboardLayout');
     _immGetContext = imm32.lookupFunction<_GetContextNative, _GetContextDart>(
         'ImmGetContext');
     _immReleaseContext = imm32.lookupFunction<_ReleaseContextNative,
@@ -156,6 +176,27 @@ class WindowsImeWatchdog extends GetxService {
 
     final event = _machine.poll(ours);
     if (event != null) _handleTransition(event);
+
+    // 键盘布局属于前台窗口线程（非本 Dart 线程），仅本窗口前台时采样
+    if (ours) {
+      final threadId = _getWindowThreadProcessId(foreground, nullptr);
+      if (_layoutMachine.poll(_getKeyboardLayout(threadId))) {
+        _writeLog('keyboard-layout: ${cycleSessionEntries().join(", ")}');
+      }
+    }
+  }
+
+  /// 供 App 在应用内切换直播间等导航时调用，预防性重建 IME 会话
+  void cycleSession() {
+    if (_timer == null) return;
+    _writeLog('app-navigation: ${cycleSessionEntries().join(", ")}');
+  }
+
+  /// 遍历全部窗口：先摘除空闲 IMC，再恢复默认 IMC
+  List<String> cycleSessionEntries() {
+    final detached = _walkWindows(_detachIfIdle);
+    final attached = _walkWindows((hwnd) => _associateDefault(hwnd) != 0);
+    return [...detached, ...attached];
   }
 
   void _handleTransition(FocusEvent event) {
@@ -165,13 +206,20 @@ class WindowsImeWatchdog extends GetxService {
       return;
     }
 
+    final results = event == FocusEvent.deactivated
+        ? _walkWindows(_detachIfIdle)
+        : _walkWindows((hwnd) => _associateDefault(hwnd) != 0);
+    _writeLog('${event.name}: ${results.join(", ")}');
+  }
+
+  List<String> _walkWindows(bool Function(int hwnd) action) {
+    final root = _rootHwnd;
+    if (root == null) return [];
     final results = <String>[];
+
     void walk(int hwnd) {
       if (hwnd == 0) return;
-      final ok = event == FocusEvent.deactivated
-          ? _detachIfIdle(hwnd)
-          : _associateDefault(hwnd) != 0;
-      // 同线程读回 himc：detach 后应为 0，default 后应非 0
+      final ok = action(hwnd);
       final himc = _immGetContext(hwnd);
       if (himc != 0) _immReleaseContext(hwnd, himc);
       results.add(
@@ -185,7 +233,7 @@ class WindowsImeWatchdog extends GetxService {
     }
 
     walk(root);
-    _writeLog('${event.name}: ${results.join(", ")}');
+    return results;
   }
 
   // 摘除 IMC；组词进行中（GCS_COMPSTR 非空）或窗口本无 IMC 时跳过。
