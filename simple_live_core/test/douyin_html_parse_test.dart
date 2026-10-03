@@ -59,4 +59,44 @@ void main() {
       expect(DouyinSite.isRoomLiving({}), isFalse);
     });
   });
+
+  group('DouyinSite SSR 骨架占位房间（roomInfo 无 room 块）', () {
+    final skeleton = <String, dynamic>{
+      'roomStore': {
+        'roomInfo': {'web_rid': '274889443828', 'web_stream_url': null}
+      },
+      'userStore': {
+        'odin': {'user_unique_id': '7691511956330530313'}
+      },
+    };
+
+    test('hasRoomInfo 对无 room 骨架为 false', () {
+      expect(DouyinSite.hasRoomInfo(skeleton), isFalse);
+    });
+
+    test('buildOfflineDetail 不崩，按未开播返回', () {
+      final detail = DouyinSite.buildOfflineDetail(
+        webRid: '274889443828',
+        state: skeleton,
+        headers: {'cookie': 'c'},
+      );
+      expect(detail.status, isFalse);
+      expect(detail.roomId, '274889443828');
+      final args = detail.danmakuData as DouyinDanmakuArgs;
+      expect(args.webRid, '274889443828');
+      expect(args.userId, '7691511956330530313');
+    });
+
+    test('无 user_unique_id 时不崩，userId 回退非空', () {
+      final detail = DouyinSite.buildOfflineDetail(
+        webRid: '274889443828',
+        state: {
+          'roomStore': {'roomInfo': {'web_rid': '274889443828'}}
+        },
+        headers: {},
+      );
+      final args = detail.danmakuData as DouyinDanmakuArgs;
+      expect(args.userId, isNotEmpty);
+    });
+  });
 }

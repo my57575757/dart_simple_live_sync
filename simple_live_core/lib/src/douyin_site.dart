@@ -440,17 +440,25 @@ class DouyinSite implements LiveSite {
   /// - 返回直播间信息
   Future<LiveRoomDetail> _getRoomDetailByWebRidHtml(String webRid) async {
     var roomData = await _getRoomDataByHtml(webRid);
-    var roomId = roomData["roomStore"]["roomInfo"]["room"]["id_str"].toString();
-    var userUniqueId = roomData["userStore"]["odin"]["user_unique_id"]
-        .toString();
+    var headers = await getRequestHeaders();
+    var room = roomData["roomStore"]?["roomInfo"]?["room"];
+    if (room == null) {
+      // SSR 仅下发占位骨架、无场次信息：按未开播处理，不崩溃
+      return buildOfflineDetail(
+        webRid: webRid,
+        state: roomData,
+        headers: headers,
+      );
+    }
 
-    var room = roomData["roomStore"]["roomInfo"]["room"];
+    var roomId = room["id_str"].toString();
+    var userUniqueId =
+        roomData["userStore"]?["odin"]?["user_unique_id"]?.toString() ??
+            generateRandomNumber(12).toString();
+
     var owner = room["owner"];
     var anchor = roomData["roomStore"]["roomInfo"]["anchor"];
     var roomStatus = (asT<int?>(room["status"]) ?? 0) == 2;
-
-    // 主要是为了获取cookie,用于弹幕websocket连接
-    var headers = await getRequestHeaders();
 
     return LiveRoomDetail(
       roomId: webRid,
@@ -537,6 +545,44 @@ class DouyinSite implements LiveSite {
   static bool isRoomLiving(Map state) {
     var room = state["roomStore"]?["roomInfo"]?["room"];
     return (asT<int?>(room?["status"]) ?? 0) == 2;
+  }
+
+  /// SSR state 是否含有效场次 room 块
+  static bool hasRoomInfo(Map state) =>
+      state["roomStore"]?["roomInfo"]?["room"] != null;
+
+  /// roomInfo 无 room 场次块时的离线占位详情
+  /// （部分房间 SSR 仅下发 {web_rid, web_stream_url} 骨架，真实数据靠客户端 hydrate）
+  static LiveRoomDetail buildOfflineDetail({
+    required String webRid,
+    required Map state,
+    required Map headers,
+  }) {
+    final info = (state["roomStore"]?["roomInfo"] as Map?) ?? const {};
+    final anchor = info["anchor"] as Map?;
+    final userId =
+        state["userStore"]?["odin"]?["user_unique_id"]?.toString() ??
+            generateRandomNumber(12).toString();
+    return LiveRoomDetail(
+      roomId: webRid,
+      title: "",
+      cover: "",
+      userName: anchor?["nickname"]?.toString() ?? "",
+      userAvatar:
+          anchor?["avatar_thumb"]?["url_list"]?[0]?.toString() ?? "",
+      online: 0,
+      status: false,
+      url: "https://live.douyin.com/$webRid",
+      introduction: "",
+      notice: "",
+      danmakuData: DouyinDanmakuArgs(
+        webRid: webRid,
+        roomId: "",
+        userId: userId,
+        cookie: headers["cookie"]?.toString() ?? "",
+      ),
+      data: const {},
+    );
   }
 
   Future<Map> _getRoomDataByHtml(String webRid) async {
@@ -823,7 +869,7 @@ class DouyinSite implements LiveSite {
   }
 
   // 生成随机的数字
-  int generateRandomNumber(int length) {
+  static int generateRandomNumber(int length) {
     var random = Random.secure();
     var values = List<int>.generate(length, (i) => random.nextInt(10));
     StringBuffer stringBuffer = StringBuffer();
