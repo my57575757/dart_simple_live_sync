@@ -36,30 +36,4 @@ void main() {
     expect(captured!.requiredCookies, contains('sessionid'));
     expect(captured!.userAgent, WebLoginArgs.desktopUserAgent);
   });
-
-  testWidgets('startVerify 打开专门验证页并传入房间号', (tester) async {
-    Object? captured;
-    final service = DouyinAccountService();
-
-    await tester.pumpWidget(
-      GetMaterialApp(
-        initialRoute: '/',
-        getPages: [
-          GetPage(name: '/', page: () => const Scaffold(body: Text('home'))),
-          GetPage(
-            name: RoutePath.kDouyinVerify,
-            page: () {
-              captured = Get.arguments;
-              return const Scaffold();
-            },
-          ),
-        ],
-      ),
-    );
-
-    service.startVerify('96252793301');
-    await tester.pumpAndSettle();
-
-    expect(captured, '96252793301');
-  });
 }

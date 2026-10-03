@@ -3,14 +3,12 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
-import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show PlatformException;
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:get/get.dart';
 import 'package:simple_live_app/app/constant.dart';
 import 'package:simple_live_app/app/log.dart';
 import 'package:simple_live_app/app/sites.dart';
-import 'package:simple_live_app/services/douyin_account_service.dart';
 import 'package:simple_live_core/simple_live_core.dart';
 
 /// WebView 通道错误（message 可直接展示给用户）
@@ -143,50 +141,6 @@ class DouyinWebViewService extends GetxService {
   String _syncedCookie = '';
   int _businessFailures = 0;
   int _softBlockedFailures = 0;
-
-  /// 当前软封周期是否已弹过引导（去重）；成功取房或重建后复位
-  bool _softBlockedPromptShown = false;
-
-  /// 软封时的登录引导动作；默认弹窗引导去验证页，测试可替换；参数为房间号
-  @visibleForTesting
-  Future<void> Function(String webRid) softBlockedPrompt = _showLoginGuideDialog;
-
-  /// 软封引导弹窗：风控拦截（登录态/匿名均可能发生），确认后打开专门验证页完成滑块
-  static Future<void> _showLoginGuideDialog(String webRid) async {
-    final goVerify = await Get.dialog<bool>(
-      AlertDialog(
-        title: const Text('需要完成抖音验证'),
-        content: const Text('访问触发了抖音安全验证，完成滑块验证后即可继续观看。'),
-        actions: [
-          TextButton(
-            onPressed: () => Get.back(result: false),
-            child: const Text('稍后'),
-          ),
-          TextButton(
-            onPressed: () => Get.back(result: true),
-            child: const Text('去验证'),
-          ),
-        ],
-      ),
-    );
-    if (goVerify == true) {
-      DouyinAccountService.instance.startVerify(webRid);
-    }
-  }
-
-  Future<void> _runSoftBlockedPrompt(String webRid) async {
-    try {
-      await softBlockedPrompt(webRid);
-    } catch (e) {
-      Log.w('DouyinWebView soft-blocked prompt failed: $e');
-    }
-  }
-
-  /// 用户在专门验证页完成滑块后调用：复位软封计数与引导标记，避免后续误清除
-  void onVerifyCompleted() {
-    _softBlockedFailures = 0;
-    _softBlockedPromptShown = false;
-  }
 
   /// 测试注入：覆盖单次删除动作，避免测试触碰真实 WebView2 目录
   @visibleForTesting
@@ -367,16 +321,11 @@ class DouyinWebViewService extends GetxService {
           validateResponse(obj['code'] as int?, obj['html'] as String);
           _businessFailures = 0;
           _softBlockedFailures = 0;
-          _softBlockedPromptShown = false;
           return obj['html'] as String;
         }
       } on DouyinWebViewException catch (e) {
         if (e is DouyinSoftBlockedException) {
           _softBlockedFailures++;
-          if (!_softBlockedPromptShown) {
-            _softBlockedPromptShown = true;
-            unawaited(_runSoftBlockedPrompt(webRid));
-          }
           if (_softBlockedFailures >= softBlockedEraseThreshold) {
             unawaited(_rebuild(clearUserData: true));
           }
@@ -405,7 +354,6 @@ class DouyinWebViewService extends GetxService {
     _syncedCookie = '';
     _businessFailures = 0;
     _softBlockedFailures = 0;
-    _softBlockedPromptShown = false;
     try {
       await old?.dispose();
     } catch (_) {}

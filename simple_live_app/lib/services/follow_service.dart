@@ -17,6 +17,7 @@ import 'package:simple_live_app/app/utils.dart';
 import 'package:simple_live_app/models/db/follow_user.dart';
 import 'package:simple_live_app/models/db/follow_user_tag.dart';
 import 'package:simple_live_app/services/db_service.dart';
+import 'package:simple_live_app/services/guard_server_service.dart';
 import 'package:simple_live_core/simple_live_core.dart';
 
 class FollowService extends GetxService {
@@ -280,6 +281,24 @@ class FollowService extends GetxService {
     _lastDouyinRequestTime = DateTime.now();
   }
 
+  /// 抖音直播状态：优先走 guard 服务端 reflow（服务端缓存 room_id，无进场副作用）；
+  /// guard 未配置/未登录时由 directFallback 走原有 WebView 取页路径
+  @visibleForTesting
+  Future<bool> resolveDouyinLiving({
+    required String webRid,
+    required Future<bool> Function() directFallback,
+  }) async {
+    if (!Get.isRegistered<GuardServerService>()) return directFallback();
+    final guard = GuardServerService.instance;
+    final accountId = await guard.ensureAccount("douyin");
+    if (accountId == null) return directFallback();
+    final data = await guard.getLiveStatus(
+      accountId: accountId,
+      webRid: webRid,
+    );
+    return data["living"] == true;
+  }
+
   Future updateLiveStatus(FollowUser item,
       {required int generation}) async {
     if (item.siteId == Constant.kDouyin) {
@@ -290,8 +309,15 @@ class FollowService extends GetxService {
       var queryId = item.siteId == Constant.kDouyin
           ? "${item.roomId};${item.shareUrl}"
           : item.roomId;
-      // 先只查状态
-      var isLiving = await site.liveSite.getLiveStatus(roomId: queryId);
+      // 先只查状态：抖音走 guard 服务端 reflow（room_id 由服务端缓存），
+      // guard 未配置账号时回退原有 WebView 直连
+      var isLiving = item.siteId == Constant.kDouyin
+          ? await resolveDouyinLiving(
+              webRid: item.roomId,
+              directFallback: () =>
+                  site.liveSite.getLiveStatus(roomId: queryId),
+            )
+          : await site.liveSite.getLiveStatus(roomId: queryId);
       item.liveStatus.value = isLiving ? 2 : 1;
       if (isLiving) {
         // 只有正在直播时才查详细信息

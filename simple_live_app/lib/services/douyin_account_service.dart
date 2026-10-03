@@ -40,11 +40,6 @@ class DouyinAccountService extends GetxService {
     site.cookie = logined.value ? loginCookie : cookie;
   }
 
-  /// 打开专门验证页：直接进入房间页完成滑块，不自动关闭
-  void startVerify(String webRid) {
-    Get.toNamed(RoutePath.kDouyinVerify, arguments: webRid);
-  }
-
   /// 打开真实 WebView 登录页（live.douyin.com），滑块安全验证与登录都在该页完成
   void startWebLogin() {
     Get.toNamed(

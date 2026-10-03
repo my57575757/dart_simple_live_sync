@@ -178,8 +178,29 @@ class GuardServerService extends GetxService {
     return Map<String, dynamic>.from(res.data["data"] as Map);
   }
 
-  Future<Map<String, dynamic>> heartbeat({
+  /// 直播状态被动查询：服务端缓存 room_id，不进场、无副作用
+  Future<Map<String, dynamic>> getLiveStatus({
     required String accountId,
+    String roomId = "",
+    String webRid = "",
+  }) async {
+    final dio = Dio(BaseOptions(
+      baseUrl: serverUrl,
+      connectTimeout: const Duration(seconds: 10),
+    ));
+    final res = await dio.post<dynamic>(
+      "/api/room/status",
+      data: {
+        "accountId": accountId,
+        "roomId": roomId,
+        "webRid": webRid,
+      },
+      options: _options,
+    );
+    return Map<String, dynamic>.from(res.data["data"] as Map);
+  }
+
+  Future<Map<String, dynamic>> heartbeat({    required String accountId,
     required String roomId,
     String webRid = "",
     Map<String, dynamic>? extra,
