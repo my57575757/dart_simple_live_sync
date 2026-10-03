@@ -1,7 +1,10 @@
+import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:get/get.dart';
 import 'package:simple_live_app/app/constant.dart';
 import 'package:simple_live_app/app/log.dart';
 import 'package:simple_live_app/app/sites.dart';
+import 'package:simple_live_app/modules/mine/account/web_login.dart';
+import 'package:simple_live_app/routes/route_path.dart';
 import 'package:simple_live_app/services/guard_server_service.dart';
 import 'package:simple_live_app/services/local_storage_service.dart';
 import 'package:simple_live_core/simple_live_core.dart';
@@ -35,6 +38,24 @@ class DouyinAccountService extends GetxService {
   void setSite() {
     var site = (Sites.allSites[Constant.kDouyin]!.liveSite as DouyinSite);
     site.cookie = logined.value ? loginCookie : cookie;
+  }
+
+  /// 打开真实 WebView 登录页（live.douyin.com），滑块安全验证与登录都在该页完成
+  void startWebLogin() {
+    Get.toNamed(
+      RoutePath.kWebLogin,
+      arguments: WebLoginArgs(
+        title: "抖音账号登录",
+        startUrl: "https://live.douyin.com",
+        cookieUrl: "https://live.douyin.com",
+        userAgent: WebLoginArgs.desktopUserAgent,
+        requiredCookies: const ["sessionid"],
+        onSuccess: (cookieStr) {
+          setLoginCookie(cookieStr);
+          SmartDialog.showToast("抖音登录成功");
+        },
+      ),
+    );
   }
 
   void setCookie(String cookie) {

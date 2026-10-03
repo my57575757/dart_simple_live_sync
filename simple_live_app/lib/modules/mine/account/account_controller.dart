@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:get/get.dart';
 import 'package:simple_live_app/app/utils.dart';
-import 'package:simple_live_app/modules/mine/account/web_login.dart';
 import 'package:simple_live_app/routes/route_path.dart';
 import 'package:simple_live_app/services/bilibili_account_service.dart';
 import 'package:simple_live_app/services/douyin_account_service.dart';
@@ -116,20 +115,7 @@ class AccountController extends GetxController {
   }
 
   void douyinLogin() {
-    Get.toNamed(
-      RoutePath.kWebLogin,
-      arguments: WebLoginArgs(
-        title: "抖音账号登录",
-        startUrl: "https://live.douyin.com",
-        cookieUrl: "https://live.douyin.com",
-        userAgent: WebLoginArgs.desktopUserAgent,
-        requiredCookies: ["sessionid"],
-        onSuccess: (cookieStr) {
-          DouyinAccountService.instance.setLoginCookie(cookieStr);
-          SmartDialog.showToast("抖音登录成功");
-        },
-      ),
-    );
+    DouyinAccountService.instance.startWebLogin();
   }
 
   void douyinMenu() {

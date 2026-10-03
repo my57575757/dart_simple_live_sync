@@ -10,7 +10,7 @@ import 'package:get/get.dart';
 import 'package:simple_live_app/app/constant.dart';
 import 'package:simple_live_app/app/log.dart';
 import 'package:simple_live_app/app/sites.dart';
-import 'package:simple_live_app/routes/route_path.dart';
+import 'package:simple_live_app/services/douyin_account_service.dart';
 import 'package:simple_live_core/simple_live_core.dart';
 
 /// WebView 通道错误（message 可直接展示给用户）
@@ -151,12 +151,12 @@ class DouyinWebViewService extends GetxService {
   @visibleForTesting
   Future<void> Function() softBlockedPrompt = _showLoginGuideDialog;
 
-  /// 软封引导弹窗：告知匿名访问被风控拦截，确认后跳转账号管理页登录
+  /// 软封引导弹窗：风控拦截（登录态/匿名均可能发生），确认后直接打开抖音登录页完成滑块验证
   static Future<void> _showLoginGuideDialog() async {
-    final goLogin = await Get.dialog<bool>(
+    final goVerify = await Get.dialog<bool>(
       AlertDialog(
-        title: const Text('需要登录抖音账号'),
-        content: const Text('匿名访问已触发抖音风控，登录账号后可正常观看。'),
+        title: const Text('需要完成抖音验证'),
+        content: const Text('访问触发了抖音安全验证，完成滑块验证后即可继续观看。'),
         actions: [
           TextButton(
             onPressed: () => Get.back(result: false),
@@ -164,13 +164,13 @@ class DouyinWebViewService extends GetxService {
           ),
           TextButton(
             onPressed: () => Get.back(result: true),
-            child: const Text('去登录'),
+            child: const Text('去验证'),
           ),
         ],
       ),
     );
-    if (goLogin == true) {
-      Get.toNamed(RoutePath.kSettingsAccount);
+    if (goVerify == true) {
+      DouyinAccountService.instance.startWebLogin();
     }
   }
 
