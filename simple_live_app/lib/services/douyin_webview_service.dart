@@ -46,9 +46,6 @@ class DouyinWebViewService extends GetxService {
   static const Duration eraseRetryBackoff = Duration(seconds: 1);
   static const int maxEraseAttempts = 3;
 
-  /// 连续空响应（软封）达到此次数后清除设备会话
-  static const int softBlockedEraseThreshold = 2;
-
   /// 正常房间页约 1.2MB；验证码中间页约 6.3KB
   static const int minValidHtmlLength = 20000;
 
@@ -140,7 +137,6 @@ class DouyinWebViewService extends GetxService {
   Completer<void>? _reloadCompleter;
   String _syncedCookie = '';
   int _businessFailures = 0;
-  int _softBlockedFailures = 0;
 
   /// 测试注入：覆盖单次删除动作，避免测试触碰真实 WebView2 目录
   @visibleForTesting
@@ -283,66 +279,71 @@ class DouyinWebViewService extends GetxService {
   Future<String> _fetchRoomHtml(String webRid, String cookie) {
     return _locked(() async {
       try {
-        await _ensureStarted();
-        await _applyCookie(cookie);
-
-        final currentUrl = await _channelCall(_controller!.getUrl);
-        if (currentUrl == null || currentUrl.origin != origin) {
-          throw StateError('抖音 WebView 会话不在同源页');
-        }
-
-        final token = 'f${DateTime.now().microsecondsSinceEpoch}';
-        await _channelCall(
-          () => _controller!.evaluateJavascript(
-            source: buildFetchScript(token, webRid),
-          ),
-        );
-
-        final deadline = DateTime.now().add(fetchTimeout);
-        while (true) {
-          await Future<void>.delayed(pollInterval);
-          final raw = await _channelCall(
-            () => _controller!.evaluateJavascript(
-              source: buildPollScript(token),
-            ),
-          );
-          final obj = jsonDecode(raw as String) as Map?;
-          if (obj == null || obj['s'] == 'pending') {
-            if (DateTime.now().isAfter(deadline)) {
-              throw DouyinWebViewException(
-                '获取抖音房间页面超时（${fetchTimeout.inSeconds} 秒）',
-              );
-            }
-            continue;
-          }
-          if (obj['s'] == 'error') {
-            throw DouyinWebViewException('页面请求失败：${obj['e']}');
-          }
-          validateResponse(obj['code'] as int?, obj['html'] as String);
-          _businessFailures = 0;
-          _softBlockedFailures = 0;
-          return obj['html'] as String;
-        }
-      } on DouyinWebViewException catch (e) {
-        if (e is DouyinSoftBlockedException) {
-          _softBlockedFailures++;
-          if (_softBlockedFailures >= softBlockedEraseThreshold) {
-            unawaited(_rebuild(clearUserData: true));
-          }
-        } else {
-          _businessFailures++;
-          if (_businessFailures >= 3) {
-            unawaited(_rebuild());
-          }
-        }
-        rethrow;
-      } catch (e) {
-        // 通道级异常（控制器失效等）：立即销毁，下次调用重建
-        Log.w('DouyinWebView channel error: $e');
-        unawaited(_rebuild());
-        rethrow;
+        return await _fetchOnce(webRid, cookie);
+      } on DouyinSoftBlockedException {
+        // 设备会话被软封（200+空 body）：当次清除被封会话、重建后重试一次，
+        // 重试仍空则由其继续抛出，不循环
+        await _rebuild(clearUserData: true);
+        return _fetchOnce(webRid, cookie);
       }
     });
+  }
+
+  Future<String> _fetchOnce(String webRid, String cookie) async {
+    try {
+      await _ensureStarted();
+      await _applyCookie(cookie);
+
+      final currentUrl = await _channelCall(_controller!.getUrl);
+      if (currentUrl == null || currentUrl.origin != origin) {
+        throw StateError('抖音 WebView 会话不在同源页');
+      }
+
+      final token = 'f${DateTime.now().microsecondsSinceEpoch}';
+      await _channelCall(
+        () => _controller!.evaluateJavascript(
+          source: buildFetchScript(token, webRid),
+        ),
+      );
+
+      final deadline = DateTime.now().add(fetchTimeout);
+      while (true) {
+        await Future<void>.delayed(pollInterval);
+        final raw = await _channelCall(
+          () => _controller!.evaluateJavascript(
+            source: buildPollScript(token),
+          ),
+        );
+        final obj = jsonDecode(raw as String) as Map?;
+        if (obj == null || obj['s'] == 'pending') {
+          if (DateTime.now().isAfter(deadline)) {
+            throw DouyinWebViewException(
+              '获取抖音房间页面超时（${fetchTimeout.inSeconds} 秒）',
+            );
+          }
+          continue;
+        }
+        if (obj['s'] == 'error') {
+          throw DouyinWebViewException('页面请求失败：${obj['e']}');
+        }
+        validateResponse(obj['code'] as int?, obj['html'] as String);
+        _businessFailures = 0;
+        return obj['html'] as String;
+      }
+    } on DouyinWebViewException catch (e) {
+      if (e is! DouyinSoftBlockedException) {
+        _businessFailures++;
+        if (_businessFailures >= 3) {
+          unawaited(_rebuild());
+        }
+      }
+      rethrow;
+    } catch (e) {
+      // 通道级异常（控制器失效等）：立即销毁，下次调用重建
+      Log.w('DouyinWebView channel error: $e');
+      unawaited(_rebuild());
+      rethrow;
+    }
   }
 
   Future<void> _rebuild({bool clearUserData = false}) async {
@@ -353,7 +354,6 @@ class DouyinWebViewService extends GetxService {
     _reloadCompleter = null;
     _syncedCookie = '';
     _businessFailures = 0;
-    _softBlockedFailures = 0;
     try {
       await old?.dispose();
     } catch (_) {}
