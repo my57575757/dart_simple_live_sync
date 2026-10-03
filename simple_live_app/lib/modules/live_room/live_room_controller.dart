@@ -241,6 +241,12 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     }
   }
 
+  /// 是否可以启动弹幕：抖音 SSR 骨架占位房间（roomId 为空）无法建立弹幕连接
+  static bool canStartDanmaku(LiveRoomDetail? detail) {
+    final args = detail?.danmakuData;
+    return !(args is DouyinDanmakuArgs && args.roomId.isEmpty);
+  }
+
   /// 初始化弹幕接收事件
   void initDanmau() {
     liveDanmaku.onMessage = onWSMessage;
@@ -362,6 +368,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     _stopGuardHeartbeat();
     guardJoined.value = false;
     guardStarRoom.value = false;
+    if (!canStartDanmaku(detail.value)) return;
     final guard = GuardServerService.instance;
     if (!guard.configured || !_guardPlatforms.contains(site.id)) return;
     final accountId = guard.savedAccountId(site.id);
@@ -900,11 +907,15 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       if (detail.value!.isRecord) {
         addSysMsg("当前主播未开播，正在轮播录像");
       }
-      addSysMsg("开始连接弹幕服务器");
-      initDanmau();
-      liveDanmaku.start(detail.value?.danmakuData);
+      if (canStartDanmaku(detail.value)) {
+        addSysMsg("开始连接弹幕服务器");
+        initDanmau();
+        liveDanmaku.start(detail.value?.danmakuData);
+        unawaited(_enterGuardRoom());
+      } else {
+        addSysMsg("当前主播未开播，不连接弹幕服务器");
+      }
       startLiveDurationTimer(); // 启动开播时长定时器
-      unawaited(_enterGuardRoom());
     } catch (e) {
       Log.logPrint(e);
       //SmartDialog.showToast(e.toString());
