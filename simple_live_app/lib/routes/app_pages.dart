@@ -30,6 +30,7 @@ import 'package:simple_live_app/modules/mine/account/bilibili/qr_login_page.dart
 import 'package:simple_live_app/modules/mine/account/bilibili/web_login_controller.dart';
 import 'package:simple_live_app/modules/mine/account/bilibili/web_login_page.dart';
 import 'package:simple_live_app/modules/mine/account/web_login.dart';
+import 'package:simple_live_app/modules/mine/account/douyin_verify_page.dart';
 import 'package:simple_live_app/modules/settings/appstyle_setting_page.dart';
 import 'package:simple_live_app/modules/settings/auto_exit_settings_page.dart';
 import 'package:simple_live_app/modules/settings/danmu_settings_page.dart';
@@ -180,6 +181,12 @@ class AppPages {
       name: RoutePath.kWebLogin,
       page: () => const WebLoginPage(),
       binding: BindingsBuilder.put(() => WebLoginController()),
+    ),
+    //抖音滑块安全验证
+    GetPage(
+      name: RoutePath.kDouyinVerify,
+      page: () => const DouyinVerifyPage(),
+      binding: BindingsBuilder.put(() => DouyinVerifyController()),
     ),
     // 数据同步
     GetPage(

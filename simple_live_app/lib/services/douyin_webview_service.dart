@@ -147,12 +147,12 @@ class DouyinWebViewService extends GetxService {
   /// 当前软封周期是否已弹过引导（去重）；成功取房或重建后复位
   bool _softBlockedPromptShown = false;
 
-  /// 软封时的登录引导动作；默认弹窗引导去账号页，测试可替换
+  /// 软封时的登录引导动作；默认弹窗引导去验证页，测试可替换；参数为房间号
   @visibleForTesting
-  Future<void> Function() softBlockedPrompt = _showLoginGuideDialog;
+  Future<void> Function(String webRid) softBlockedPrompt = _showLoginGuideDialog;
 
-  /// 软封引导弹窗：风控拦截（登录态/匿名均可能发生），确认后直接打开抖音登录页完成滑块验证
-  static Future<void> _showLoginGuideDialog() async {
+  /// 软封引导弹窗：风控拦截（登录态/匿名均可能发生），确认后打开专门验证页完成滑块
+  static Future<void> _showLoginGuideDialog(String webRid) async {
     final goVerify = await Get.dialog<bool>(
       AlertDialog(
         title: const Text('需要完成抖音验证'),
@@ -170,16 +170,22 @@ class DouyinWebViewService extends GetxService {
       ),
     );
     if (goVerify == true) {
-      DouyinAccountService.instance.startWebLogin();
+      DouyinAccountService.instance.startVerify(webRid);
     }
   }
 
-  Future<void> _runSoftBlockedPrompt() async {
+  Future<void> _runSoftBlockedPrompt(String webRid) async {
     try {
-      await softBlockedPrompt();
+      await softBlockedPrompt(webRid);
     } catch (e) {
       Log.w('DouyinWebView soft-blocked prompt failed: $e');
     }
+  }
+
+  /// 用户在专门验证页完成滑块后调用：复位软封计数与引导标记，避免后续误清除
+  void onVerifyCompleted() {
+    _softBlockedFailures = 0;
+    _softBlockedPromptShown = false;
   }
 
   /// 测试注入：覆盖单次删除动作，避免测试触碰真实 WebView2 目录
@@ -369,7 +375,7 @@ class DouyinWebViewService extends GetxService {
           _softBlockedFailures++;
           if (!_softBlockedPromptShown) {
             _softBlockedPromptShown = true;
-            unawaited(_runSoftBlockedPrompt());
+            unawaited(_runSoftBlockedPrompt(webRid));
           }
           if (_softBlockedFailures >= softBlockedEraseThreshold) {
             unawaited(_rebuild(clearUserData: true));

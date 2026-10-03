@@ -306,7 +306,11 @@ void main() {
       fakeAsync((async) {
         final service = buildService(['', '']);
         var promptCount = 0;
-        service.softBlockedPrompt = () async => promptCount++;
+        String? capturedRid;
+        service.softBlockedPrompt = (rid) async {
+          promptCount++;
+          capturedRid = rid;
+        };
 
         unawaited(() async {
           for (var i = 0; i < 2; i++) {
@@ -320,6 +324,7 @@ void main() {
         async.flushMicrotasks();
 
         expect(promptCount, 1, reason: '去重：同周期第二次软封不应再弹窗');
+        expect(capturedRid, '699394970561', reason: '引导动作应收到房间号');
       });
     });
 
@@ -327,7 +332,7 @@ void main() {
       fakeAsync((async) {
         final service = buildService(['', 'x' * 30000, '']);
         var promptCount = 0;
-        service.softBlockedPrompt = () async => promptCount++;
+        service.softBlockedPrompt = (rid) async => promptCount++;
         final errorTypes = <Type>[];
 
         unawaited(() async {
@@ -348,6 +353,28 @@ void main() {
           equals([DouyinSoftBlockedException, DouyinSoftBlockedException]),
         );
         expect(promptCount, 2, reason: '中间成功复位后，再次软封应重新引导');
+      });
+    });
+
+    test('完成验证后复位，再次软封重新引导', () {
+      fakeAsync((async) {
+        final service = buildService(['', '']);
+        var promptCount = 0;
+        service.softBlockedPrompt = (rid) async => promptCount++;
+
+        unawaited(() async {
+          for (var i = 0; i < 2; i++) {
+            try {
+              await service.fetchRoomHtmlForTesting('699394970561', '');
+            } catch (_) {}
+            if (i == 0) service.onVerifyCompleted();
+          }
+        }());
+
+        async.elapse(const Duration(seconds: 10));
+        async.flushMicrotasks();
+
+        expect(promptCount, 2, reason: '完成验证复位后，再次软封应重新引导');
       });
     });
   });

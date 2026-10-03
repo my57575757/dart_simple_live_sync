@@ -63,6 +63,9 @@ class RoutePath {
   /// 通用 WebView 登录
   static const kWebLogin = "/web-login";
 
+  /// 抖音滑块安全验证
+  static const kDouyinVerify = "/douyin/verify";
+
   /// 数据同步
   static const kLocalSync = "/local_sync";
 
