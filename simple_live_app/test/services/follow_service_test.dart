@@ -1,5 +1,6 @@
+import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:get/get.dart';
+import 'package:get/get.dart' hide Response;
 import 'package:simple_live_app/services/follow_service.dart';
 import 'package:simple_live_app/services/guard_server_service.dart';
 import 'package:simple_live_app/services/local_storage_service.dart';
@@ -15,10 +16,20 @@ class FakeLocalStorage extends LocalStorageService {
 class FakeGuard extends GuardServerService {
   String? accountId = 'douyin-1';
   bool livingResult = true;
+  bool failFirstWith404 = false;
+  String? reregisterResult = 'douyin-2';
+  int reregisterCalls = 0;
   final List<Map<String, dynamic>> statusCalls = [];
 
   @override
   Future<String?> ensureAccount(String platform) async => accountId;
+
+  @override
+  Future<String?> reregister(String platform) async {
+    reregisterCalls++;
+    accountId = reregisterResult;
+    return reregisterResult;
+  }
 
   @override
   Future<Map<String, dynamic>> getLiveStatus({
@@ -27,6 +38,14 @@ class FakeGuard extends GuardServerService {
     String webRid = '',
   }) async {
     statusCalls.add({'accountId': accountId, 'webRid': webRid});
+    if (failFirstWith404) {
+      failFirstWith404 = false;
+      final ro = RequestOptions(path: '/api/room/status');
+      throw DioException(
+        requestOptions: ro,
+        response: Response<dynamic>(statusCode: 404, requestOptions: ro),
+      );
+    }
     return {'living': livingResult};
   }
 }
@@ -72,5 +91,19 @@ void main() {
 
     expect(living, true);
     expect(guard.statusCalls, isEmpty);
+  });
+
+  test('旧 accountId 失效(404)：重新注册并重试一次', () async {
+    guard.failFirstWith404 = true;
+
+    final living = await follow.resolveDouyinLiving(
+      webRid: '96252793301',
+      directFallback: () async => false,
+    );
+
+    expect(living, true);
+    expect(guard.reregisterCalls, 1);
+    expect(guard.statusCalls[0]['accountId'], 'douyin-1');
+    expect(guard.statusCalls[1]['accountId'], 'douyin-2');
   });
 }

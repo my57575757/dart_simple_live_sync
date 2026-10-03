@@ -3,6 +3,7 @@ import 'dart:collection';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:dio/dio.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
@@ -290,13 +291,25 @@ class FollowService extends GetxService {
   }) async {
     if (!Get.isRegistered<GuardServerService>()) return directFallback();
     final guard = GuardServerService.instance;
-    final accountId = await guard.ensureAccount("douyin");
+    var accountId = await guard.ensureAccount("douyin");
     if (accountId == null) return directFallback();
-    final data = await guard.getLiveStatus(
-      accountId: accountId,
-      webRid: webRid,
-    );
-    return data["living"] == true;
+    try {
+      final data = await guard.getLiveStatus(
+        accountId: accountId,
+        webRid: webRid,
+      );
+      return data["living"] == true;
+    } on DioException catch (e) {
+      // 服务端重建后旧 accountId 失效：重新注册并重试一次
+      if (e.response?.statusCode != 404) rethrow;
+      final newId = await guard.reregister("douyin");
+      if (newId == null || newId == accountId) rethrow;
+      final data = await guard.getLiveStatus(
+        accountId: newId,
+        webRid: webRid,
+      );
+      return data["living"] == true;
+    }
   }
 
   Future updateLiveStatus(FollowUser item,
