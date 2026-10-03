@@ -48,26 +48,47 @@ class DouyinDanmaku extends LiveDanmaku {
   /// 登录用户真实 uid；未登录或解析失败时为空
   String _selfUid = "";
 
+  /// 房间页 HTML 提供者：由宿主注入真实浏览器内核通道（绕过 Dart TLS 指纹风控）；
+  /// 为 null 时走 HttpClient 直连
+  Future<String> Function(String webRid, String cookie)? htmlProvider;
+
+  String get selfUidForTesting => _selfUid;
+
   static final _selfUidRegex = RegExp(
     r'\\?"user_id\\?":\\?"(\d+)\\?",\\?"user_type\\?":\d+,\\?"user_is_auth\\?":\d+,\\?"user_is_login\\?":1',
   );
 
+  Future<String> _fetchRoomHtmlDirect(String webRid, String cookie) async {
+    final response = await HttpClient.instance.getResponse(
+      "https://live.douyin.com/$webRid",
+      header: {
+        "User-Agent": DouyinSite.kDefaultUserAgent,
+        "Cookie": cookie,
+      },
+    );
+    return response.data?.toString() ?? "";
+  }
+
   /// 带登录 cookie 拉房间页，从 odin 中解析登录用户真实 uid
-  Future<void> _resolveSelfUid() async {
+  Future<void> resolveSelfUidForTesting({
+    required String webRid,
+    required String cookie,
+  }) async {
     try {
-      final response = await HttpClient.instance.getResponse(
-        "https://live.douyin.com/${danmakuArgs.webRid}",
-        header: {
-          "User-Agent": DouyinSite.kDefaultUserAgent,
-          "Cookie": danmakuArgs.cookie,
-        },
-      );
-      final html = response.data?.toString() ?? "";
+      final provider = htmlProvider;
+      final html = provider != null
+          ? await provider(webRid, cookie)
+          : await _fetchRoomHtmlDirect(webRid, cookie);
       _selfUid = _selfUidRegex.firstMatch(html)?.group(1) ?? "";
     } catch (e) {
       CoreLog.error(e);
     }
   }
+
+  Future<void> _resolveSelfUid() => resolveSelfUidForTesting(
+    webRid: danmakuArgs.webRid,
+    cookie: danmakuArgs.cookie,
+  );
 
   @override
   Future start(dynamic args) async {

@@ -22,7 +22,8 @@ class DouyinSite implements LiveSite {
   String name = "抖音直播";
 
   @override
-  LiveDanmaku getDanmaku() => DouyinDanmaku();
+  LiveDanmaku getDanmaku() =>
+      DouyinDanmaku()..htmlProvider = htmlFetcher;
 
   /// 使用 QQBrowser User-Agent（参考 DouyinLiveRecorder）
   static const String kDefaultUserAgent =
