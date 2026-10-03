@@ -95,6 +95,13 @@ class DouyinWebViewService extends GetxService {
     }
   }
 
+  /// 去掉 cookie 串中的 ttwid：ttwid 是设备会话凭据，登录时捕获并保存的旧
+  /// ttwid 重新注入可能已被风控；移除后 reload 由抖音重新签发
+  static String stripTtwid(String cookie) {
+    final pairs = parseCookiePairs(cookie)..remove('ttwid');
+    return pairs.entries.map((e) => '${e.key}=${e.value}').join('; ');
+  }
+
   /// 启动脚本：页面内 fetch 房间路径，结果写入 window.__dyFetch[token]
   static String buildFetchScript(String token, String webRid) {
     final key = jsonEncode(token);
@@ -211,6 +218,22 @@ class DouyinWebViewService extends GetxService {
     if (c != null && !c.isCompleted) c.complete();
   }
 
+  @visibleForTesting
+  void completeReloadForTesting() {
+    final c = _reloadCompleter;
+    if (c != null && !c.isCompleted) c.complete();
+  }
+
+  /// 软封一级自愈：在活会话内删除 ttwid 并 reload，由抖音签发新设备会话
+  Future<void> _rotateTtwid() async {
+    await CookieManager.instance()
+        .deleteCookie(url: WebUri(origin), name: 'ttwid')
+        .timeout(initTimeout);
+    _reloadCompleter = Completer<void>();
+    await _controller!.reload().timeout(initTimeout);
+    await _reloadCompleter!.future.timeout(initTimeout);
+  }
+
   HeadlessInAppWebView _buildHeadless(Completer<void> firstLoad) {
     _reloadCompleter = Completer<void>();
     Future<void> inject(InAppWebViewController controller) async {
@@ -251,7 +274,8 @@ class DouyinWebViewService extends GetxService {
       return;
     }
     final cookieManager = CookieManager.instance();
-    for (final entry in parseCookiePairs(cookie).entries) {
+    for (final entry
+        in parseCookiePairs(stripTtwid(cookie)).entries) {
       await cookieManager
           .setCookie(
             url: WebUri(origin),
@@ -281,10 +305,16 @@ class DouyinWebViewService extends GetxService {
       try {
         return await _fetchOnce(webRid, cookie);
       } on DouyinSoftBlockedException {
-        // 设备会话被软封（200+空 body）：当次清除被封会话、重建后重试一次，
-        // 重试仍空则由其继续抛出，不循环
-        await _rebuild(clearUserData: true);
-        return _fetchOnce(webRid, cookie);
+        // 设备会话软封（200+空 body）：
+        // 一级自愈：活会话内轮换 ttwid 后重试，保留登录态、不动文件
+        try {
+          await _rotateTtwid();
+          return await _fetchOnce(webRid, cookie);
+        } on DouyinSoftBlockedException {
+          // 二级兜底：ttwid 无关（指纹级封禁），清目录重建后再试一次
+          await _rebuild(clearUserData: true);
+          return _fetchOnce(webRid, cookie);
+        }
       }
     });
   }

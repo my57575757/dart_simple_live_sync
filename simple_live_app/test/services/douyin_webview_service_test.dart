@@ -247,6 +247,25 @@ void main() {
     });
   });
 
+  group('stripTtwid', () {
+    test('移除 cookie 串中的 ttwid，保留其余字段', () {
+      expect(
+        DouyinWebViewService.stripTtwid(
+          'ttwid=t1; sessionid=s2; odin_tt=o3',
+        ),
+        equals('sessionid=s2; odin_tt=o3'),
+      );
+    });
+
+    test('无 ttwid 时原样保留', () {
+      expect(DouyinWebViewService.stripTtwid('a=b'), equals('a=b'));
+    });
+
+    test('空串安全', () {
+      expect(DouyinWebViewService.stripTtwid(''), isEmpty);
+    });
+  });
+
   group('软封轮换设备会话', () {
     setUpAll(() {
       InAppWebViewPlatform.instance = WindowsInAppWebViewPlatform();
@@ -254,6 +273,9 @@ void main() {
 
     const sharedChannel = MethodChannel(
       'com.pichillilorenzo/flutter_headless_inappwebview',
+    );
+    const cookieManagerChannel = MethodChannel(
+      'com.pichillilorenzo/flutter_inappwebview_cookiemanager',
     );
 
     test('默认删除器递归删除目录及内部文件', () async {
@@ -294,10 +316,11 @@ void main() {
       });
     });
 
-    test('首次空响应（软封）：当次清除设备会话、重建并重试成功', () {
+    test('首次空响应（软封）：轮换ttwid无效后清除设备会话、重建并重试成功', () {
       fakeAsync((async) {
         var eraseCalls = 0;
         var runCount = 0;
+        final deletedCookies = <String>[];
 
         MethodChannel controllerChannel(String id) =>
             MethodChannel('com.pichillilorenzo/flutter_inappwebview_$id');
@@ -307,6 +330,15 @@ void main() {
           eraseCalls++;
         };
 
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(cookieManagerChannel, (call) async {
+          if (call.method == 'deleteCookie') {
+            deletedCookies.add(
+              ((call.arguments as Map)['name'] ?? '').toString(),
+            );
+          }
+          return null;
+        });
         TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
             .setMockMethodCallHandler(sharedChannel, (call) async {
           if (call.method != 'run') return null;
@@ -326,11 +358,14 @@ void main() {
             switch (webCall.method) {
               case 'getUrl':
                 return 'https://live.douyin.com/';
+              case 'reload':
+                Timer.run(service.completeReloadForTesting);
+                return null;
               case 'evaluateJavascript':
                 final source =
                     (webCall.arguments as Map)['source'] as String;
                 if (source.contains('JSON.stringify')) {
-                  // 第一个（被封）会话返回空 body；重建后的新会话返回正常页
+                  // 第一个（被封）会话始终返回空 body；重建后的新会话返回正常页
                   final html = runCount == 1 ? '' : 'x' * 30000;
                   final state = jsonEncode({
                     's': 'done',
@@ -360,16 +395,20 @@ void main() {
         async.flushMicrotasks();
 
         expect(error, isNull, reason: '首次软封应在当次自愈，不向调用方抛错');
-        expect(eraseCalls, 1, reason: '首次软封即应清除一次设备会话');
+        expect(deletedCookies, contains('ttwid'),
+            reason: '应先在同会话轮换 ttwid');
+        expect(eraseCalls, 1, reason: '轮换无效后应清除一次设备会话');
         expect(runCount, 2, reason: '应重建出第二个浏览器会话');
         expect(html?.length ?? 0, greaterThan(20000));
       });
     });
 
-    test('首次空响应重建后仍空：只重试一次并抛出软封', () {
+    test('首次空响应：同会话轮换ttwid后重试成功，不重建不清目录', () {
       fakeAsync((async) {
         var eraseCalls = 0;
         var runCount = 0;
+        var pollCount = 0;
+        final deletedCookies = <String>[];
 
         MethodChannel controllerChannel(String id) =>
             MethodChannel('com.pichillilorenzo/flutter_inappwebview_$id');
@@ -379,6 +418,15 @@ void main() {
           eraseCalls++;
         };
 
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(cookieManagerChannel, (call) async {
+          if (call.method == 'deleteCookie') {
+            deletedCookies.add(
+              ((call.arguments as Map)['name'] ?? '').toString(),
+            );
+          }
+          return null;
+        });
         TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
             .setMockMethodCallHandler(sharedChannel, (call) async {
           if (call.method != 'run') return null;
@@ -397,6 +445,89 @@ void main() {
             switch (webCall.method) {
               case 'getUrl':
                 return 'https://live.douyin.com/';
+              case 'reload':
+                Timer.run(service.completeReloadForTesting);
+                return null;
+              case 'evaluateJavascript':
+                final source =
+                    (webCall.arguments as Map)['source'] as String;
+                if (source.contains('JSON.stringify')) {
+                  pollCount++;
+                  // 首次被封空响应；轮换 ttwid 后同会话即恢复
+                  final html = pollCount == 1 ? '' : 'x' * 30000;
+                  final state = jsonEncode({
+                    's': 'done',
+                    'code': 200,
+                    'html': html,
+                  });
+                  return jsonEncode(state);
+                }
+            }
+            return null;
+          });
+          Timer.run(service.completeFirstLoadForTesting);
+          return true;
+        });
+
+        Object? error;
+        String? html;
+        unawaited(() async {
+          try {
+            html = await service.fetchRoomHtmlForTesting('699394970561', '');
+          } catch (e) {
+            error = e;
+          }
+        }());
+
+        async.elapse(const Duration(seconds: 12));
+        async.flushMicrotasks();
+
+        expect(error, isNull);
+        expect(deletedCookies, contains('ttwid'));
+        expect(eraseCalls, 0, reason: '轮换成功不应清除目录');
+        expect(runCount, 1, reason: '不应重建浏览器会话');
+        expect(html?.length ?? 0, greaterThan(20000));
+      });
+    });
+
+    test('轮换ttwid与重建后均空：只重试一次并抛出软封', () {
+      fakeAsync((async) {
+        var eraseCalls = 0;
+        var runCount = 0;
+
+        MethodChannel controllerChannel(String id) =>
+            MethodChannel('com.pichillilorenzo/flutter_inappwebview_$id');
+
+        final service = DouyinWebViewService();
+        service.debugDeleteAttempt = (dir) async {
+          eraseCalls++;
+        };
+
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(cookieManagerChannel, (call) async {
+          return null;
+        });
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(sharedChannel, (call) async {
+          if (call.method != 'run') return null;
+          runCount++;
+          final args = (call.arguments as Map).cast<String, dynamic>();
+          final id = args['id'] as String;
+          final headlessChannel = MethodChannel(
+            'com.pichillilorenzo/flutter_headless_inappwebview_$id',
+          );
+          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+              .setMockMethodCallHandler(headlessChannel, (c) async => null);
+          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+              .setMockMethodCallHandler(controllerChannel(id), (
+                webCall,
+              ) async {
+            switch (webCall.method) {
+              case 'getUrl':
+                return 'https://live.douyin.com/';
+              case 'reload':
+                Timer.run(service.completeReloadForTesting);
+                return null;
               case 'evaluateJavascript':
                 final source =
                     (webCall.arguments as Map)['source'] as String;
@@ -429,7 +560,7 @@ void main() {
 
         expect(error, isA<DouyinSoftBlockedException>());
         expect(eraseCalls, 1);
-        expect(runCount, 2, reason: '只重建重试一次，不循环');
+        expect(runCount, 2, reason: '轮换+重建各一次，不循环');
       });
     });
   });
