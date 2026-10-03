@@ -278,57 +278,89 @@ void main() {
       'com.pichillilorenzo/flutter_inappwebview_cookiemanager',
     );
 
-    test('默认删除器递归删除目录及内部文件', () async {
-      final dir = await Directory.systemTemp.createTemp('dywv_erase_');
-      addTearDown(() async {
-        if (await dir.exists()) await dir.delete(recursive: true);
+    const envStaticChannel = MethodChannel(
+      'com.pichillilorenzo/flutter_webview_environment',
+    );
+
+    /// 模拟 WebViewEnvironment.create：记录 userDataFolder，per-env 通道全放行
+    void mockEnvCreate(List<String> envFolders) {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(envStaticChannel, (call) async {
+        if (call.method != 'create') return null;
+        final args = (call.arguments as Map).cast<String, dynamic>();
+        final id = args['id'].toString();
+        final folder =
+            ((args['settings'] as Map?)?['userDataFolder'] ?? '').toString();
+        envFolders.add(folder);
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(
+          MethodChannel(
+            'com.pichillilorenzo/flutter_webview_environment_$id',
+          ),
+          (c) async => null,
+        );
+        return null;
       });
-      final nested = Directory('${dir.path}/EBWebView/Default');
-      await nested.create(recursive: true);
-      await File('${nested.path}/Cookies').writeAsString('x');
+    }
+
+    test('启动前清扫：删除同层过期设备目录、保留当前目录', () async {
+      final parent = await Directory.systemTemp.createTemp('dywv_sweep_');
+      addTearDown(() async {
+        if (await parent.exists()) await parent.delete(recursive: true);
+      });
+      final stale1 = Directory('${parent.path}/simple_live_app.exe.WebView2');
+      final stale2 = Directory('${parent.path}/simple_live_app.exe.WebView2.p1');
+      final current = Directory('${parent.path}/simple_live_app.exe.WebView2.p2');
+      for (final d in [stale1, stale2, current]) {
+        await Directory('${d.path}/EBWebView').create(recursive: true);
+      }
 
       final service = DouyinWebViewService();
-      await service.eraseUserDataDirForTesting(dir);
+      await service.sweepStaleUserDataDirsForTesting(
+        current: current,
+        parent: parent,
+        prefix: 'simple_live_app.exe.WebView2',
+      );
 
-      expect(await dir.exists(), isFalse);
+      expect(await stale1.exists(), isFalse);
+      expect(await stale2.exists(), isFalse);
+      expect(await current.exists(), isTrue);
     });
 
-    test('删除遇占用（前两次失败）退避后第三次成功', () {
-      fakeAsync((async) {
-        var attempts = 0;
-        final service = DouyinWebViewService();
-        service.debugDeleteAttempt = (dir) async {
-          attempts++;
-          if (attempts < 3) throw StateError('directory in use');
-        };
-
-        Object? error;
-        unawaited(
-          service
-              .eraseUserDataDirForTesting(Directory(r'D:\fake'))
-              .then((_) {}, onError: (Object e) => error = e),
-        );
-        async.elapse(const Duration(seconds: 5));
-        async.flushMicrotasks();
-
-        expect(error, isNull);
-        expect(attempts, 3);
+    test('清扫遇占用不抛错，过期目录保留等下次启动再清', () async {
+      final parent = await Directory.systemTemp.createTemp('dywv_sweep_');
+      addTearDown(() async {
+        if (await parent.exists()) await parent.delete(recursive: true);
       });
+      final current = Directory('${parent.path}/x.exe.WebView2');
+      final stale = Directory('${parent.path}/x.exe.WebView2.p1');
+      for (final d in [current, stale]) {
+        await d.create(recursive: true);
+      }
+
+      final service = DouyinWebViewService();
+      await service.sweepStaleUserDataDirsForTesting(
+        current: current,
+        parent: parent,
+        prefix: 'x.exe.WebView2',
+        deleteAttempt: (dir) async =>
+            throw const PathAccessException('locked', OSError('busy', 32)),
+      );
+
+      expect(await stale.exists(), isTrue);
     });
 
-    test('首次空响应（软封）：轮换ttwid无效后清除设备会话、重建并重试成功', () {
+    test('首次空响应（软封）：轮换ttwid无效后换新设备目录、重建并重试成功', () {
       fakeAsync((async) {
-        var eraseCalls = 0;
         var runCount = 0;
         final deletedCookies = <String>[];
+        final envFolders = <String>[];
 
         MethodChannel controllerChannel(String id) =>
             MethodChannel('com.pichillilorenzo/flutter_inappwebview_$id');
 
         final service = DouyinWebViewService();
-        service.debugDeleteAttempt = (dir) async {
-          eraseCalls++;
-        };
+        mockEnvCreate(envFolders);
 
         TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
             .setMockMethodCallHandler(cookieManagerChannel, (call) async {
@@ -397,15 +429,17 @@ void main() {
         expect(error, isNull, reason: '首次软封应在当次自愈，不向调用方抛错');
         expect(deletedCookies, contains('ttwid'),
             reason: '应先在同会话轮换 ttwid');
-        expect(eraseCalls, 1, reason: '轮换无效后应清除一次设备会话');
+        expect(service.profileIndexForTesting, 1,
+            reason: '轮换无效后应换新设备目录，而非强删被锁的当前目录');
+        expect(envFolders.single, endsWith('.WebView2.p1'),
+            reason: '新浏览器会话应使用带 .p1 后缀的数据目录');
         expect(runCount, 2, reason: '应重建出第二个浏览器会话');
         expect(html?.length ?? 0, greaterThan(20000));
       });
     });
 
-    test('首次空响应：同会话轮换ttwid后重试成功，不重建不清目录', () {
+    test('首次空响应：同会话轮换ttwid后重试成功，不重建不换目录', () {
       fakeAsync((async) {
-        var eraseCalls = 0;
         var runCount = 0;
         var pollCount = 0;
         final deletedCookies = <String>[];
@@ -414,9 +448,6 @@ void main() {
             MethodChannel('com.pichillilorenzo/flutter_inappwebview_$id');
 
         final service = DouyinWebViewService();
-        service.debugDeleteAttempt = (dir) async {
-          eraseCalls++;
-        };
 
         TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
             .setMockMethodCallHandler(cookieManagerChannel, (call) async {
@@ -484,24 +515,22 @@ void main() {
 
         expect(error, isNull);
         expect(deletedCookies, contains('ttwid'));
-        expect(eraseCalls, 0, reason: '轮换成功不应清除目录');
+        expect(service.profileIndexForTesting, 0, reason: '轮换成功不应换设备目录');
         expect(runCount, 1, reason: '不应重建浏览器会话');
         expect(html?.length ?? 0, greaterThan(20000));
       });
     });
 
-    test('轮换ttwid与重建后均空：只重试一次并抛出软封', () {
+    test('轮换ttwid与新目录重建后均空：只重试一次并抛出软封', () {
       fakeAsync((async) {
-        var eraseCalls = 0;
         var runCount = 0;
+        final envFolders = <String>[];
 
         MethodChannel controllerChannel(String id) =>
             MethodChannel('com.pichillilorenzo/flutter_inappwebview_$id');
 
         final service = DouyinWebViewService();
-        service.debugDeleteAttempt = (dir) async {
-          eraseCalls++;
-        };
+        mockEnvCreate(envFolders);
 
         TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
             .setMockMethodCallHandler(cookieManagerChannel, (call) async {
@@ -559,7 +588,7 @@ void main() {
         async.flushMicrotasks();
 
         expect(error, isA<DouyinSoftBlockedException>());
-        expect(eraseCalls, 1);
+        expect(service.profileIndexForTesting, 1);
         expect(runCount, 2, reason: '轮换+重建各一次，不循环');
       });
     });

@@ -55,7 +55,7 @@ class DouyinDanmaku extends LiveDanmaku {
   String get selfUidForTesting => _selfUid;
 
   static final _selfUidRegex = RegExp(
-    r'\\?"user_id\\?":\\?"(\d+)\\?",\\?"user_type\\?":\d+,\\?"user_is_auth\\?":\d+,\\?"user_is_login\\?":1',
+    r'\\?"headerUserInfo\\?":\\?\{\\?"isLogin\\?":true,\\?"info\\?":\\?\{\\?"uid\\?":\\?"(\d+)\\?"',
   );
 
   Future<String> _fetchRoomHtmlDirect(String webRid, String cookie) async {
@@ -69,7 +69,7 @@ class DouyinDanmaku extends LiveDanmaku {
     return response.data?.toString() ?? "";
   }
 
-  /// 带登录 cookie 拉房间页，从 odin 中解析登录用户真实 uid
+  /// 带登录 cookie 拉房间页，从 headerUserInfo 中解析登录用户真实 uid
   Future<void> resolveSelfUidForTesting({
     required String webRid,
     required String cookie,

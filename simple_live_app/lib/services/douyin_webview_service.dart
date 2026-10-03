@@ -21,7 +21,7 @@ class DouyinWebViewException implements Exception {
 }
 
 /// 空 body 软封：抖音针对该设备会话（ttwid/设备指纹）返回 200 + 空响应，
-/// 非账号级，需清除 WebView2 用户数据目录换新设备会话
+/// 非账号级，需轮换到新的 WebView2 设备会话
 class DouyinSoftBlockedException extends DouyinWebViewException {
   DouyinSoftBlockedException(super.message);
 }
@@ -41,10 +41,6 @@ class DouyinWebViewService extends GetxService {
   /// 销毁后浏览器进程异步退出（持用户数据目录锁），启动失败时按此间隔退避重试
   static const Duration startRetryBackoff = Duration(seconds: 1);
   static const int maxStartAttempts = 3;
-
-  /// 清除用户数据目录时，进程尚未释放目录锁，按此间隔退避重试
-  static const Duration eraseRetryBackoff = Duration(seconds: 1);
-  static const int maxEraseAttempts = 3;
 
   /// 正常房间页约 1.2MB；验证码中间页约 6.3KB
   static const int minValidHtmlLength = 20000;
@@ -140,14 +136,18 @@ class DouyinWebViewService extends GetxService {
 
   HeadlessInAppWebView? _headless;
   InAppWebViewController? _controller;
+  WebViewEnvironment? _environment;
   Future<void>? _starting;
   Completer<void>? _reloadCompleter;
   String _syncedCookie = '';
   int _businessFailures = 0;
 
-  /// 测试注入：覆盖单次删除动作，避免测试触碰真实 WebView2 目录
+  /// 设备会话轮换序号：0 用默认数据目录，软封二级自愈后递增，
+  /// 新会话使用 `.WebView2.p<n>` 目录
+  int _profileIndex = 0;
+
   @visibleForTesting
-  Future<void> Function(Directory dir)? debugDeleteAttempt;
+  int get profileIndexForTesting => _profileIndex;
 
   /// 串行化：cookie 重注入/reload 与 fetch 不得交叠
   Future<void>? _lastTask;
@@ -186,6 +186,16 @@ class DouyinWebViewService extends GetxService {
   Completer<void>? _firstLoad;
 
   Future<void> _start() async {
+    if (Platform.isWindows) {
+      // 浏览器启动前清扫旧轮换目录（无锁）；占用未释放则跳过，下次启动再清
+      final exeName =
+          Platform.resolvedExecutable.replaceAll('\\', '/').split('/').last;
+      await _sweepStaleUserDataDirs(
+        current: _currentUserDataDir,
+        parent: _currentUserDataDir.parent,
+        prefix: '$exeName.WebView2',
+      );
+    }
     final firstLoad = Completer<void>();
     _firstLoad = firstLoad;
     HeadlessInAppWebView? headless;
@@ -195,6 +205,13 @@ class DouyinWebViewService extends GetxService {
         await Future<void>.delayed(startRetryBackoff * attempt);
       }
       try {
+        if (Platform.isWindows && _profileIndex > 0 && _environment == null) {
+          _environment = await WebViewEnvironment.create(
+            settings: WebViewEnvironmentSettings(
+              userDataFolder: _currentUserDataDir.path,
+            ),
+          );
+        }
         headless ??= _buildHeadless(firstLoad);
         await headless.run();
         _controller = headless.webViewController;
@@ -247,6 +264,7 @@ class DouyinWebViewService extends GetxService {
     }
 
     return HeadlessInAppWebView(
+      webViewEnvironment: _environment,
       initialUrlRequest: URLRequest(url: WebUri(homeUrl)),
       // 必须伪装桌面 UA：移动 UA 会被服务端 302 到 webcast.amemv.com 移动 reflow 页，
       // 页面内 fetch 跟随跨域重定向后因无 CORS 头失败（Windows WebView2 默认桌面 UA 不受影响）
@@ -378,8 +396,10 @@ class DouyinWebViewService extends GetxService {
 
   Future<void> _rebuild({bool clearUserData = false}) async {
     final old = _headless;
+    final oldEnv = _environment;
     _headless = null;
     _controller = null;
+    _environment = null;
     _starting = null;
     _reloadCompleter = null;
     _syncedCookie = '';
@@ -387,41 +407,69 @@ class DouyinWebViewService extends GetxService {
     try {
       await old?.dispose();
     } catch (_) {}
-    // 不立即重建：WebView2 浏览器进程异步退出，退出前持有用户数据目录锁。
-    // 软封时清除目录换新设备会话；下次请求按需启动，启动失败再退避重试
+    try {
+      await oldEnv?.dispose();
+    } catch (_) {}
+    // 不强删被锁的当前目录：软封时递增序号，下次启动使用 .p<n> 新目录，
+    // 旧目录等浏览器进程退出后由启动清扫删除
     if (clearUserData && Platform.isWindows) {
-      await _eraseUserDataDir(_userDataDir);
+      _profileIndex++;
     }
   }
 
-  /// 默认用户数据目录：WebView2 以 nullptr 创建时落在可执行文件旁
-  Directory get _userDataDir =>
-      Directory('${Platform.resolvedExecutable}.WebView2');
+  /// 当前会话用户数据目录：WebView2 默认目录落在可执行文件旁；
+  /// 轮换序号 >0 时使用 `.WebView2.p<n>`
+  Directory get _currentUserDataDir {
+    final base = '${Platform.resolvedExecutable}.WebView2';
+    return Directory(
+      _profileIndex == 0 ? base : '$base.p$_profileIndex',
+    );
+  }
 
   @visibleForTesting
-  Future<void> eraseUserDataDirForTesting(Directory dir) =>
-      _eraseUserDataDir(dir);
+  Future<void> sweepStaleUserDataDirsForTesting({
+    required Directory current,
+    required Directory parent,
+    required String prefix,
+    Future<void> Function(Directory dir)? deleteAttempt,
+  }) =>
+      _sweepStaleUserDataDirs(
+        current: current,
+        parent: parent,
+        prefix: prefix,
+        deleteAttempt: deleteAttempt,
+      );
 
-  Future<void> _eraseUserDataDir(Directory dir) async {
-    Object? lastError;
-    for (var attempt = 0; attempt < maxEraseAttempts;attempt++) {
-      if (attempt > 0) {
-        await Future<void>.delayed(eraseRetryBackoff * attempt);
-      }
+  Future<void> _sweepStaleUserDataDirs({
+    required Directory current,
+    required Directory parent,
+    required String prefix,
+    Future<void> Function(Directory dir)? deleteAttempt,
+  }) async {
+    List<FileSystemEntity> entries;
+    try {
+      entries = parent.listSync(followLinks: false);
+    } catch (e) {
+      Log.w('DouyinWebView sweep list failed: $e');
+      return;
+    }
+    for (final entry in entries) {
+      if (entry is! Directory) continue;
+      final entryPath = entry.path.replaceAll('\\', '/');
+      if (entryPath == current.path.replaceAll('\\', '/')) continue;
+      final name = entryPath.split('/').last;
+      if (!name.startsWith(prefix)) continue;
       try {
-        final injected = debugDeleteAttempt;
-        if (injected != null) {
-          await injected(dir);
-        } else if (await dir.exists()) {
-          await dir.delete(recursive: true);
+        if (deleteAttempt != null) {
+          await deleteAttempt(entry);
+        } else {
+          await entry.delete(recursive: true);
         }
-        return;
       } catch (e) {
-        lastError = e;
-        Log.w('DouyinWebView erase user data dir attempt ${attempt + 1} failed: $e');
+        // 旧浏览器进程可能仍持目录锁，下次启动再清
+        Log.w('DouyinWebView sweep stale dir failed: $e');
       }
     }
-    Log.w('DouyinWebView erase user data dir gave up: $lastError');
   }
 
   @override
@@ -431,6 +479,7 @@ class DouyinWebViewService extends GetxService {
       site.htmlFetcher = null;
     }
     _headless?.dispose();
+    _environment?.dispose();
     super.onClose();
   }
 }

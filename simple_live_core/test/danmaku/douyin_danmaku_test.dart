@@ -26,21 +26,34 @@ void main() {
   });
 
   group("resolveSelfUid", () {
-    test("通过注入的 WebView HTML provider 解析登录用户 uid", () async {
+    test("页面同时含访客身份与 headerUserInfo 时取真实登录 uid", () async {
       var called = false;
       final d = DouyinDanmaku();
       d.htmlProvider = (webRid, cookie) async {
         called = true;
         expect(webRid, "123abc");
         expect(cookie, "sessionid=x");
-        return r'... \"user_id\":\"998877\",\"user_type\":1,'
-            r'\"user_is_auth\":1,\"user_is_login\":1 ...';
+        return r'... \"user_id\":\"1342966946862\",\"user_type\":12,'
+            r'\"user_is_auth\":0,\"user_is_login\":1 ...'
+            r'... \"headerUserInfo\":{\"isLogin\":true,\"info\":'
+            r'{\"uid\":\"998877\",\"secUid\":\"MS4wLjA\",\"shortId\":\"1\"}} ...';
       };
 
       await d.resolveSelfUidForTesting(webRid: "123abc", cookie: "sessionid=x");
 
       expect(called, isTrue, reason: "应走 WebView provider 而非被风控的直连通道");
-      expect(d.selfUidForTesting, "998877");
+      expect(d.selfUidForTesting, "998877",
+          reason: "user_type:12 的 user_id 是访客身份，真实账号 uid 在 headerUserInfo");
+    });
+
+    test("headerUserInfo 未登录时 uid 保持为空", () async {
+      final d = DouyinDanmaku();
+      d.htmlProvider = (webRid, cookie) async =>
+          r'... \"headerUserInfo\":{\"isLogin\":false,\"info\":{}} ...';
+
+      await d.resolveSelfUidForTesting(webRid: "123abc", cookie: "sessionid=x");
+
+      expect(d.selfUidForTesting, isEmpty);
     });
 
     test("provider 返回验证码页时 uid 保持为空且不抛错", () async {
