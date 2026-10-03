@@ -3,12 +3,14 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show PlatformException;
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:get/get.dart';
 import 'package:simple_live_app/app/constant.dart';
 import 'package:simple_live_app/app/log.dart';
 import 'package:simple_live_app/app/sites.dart';
+import 'package:simple_live_app/routes/route_path.dart';
 import 'package:simple_live_core/simple_live_core.dart';
 
 /// WebView 通道错误（message 可直接展示给用户）
@@ -141,6 +143,44 @@ class DouyinWebViewService extends GetxService {
   String _syncedCookie = '';
   int _businessFailures = 0;
   int _softBlockedFailures = 0;
+
+  /// 当前软封周期是否已弹过引导（去重）；成功取房或重建后复位
+  bool _softBlockedPromptShown = false;
+
+  /// 软封时的登录引导动作；默认弹窗引导去账号页，测试可替换
+  @visibleForTesting
+  Future<void> Function() softBlockedPrompt = _showLoginGuideDialog;
+
+  /// 软封引导弹窗：告知匿名访问被风控拦截，确认后跳转账号管理页登录
+  static Future<void> _showLoginGuideDialog() async {
+    final goLogin = await Get.dialog<bool>(
+      AlertDialog(
+        title: const Text('需要登录抖音账号'),
+        content: const Text('匿名访问已触发抖音风控，登录账号后可正常观看。'),
+        actions: [
+          TextButton(
+            onPressed: () => Get.back(result: false),
+            child: const Text('稍后'),
+          ),
+          TextButton(
+            onPressed: () => Get.back(result: true),
+            child: const Text('去登录'),
+          ),
+        ],
+      ),
+    );
+    if (goLogin == true) {
+      Get.toNamed(RoutePath.kSettingsAccount);
+    }
+  }
+
+  Future<void> _runSoftBlockedPrompt() async {
+    try {
+      await softBlockedPrompt();
+    } catch (e) {
+      Log.w('DouyinWebView soft-blocked prompt failed: $e');
+    }
+  }
 
   /// 测试注入：覆盖单次删除动作，避免测试触碰真实 WebView2 目录
   @visibleForTesting
@@ -321,11 +361,16 @@ class DouyinWebViewService extends GetxService {
           validateResponse(obj['code'] as int?, obj['html'] as String);
           _businessFailures = 0;
           _softBlockedFailures = 0;
+          _softBlockedPromptShown = false;
           return obj['html'] as String;
         }
       } on DouyinWebViewException catch (e) {
         if (e is DouyinSoftBlockedException) {
           _softBlockedFailures++;
+          if (!_softBlockedPromptShown) {
+            _softBlockedPromptShown = true;
+            unawaited(_runSoftBlockedPrompt());
+          }
           if (_softBlockedFailures >= softBlockedEraseThreshold) {
             unawaited(_rebuild(clearUserData: true));
           }
@@ -354,6 +399,7 @@ class DouyinWebViewService extends GetxService {
     _syncedCookie = '';
     _businessFailures = 0;
     _softBlockedFailures = 0;
+    _softBlockedPromptShown = false;
     try {
       await old?.dispose();
     } catch (_) {}

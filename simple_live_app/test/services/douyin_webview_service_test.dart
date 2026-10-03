@@ -247,6 +247,111 @@ void main() {
     });
   });
 
+  group('软封登录引导', () {
+    setUpAll(() {
+      InAppWebViewPlatform.instance = WindowsInAppWebViewPlatform();
+    });
+
+    const sharedChannel = MethodChannel(
+      'com.pichillilorenzo/flutter_headless_inappwebview',
+    );
+
+    MethodChannel controllerChannel(String id) =>
+        MethodChannel('com.pichillilorenzo/flutter_inappwebview_$id');
+
+    /// 按 pollHtmls 序列依次返回房间页结果；返回搭建好的 service 与计数
+    DouyinWebViewService buildService(List<String> pollHtmls) {
+      var pollCount = 0;
+      final service = DouyinWebViewService();
+      service.debugDeleteAttempt = (dir) async {};
+
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(sharedChannel, (call) async {
+        if (call.method != 'run') return null;
+        final args = (call.arguments as Map).cast<String, dynamic>();
+        final id = args['id'] as String;
+        final headlessChannel = MethodChannel(
+          'com.pichillilorenzo/flutter_headless_inappwebview_$id',
+        );
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(headlessChannel, (c) async => null);
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(controllerChannel(id), (webCall) async {
+          switch (webCall.method) {
+            case 'getUrl':
+              return 'https://live.douyin.com/';
+            case 'evaluateJavascript':
+              final source = (webCall.arguments as Map)['source'] as String;
+              if (source.contains('JSON.stringify')) {
+                final html = pollHtmls[pollCount.clamp(0, pollHtmls.length - 1)];
+                pollCount++;
+                // 模拟 WebView2 ExecuteScriptAsync：对 JS 结果再做一层 JSON 包装；
+                // Windows controller 会 json.decode 一次，service 拿到内层 JSON 文本
+                return jsonEncode(jsonEncode({
+                  's': 'done',
+                  'code': 200,
+                  'html': html,
+                }));
+              }
+          }
+          return null;
+        });
+        Timer.run(service.completeFirstLoadForTesting);
+        return true;
+      });
+      return service;
+    }
+
+    test('同一软封周期内多次软封只弹一次登录引导', () {
+      fakeAsync((async) {
+        final service = buildService(['', '']);
+        var promptCount = 0;
+        service.softBlockedPrompt = () async => promptCount++;
+
+        unawaited(() async {
+          for (var i = 0; i < 2; i++) {
+            try {
+              await service.fetchRoomHtmlForTesting('699394970561', '');
+            } catch (_) {}
+          }
+        }());
+
+        async.elapse(const Duration(seconds: 10));
+        async.flushMicrotasks();
+
+        expect(promptCount, 1, reason: '去重：同周期第二次软封不应再弹窗');
+      });
+    });
+
+    test('成功取房后复位，再次软封重新引导', () {
+      fakeAsync((async) {
+        final service = buildService(['', 'x' * 30000, '']);
+        var promptCount = 0;
+        service.softBlockedPrompt = () async => promptCount++;
+        final errorTypes = <Type>[];
+
+        unawaited(() async {
+          for (var i = 0; i < 3; i++) {
+            try {
+              await service.fetchRoomHtmlForTesting('699394970561', '');
+            } catch (e) {
+              errorTypes.add(e.runtimeType);
+            }
+          }
+        }());
+
+        async.elapse(const Duration(seconds: 10));
+        async.flushMicrotasks();
+
+        expect(
+          errorTypes,
+          equals([DouyinSoftBlockedException, DouyinSoftBlockedException]),
+        );
+        expect(promptCount, 2, reason: '中间成功复位后，再次软封应重新引导');
+      });
+    });
+  });
+
   group('软封轮换设备会话', () {
     setUpAll(() {
       InAppWebViewPlatform.instance = WindowsInAppWebViewPlatform();
