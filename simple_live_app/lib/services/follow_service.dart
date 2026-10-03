@@ -51,6 +51,15 @@ class FollowService extends GetxService {
 
   Timer? updateTimer;
 
+  /// 状态变化后合并刷新通知的防抖定时器
+  Timer? listNotifyTimer;
+
+  /// 本轮是否有状态实际变化（开播/下播）
+  bool hasStatusChanged = false;
+
+  /// 防抖窗口：窗口内多次变化只重建一次列表
+  static const int listNotifyDebounceMs = 800;
+
   /// 抖音返回 444 后置为 true：停止自动获取抖音直播状态，由用户手动刷新解除
   bool douyinBlocked = false;
 
@@ -66,6 +75,7 @@ class FollowService extends GetxService {
   @override
   void onClose() {
     updateTimer?.cancel();
+    listNotifyTimer?.cancel();
     for (var timer in _retryTimers) {
       timer.cancel();
     }
@@ -228,6 +238,8 @@ class FollowService extends GetxService {
     _runGeneration++;
     var generation = _runGeneration;
     _settledIds.clear();
+    hasStatusChanged = false;
+    listNotifyTimer?.cancel();
     updatedCount = 0;
     updating.value = true;
 
@@ -249,9 +261,10 @@ class FollowService extends GetxService {
       while (taskQueue.isNotEmpty) {
         var item = taskQueue.removeFirst();
         if (item.siteId == Constant.kDouyin && douyinBlocked) {
+          final previous = item.liveStatus.value;
           item.liveStatus.value = 0;
           item.liveStartTime = null;
-          _onItemSettled(item);
+          _settleItem(item, changed: item.liveStatus.value != previous);
           continue;
         }
         await updateLiveStatus(item, generation: generation);
@@ -314,6 +327,7 @@ class FollowService extends GetxService {
 
   Future updateLiveStatus(FollowUser item,
       {required int generation}) async {
+    final previous = item.liveStatus.value;
     if (item.siteId == Constant.kDouyin) {
       await _throttleDouyin();
     }
@@ -341,12 +355,14 @@ class FollowService extends GetxService {
       }
     } catch (e) {
       Log.logPrint(e);
-      item.liveStatus.value = 0;
-      item.liveStartTime = null;
       if (e is CoreError && e.statusCode == 444) {
         // 抖音风控：停止自动获取其直播状态，由用户手动刷新
+        item.liveStatus.value = 0;
+        item.liveStartTime = null;
         douyinBlocked = true;
       } else {
+        // 查询失败：保留上轮状态与位置，等待重试
+        _applyTransientFailure(item);
         _scheduleRetry(item, generation, e);
       }
     }
@@ -354,17 +370,57 @@ class FollowService extends GetxService {
     if (generation != _runGeneration) {
       return;
     }
-    _onItemSettled(item);
+    _settleItem(item, changed: item.liveStatus.value != previous);
   }
 
-  void _onItemSettled(FollowUser item) {
+  /// 单个结果落定：仅在状态真实变化时安排刷新，一轮全部结束立即刷新一次
+  void _settleItem(FollowUser item, {required bool changed}) {
     _settledIds.add(item.id);
     updatedCount = _settledIds.length;
-    // 每出一个结果就重建列表，UI 实时刷新
-    filterData();
-    if (_settledIds.length >= followList.length) {
-      updating.value = false;
+    if (changed) {
+      hasStatusChanged = true;
     }
+    if (_settledIds.length >= followList.length) {
+      _finishRound();
+    } else if (changed) {
+      _scheduleListNotify();
+    }
+  }
+
+  @visibleForTesting
+  void settleItemForTesting(FollowUser item, {bool changed = false}) {
+    _settleItem(item, changed: changed);
+  }
+
+  void _scheduleListNotify() {
+    listNotifyTimer?.cancel();
+    listNotifyTimer = Timer(
+      const Duration(milliseconds: listNotifyDebounceMs),
+      filterData,
+    );
+  }
+
+  void _finishRound() {
+    if (hasStatusChanged) {
+      // 本轮结束立即刷新，不再等防抖窗口
+      listNotifyTimer?.cancel();
+      listNotifyTimer = null;
+      filterData();
+    }
+    updating.value = false;
+  }
+
+  /// 查询失败：已有上轮状态则保留旧状态与开播时间、不挪位置；
+  /// 首次查询（仍为未知 0）保持 0 并清空开播时间
+  void _applyTransientFailure(FollowUser item) {
+    if (item.liveStatus.value == 0) {
+      item.liveStartTime = null;
+    }
+  }
+
+  @visibleForTesting
+  void applyTransientFailureForTesting(FollowUser item) {
+    _applyTransientFailure(item);
   }
 
   /// 可确定为永久失败的错误不重试
