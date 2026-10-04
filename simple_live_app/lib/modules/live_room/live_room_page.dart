@@ -321,8 +321,81 @@ class LiveRoomPage extends GetView<LiveRoomController> {
             ),
           ),
         ),
+        buildEnterRoomButton(),
       ],
     );
+  }
+
+  /// 抖音「进入直播间」：独立于控制条，不随 5 秒隐藏
+  Widget buildEnterRoomButton() {
+    return Obx(() {
+      if (controller.site.id != Constant.kDouyin) {
+        return const Positioned.fill(child: SizedBox.shrink());
+      }
+      final current = controller.presence.value;
+      final Widget leading;
+      final String text;
+      final VoidCallback? onTap;
+      switch (current) {
+        case RoomPresence.guest:
+          leading = const Icon(Icons.login, size: 15, color: Colors.white);
+          text = "进入直播间";
+          onTap = () => controller.enterAsAccount();
+        case RoomPresence.entering:
+          leading = const SizedBox(
+            width: 14,
+            height: 14,
+            child: CircularProgressIndicator(
+              strokeWidth: 2,
+              color: Colors.white,
+            ),
+          );
+          text = "进入中…";
+          onTap = null;
+        case RoomPresence.account:
+          leading = const Icon(
+            Icons.check_circle_outline,
+            size: 15,
+            color: Colors.white70,
+          );
+          text = "已进入";
+          onTap = null;
+      }
+      return Positioned(
+        left: 12,
+        bottom: 56,
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: onTap,
+            borderRadius: BorderRadius.circular(16),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+              decoration: BoxDecoration(
+                color: Colors.black54,
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  leading,
+                  const SizedBox(width: 6),
+                  Text(
+                    text,
+                    style: TextStyle(
+                      color: current == RoomPresence.account
+                          ? Colors.white70
+                          : Colors.white,
+                      fontSize: 13,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+    });
   }
 
   Widget buildUserProfile(BuildContext context) {

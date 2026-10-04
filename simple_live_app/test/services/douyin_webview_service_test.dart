@@ -266,6 +266,190 @@ void main() {
     });
   });
 
+  group('isAccountCookie', () {
+    test('含 sessionid 为账号 cookie', () {
+      expect(
+        DouyinWebViewService.isAccountCookie('sessionid=abc; ttwid=t'),
+        isTrue,
+      );
+    });
+
+    test('仅 ttwid 为游客 cookie', () {
+      expect(DouyinWebViewService.isAccountCookie('ttwid=t'), isFalse);
+    });
+
+    test('空串为游客 cookie', () {
+      expect(DouyinWebViewService.isAccountCookie(''), isFalse);
+    });
+  });
+
+  group('共享会话身份切换', () {
+    setUpAll(() {
+      InAppWebViewPlatform.instance = WindowsInAppWebViewPlatform();
+    });
+
+    const sharedChannel = MethodChannel(
+      'com.pichillilorenzo/flutter_headless_inappwebview',
+    );
+    const cookieManagerChannel = MethodChannel(
+      'com.pichillilorenzo/flutter_inappwebview_cookiemanager',
+    );
+
+    MethodChannel controllerChannel(String id) =>
+        MethodChannel('com.pichillilorenzo/flutter_inappwebview_$id');
+
+    /// 搭好全套 mock：cookie 调用按序记入 cookieCalls，reload 计数
+    void wireMocks(
+      DouyinWebViewService service,
+      List<String> cookieCalls,
+      void Function() reloadHook, {
+      bool Function()? isThrowing,
+    }) {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(cookieManagerChannel, (call) async {
+        cookieCalls.add(call.method);
+        if (call.method == 'setCookie') {
+          final args = (call.arguments as Map).cast<String, dynamic>();
+          cookieCalls.add('${args['name']}=${args['value']}');
+        }
+        if (call.method == 'deleteAllCookies') return true;
+        return null;
+      });
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(sharedChannel, (call) async {
+        if (call.method != 'run') return null;
+        final args = (call.arguments as Map).cast<String, dynamic>();
+        final id = args['id'] as String;
+        final headlessChannel = MethodChannel(
+          'com.pichillilorenzo/flutter_headless_inappwebview_$id',
+        );
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(headlessChannel, (c) async => null);
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(controllerChannel(id), (webCall) async {
+          switch (webCall.method) {
+            case 'getUrl':
+              if (isThrowing?.call() ?? false) {
+                throw PlatformException(code: '0', message: 'controller gone');
+              }
+              return 'https://live.douyin.com/';
+            case 'reload':
+              reloadHook();
+              Timer.run(service.completeReloadForTesting);
+              return null;
+            case 'evaluateJavascript':
+              final source =
+                  (webCall.arguments as Map)['source'] as String;
+              if (source.contains('JSON.stringify')) {
+                // 原生通道对 JS 字符串结果加一层 JSON 引号，插件内再 decode 一层
+                final state = {
+                  's': 'done',
+                  'code': 200,
+                  'html': 'x' * 30000,
+                };
+                return jsonEncode(jsonEncode(state));
+              }
+          }
+          return null;
+        });
+        Timer.run(service.completeFirstLoadForTesting);
+        return true;
+      });
+    }
+
+    test('游客空 cookie：不注入 cookie 不 reload', () {
+      fakeAsync((async) {
+        final cookieCalls = <String>[];
+        var reloadCount = 0;
+        final service = DouyinWebViewService();
+        wireMocks(service, cookieCalls, () => reloadCount++);
+
+        Object? error;
+        unawaited(() async {
+          try {
+            await service.fetchRoomHtmlForTesting('699394970561', '');
+          } catch (e) {
+            error = e;
+          }
+        }());
+
+        async.elapse(const Duration(seconds: 10));
+        async.flushMicrotasks();
+
+        expect(error, isNull);
+        expect(cookieCalls, isEmpty, reason: '空 cookie 无需注入');
+        expect(reloadCount, 0, reason: '首页已自然建立 ttwid');
+        expect(service.sessionModeForTesting, 'guest');
+      });
+    });
+
+    test('账号→游客：先 deleteAllCookies 清洗再回种 ttwid 并 reload', () {
+      fakeAsync((async) {
+        final cookieCalls = <String>[];
+        var reloadCount = 0;
+        var throwOnGetUrl = false;
+        final service = DouyinWebViewService();
+        wireMocks(
+          service,
+          cookieCalls,
+          () => reloadCount++,
+          isThrowing: () => throwOnGetUrl,
+        );
+
+        Object? error;
+        unawaited(() async {
+          try {
+            await service.fetchRoomHtmlForTesting(
+              '699394970561',
+              'sessionid=abc; ttwid=old',
+            );
+            await service.fetchRoomHtmlForTesting(
+              '699394970561',
+              'ttwid=device',
+            );
+          } catch (e) {
+            error = e;
+          }
+        }());
+
+        async.elapse(const Duration(seconds: 20));
+        async.flushMicrotasks();
+
+        expect(error, isNull);
+        expect(service.sessionModeForTesting, 'guest');
+        expect(reloadCount, 2, reason: '账号注入与游客清洗各 reload 一次');
+
+        final sessionIndex = cookieCalls.indexOf('sessionid=abc');
+        final purgeIndex = cookieCalls.indexOf('deleteAllCookies');
+        final replantIndex = cookieCalls.indexOf('ttwid=device');
+        expect(sessionIndex, isNonNegative);
+        expect(purgeIndex, greaterThan(sessionIndex),
+            reason: '账号阶段不得清空 cookie；切游客必须先清空整个 jar');
+        expect(replantIndex, greaterThan(purgeIndex),
+            reason: '清空后回种设备 ttwid');
+        expect(cookieCalls.indexOf('ttwid=old'), isNegative,
+            reason: '账号 cookie 中的旧 ttwid 不回种');
+
+        // rebuild 后身份复位为游客：模拟通道级异常触发重建
+        throwOnGetUrl = true;
+        unawaited(() async {
+          try {
+            await service.fetchRoomHtmlForTesting(
+              '699394970561',
+              'sessionid=abc; ttwid=old',
+            );
+          } catch (_) {}
+        }());
+
+        async.elapse(const Duration(seconds: 20));
+        async.flushMicrotasks();
+
+        expect(service.sessionModeForTesting, 'guest',
+            reason: '通道异常 rebuild 后身份必须复位');
+      });
+    });
+  });
+
   group('软封轮换设备会话', () {
     setUpAll(() {
       InAppWebViewPlatform.instance = WindowsInAppWebViewPlatform();

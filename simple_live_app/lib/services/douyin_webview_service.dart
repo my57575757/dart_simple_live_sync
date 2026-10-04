@@ -91,6 +91,9 @@ class DouyinWebViewService extends GetxService {
     }
   }
 
+  /// 判断 cookie 是否承载账号登录态
+  static bool isAccountCookie(String cookie) => cookie.contains('sessionid');
+
   /// 去掉 cookie 串中的 ttwid：ttwid 是设备会话凭据，登录时捕获并保存的旧
   /// ttwid 重新注入可能已被风控；移除后 reload 由抖音重新签发
   static String stripTtwid(String cookie) {
@@ -140,6 +143,14 @@ class DouyinWebViewService extends GetxService {
   Future<void>? _starting;
   Completer<void>? _reloadCompleter;
   String _syncedCookie = '';
+
+  /// 当前共享会话身份：'guest' | 'account'。
+  /// cookie jar 是共享的，账号进入后必须显式清洗才能保证下一房间游客隔离
+  String _sessionMode = 'guest';
+
+  @visibleForTesting
+  String get sessionModeForTesting => _sessionMode;
+
   int _businessFailures = 0;
 
   /// 设备会话轮换序号：0 用默认数据目录，软封二级自愈后递增，
@@ -283,14 +294,24 @@ class DouyinWebViewService extends GetxService {
     );
   }
 
-  /// 注入/更换/清除 cookie 后 reload 同源首页；cookie 未变则空操作
+  /// 按请求身份同步 cookie 后 reload 同源首页；身份与 cookie 均未变则空操作
   Future<void> _applyCookie(String cookie) async {
-    if (cookie == _syncedCookie) return;
-    if (cookie.isEmpty) {
-      // 匿名环境：首页已自然建立 ttwid，无需 reload
-      _syncedCookie = '';
+    if (isAccountCookie(cookie)) {
+      if (_sessionMode == 'account' && cookie == _syncedCookie) return;
+      await _plantAccountCookies(cookie);
+      _sessionMode = 'account';
+      _syncedCookie = cookie;
       return;
     }
+    if (_sessionMode == 'guest' && cookie == _syncedCookie) return;
+    // 账号→游客（或游客 ttwid 变更）：清掉整个 cookie jar，防止残留 sessionid
+    await _purgeToGuest(cookie);
+    _sessionMode = 'guest';
+    _syncedCookie = cookie;
+  }
+
+  /// 注入账号 cookie（剔除旧 ttwid）后 reload
+  Future<void> _plantAccountCookies(String cookie) async {
     final cookieManager = CookieManager.instance();
     for (final entry
         in parseCookiePairs(stripTtwid(cookie)).entries) {
@@ -306,7 +327,27 @@ class DouyinWebViewService extends GetxService {
     _reloadCompleter = Completer<void>();
     await _controller!.reload().timeout(initTimeout);
     await _reloadCompleter!.future.timeout(initTimeout);
-    _syncedCookie = cookie;
+  }
+
+  /// 清空 cookie jar 后回种设备 ttwid（无则不种）并 reload；
+  /// 空 cookie 时由抖音在 reload 时自然重签匿名 ttwid
+  Future<void> _purgeToGuest(String cookie) async {
+    final cookieManager = CookieManager.instance();
+    await cookieManager.deleteAllCookies().timeout(initTimeout);
+    final ttwid = parseCookiePairs(cookie)['ttwid'];
+    if (ttwid != null && ttwid.isNotEmpty) {
+      await cookieManager
+          .setCookie(
+            url: WebUri(origin),
+            name: 'ttwid',
+            value: ttwid,
+            path: '/',
+          )
+          .timeout(initTimeout);
+    }
+    _reloadCompleter = Completer<void>();
+    await _controller!.reload().timeout(initTimeout);
+    await _reloadCompleter!.future.timeout(initTimeout);
   }
 
   /// 平台通道调用超时包装：宿主进程被杀时通道可能永久不返回
@@ -403,6 +444,7 @@ class DouyinWebViewService extends GetxService {
     _starting = null;
     _reloadCompleter = null;
     _syncedCookie = '';
+    _sessionMode = 'guest';
     _businessFailures = 0;
     try {
       await old?.dispose();

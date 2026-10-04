@@ -40,6 +40,9 @@ import 'package:url_launcher/url_launcher_string.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 import 'package:simple_live_app/modules//sync/local_sync/local_sync_controller.dart';
 
+/// 抖音房间在场状态：游客 / 进入中 / 账号已进入
+enum RoomPresence { guest, entering, account }
+
 class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   final syncController = LocalSyncController("localhost");
 
@@ -142,6 +145,15 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   // guard 心跳：观看期间每 20s 续租，服务端租约超时才退房
   Timer? _guardHeartbeatTimer;
 
+  /// 抖音房间在场状态；bili/huya 保持原自动进入行为，不使用此状态
+  final presence = RoomPresence.guest.obs;
+
+  /// 进行中的进入流程，并发调用复用同一 Future
+  Future<bool>? _enteringFuture;
+
+  @visibleForTesting
+  void stopGuardHeartbeatForTesting() => _stopGuardHeartbeat();
+
   @override
   void onInit() {
     WidgetsBinding.instance.addObserver(this);
@@ -222,10 +234,16 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   // 弹窗逻辑
 
   void refreshRoom() {
+    // 账号态刷新即退房回游客：best-effort 退出（在 loadData 换详情前发起）
+    if (site.id == Constant.kDouyin &&
+        presence.value == RoomPresence.account) {
+      unawaited(_exitGuardRoom());
+    }
     //messages.clear();
     superChats.clear();
     liveDanmaku.stop();
     _danmakuSuspended = false;
+    presence.value = RoomPresence.guest;
 
     loadData();
   }
@@ -284,8 +302,10 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
 
   static const _guardPlatforms = ["douyin", "bilibili", "huya"];
 
-  /// 进入直播间观看时，让服务端页面进入对应房间（仅已登录、已配置时）
+  /// bili/huya：进入直播间时让服务端页面进入对应房间（仅已登录、已配置时）。
+  /// 抖音默认游客，显式点「进入直播间」时才走 _requestGuardEnter
   Future<void> _enterGuardRoom() async {
+    if (site.id == Constant.kDouyin) return;
     final guard = GuardServerService.instance;
     if (!guard.configured || !_guardPlatforms.contains(site.id)) return;
     if (!danmakuLogined) return;
@@ -318,6 +338,111 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       _startGuardHeartbeat(accountId);
     } catch (e) {
       Log.logPrint("弹幕服务进入直播间失败: $e");
+    }
+  }
+
+  /// 抖音显式进入：guard 真实进场，含 404 重新注册重试。
+  /// 返回账号与进场状态；未配置/失败返回 null
+  Future<({String accountId, Map<String, dynamic> status})?>
+      _requestGuardEnter() async {
+    final guard = GuardServerService.instance;
+    if (!guard.configured) return null;
+    var accountId = await guard.ensureAccount(site.id);
+    if (accountId == null) return null;
+    try {
+      final status = await guard.enterRoom(
+        accountId: accountId,
+        roomId: _guardRoomId,
+        webRid: _guardWebRid,
+        extra: _guardExtraArgs(),
+      );
+      return (accountId: accountId, status: status);
+    } on DioException catch (e) {
+      if (e.response?.statusCode != 404) rethrow;
+      final newId = await guard.reregister(site.id);
+      if (newId == null) return null;
+      final status = await guard.enterRoom(
+        accountId: newId,
+        roomId: _guardRoomId,
+        webRid: _guardWebRid,
+        extra: _guardExtraArgs(),
+      );
+      return (accountId: newId, status: status);
+    }
+  }
+
+  /// 以账号身份真实进入抖音直播间；播放器不动，游客播放/弹幕失败时零改动
+  Future<bool> enterAsAccount() async {
+    if (presence.value == RoomPresence.account) return true;
+    final inFlight = _enteringFuture;
+    if (inFlight != null) return inFlight;
+    if (!danmakuLogined) {
+      await showDanmakuLoginDialog();
+      return false;
+    }
+    final future = _doEnterAsAccount();
+    _enteringFuture = future;
+    try {
+      return await future;
+    } finally {
+      _enteringFuture = null;
+    }
+  }
+
+  /// 抖音写动作（发弹幕/点赞/灯牌/入团）前确保账号在场
+  Future<bool> ensureAccountPresence() async {
+    if (site.id != Constant.kDouyin) return true;
+    if (presence.value == RoomPresence.account) return true;
+    return enterAsAccount();
+  }
+
+  Future<bool> _doEnterAsAccount() async {
+    final liveSite = site.liveSite;
+    if (liveSite is! DouyinSite) return false;
+    presence.value = RoomPresence.entering;
+    SmartDialog.showLoading(msg: "正在进入直播间");
+    try {
+      final LiveRoomDetail accountDetail;
+      try {
+        accountDetail = await liveSite.getRoomDetail(
+          roomId: "$roomId;$shareUrl",
+          asAccount: true,
+        );
+      } catch (e) {
+        SmartDialog.showToast("无法以账号身份读取该房间（可能被主播限制）");
+        presence.value = RoomPresence.guest;
+        return false;
+      }
+
+      final ({String accountId, Map<String, dynamic> status})? entered;
+      try {
+        entered = await _requestGuardEnter();
+      } catch (e) {
+        SmartDialog.showToast("进入直播间失败，已保持游客观看");
+        presence.value = RoomPresence.guest;
+        return false;
+      }
+      if (entered == null) {
+        SmartDialog.showToast("进入直播间失败，已保持游客观看");
+        presence.value = RoomPresence.guest;
+        return false;
+      }
+
+      // 账号进场成功后才动弹幕：游客弹幕此刻停止，按账号身份重连
+      await liveDanmaku.stop();
+      detail.value = accountDetail;
+      online.value = accountDetail.online;
+      liveStatus.value = accountDetail.status || accountDetail.isRecord;
+      initDanmau();
+      await liveDanmaku.start(accountDetail.danmakuData);
+
+      _applyGuardStatus(entered.status);
+      _startGuardHeartbeat(entered.accountId);
+      presence.value = RoomPresence.account;
+      addSysMsg("已进入直播间");
+      return true;
+    } finally {
+      SmartDialog.dismiss(status: SmartStatus.loading);
     }
   }
 
@@ -368,6 +493,11 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     _stopGuardHeartbeat();
     guardJoined.value = false;
     guardStarRoom.value = false;
+    // 抖音游客态：账号从未真实进场，不发 exit
+    if (site.id == Constant.kDouyin &&
+        presence.value != RoomPresence.account) {
+      return;
+    }
     if (!canStartDanmaku(detail.value)) return;
     final guard = GuardServerService.instance;
     if (!guard.configured || !_guardPlatforms.contains(site.id)) return;
@@ -393,6 +523,11 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     if (content.length > 200) {
       SmartDialog.showToast("弹幕内容过长（最多200字）");
       return;
+    }
+    // 抖音游客态：先以账号进入，进入被拒/取消则不发
+    if (site.id == Constant.kDouyin) {
+      final entered = await ensureAccountPresence();
+      if (!entered) return;
     }
     sendingDanmaku.value = true;
     try {
@@ -490,6 +625,11 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
 
   Future<void> _sendGuardAction(String action) async {
     if (sendingAction.value) return;
+    // 抖音游客态：先以账号进入（点赞/灯牌/入团确认之后），失败则不执行
+    if (site.id == Constant.kDouyin) {
+      final entered = await ensureAccountPresence();
+      if (!entered) return;
+    }
     final guard = GuardServerService.instance;
     sendingAction.value = true;
     try {
@@ -855,6 +995,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
 
   /// 加载直播间信息
   void loadData() async {
+    presence.value = RoomPresence.guest;
     try {
       SmartDialog.showLoading(msg: "");
       loadError.value = false;
@@ -862,8 +1003,16 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       update();
       addSysMsg("正在读取直播间信息");
       hydrateShareUrlFromFollow();
-      detail.value = await site.liveSite.getRoomDetail(
-          roomId: site.id == Constant.kDouyin ? "$roomId;$shareUrl" : roomId);
+      final liveSite = site.liveSite;
+      if (liveSite is DouyinSite) {
+        // 默认游客身份读取：不带 sessionid，不受房间黑名单影响
+        detail.value = await liveSite.getRoomDetail(
+          roomId: "$roomId;$shareUrl",
+          asAccount: false,
+        );
+      } else {
+        detail.value = await liveSite.getRoomDetail(roomId: roomId);
+      }
 
       if (site.id == Constant.kDouyin) {
         // 1.6.0之前收藏的WebRid
@@ -1647,6 +1796,13 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     if (this.site == site && this.roomId == roomId) {
       return;
     }
+
+    // 参数变更前先退房停心跳：抖音账号态真实退房，同时避免心跳 getter 读到新房 id
+    if (this.site.id == Constant.kDouyin &&
+        presence.value == RoomPresence.account) {
+      await _exitGuardRoom();
+    }
+    presence.value = RoomPresence.guest;
 
     rxSite.value = site;
     rxRoomId.value = roomId;

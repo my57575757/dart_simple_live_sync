@@ -38,8 +38,11 @@ class DouyinSite implements LiveSite {
   static const String kDefaultCookie =
       "ttwid=1%7CB1qls3GdnZhUov9o2NxOMxxYS2ff6OSvEWbv0ytbES4%7C1680522049%7C280d802d6d478e3e78d0c807f7c487e7ffec0ae4e5fdd6a0fe74c3c6af149511";
 
-  /// 用户设置的 cookie
+  /// 设备匿名身份 cookie（ttwid）；不承载账号登录态
   String cookie = "";
+
+  /// 账号完整登录 cookie（含 sessionid）；未登录为空
+  String loginCookie = "";
 
   /// 宿主注入的房间 HTML 获取器；null = 走 Dio（console / 不支持 webview 的平台）
   DouyinHtmlFetcher? htmlFetcher;
@@ -80,16 +83,15 @@ class DouyinSite implements LiveSite {
     );
   }
 
-  Future<Map<String, dynamic>> getRequestHeaders() async {
+  Future<Map<String, dynamic>> getRequestHeaders({bool asAccount = false}) async {
     try {
-      // 如果用户已设置 cookie，直接使用用户的 cookie
-      if (cookie.isNotEmpty) {
-        headers["cookie"] = cookie;
+      if (asAccount && loginCookie.contains("sessionid")) {
+        headers["cookie"] = loginCookie;
         return headers;
       }
 
-      // 使用默认的 ttwid cookie（只需要 ttwid 即可获取所有画质）
-      headers["cookie"] = kDefaultCookie;
+      // 游客路径：设备 cookie 优先，否则默认匿名 ttwid；任何情况不带 loginCookie
+      headers["cookie"] = cookie.isNotEmpty ? cookie : kDefaultCookie;
       return headers;
     } catch (e) {
       CoreLog.error(e);
@@ -272,7 +274,10 @@ class DouyinSite implements LiveSite {
   }
 
   @override
-  Future<LiveRoomDetail> getRoomDetail({required String roomId}) async {
+  Future<LiveRoomDetail> getRoomDetail({
+    required String roomId,
+    bool asAccount = false,
+  }) async {
     var arr = roomId.split(";");
     var shareUrl = "";
     if (arr.length > 1) {
@@ -287,17 +292,20 @@ class DouyinSite implements LiveSite {
     // 这里简单进行判断，如果roomId长度小于15，则认为是webRid
     if (roomId.length <= 16) {
       var webRid = roomId;
-      return await getRoomDetailByWebRid(webRid, shareUrl);
+      return await getRoomDetailByWebRid(webRid, shareUrl, asAccount: asAccount);
     }
 
-    return await getRoomDetailByRoomId(roomId);
+    return await getRoomDetailByRoomId(roomId, asAccount: asAccount);
   }
 
   /// 通过roomId获取直播间信息
   /// - [roomId] 直播间ID
   /// - 返回直播间信息
-  Future<LiveRoomDetail> getRoomDetailByRoomId(String roomId) async {
-    // 读取房间信息
+  Future<LiveRoomDetail> getRoomDetailByRoomId(
+    String roomId, {
+    bool asAccount = false,
+  }) async {
+    // reflow/info 是匿名端点：读取恒走游客 ttwid，带 sessionid 会判 invalid session
     var roomData = await _getRoomDataByRoomId(roomId);
 
     // 通过房间信息获取WebRid
@@ -316,13 +324,13 @@ class DouyinSite implements LiveSite {
     // roomId是一次性的，用户每次重新开播都会生成一个新的roomId
     // 所以如果roomId对应的直播间状态不是直播中，就通过webRid获取直播间信息
     if (status == 4) {
-      var result = await getRoomDetailByWebRid(webRid, "");
+      var result = await getRoomDetailByWebRid(webRid, "", asAccount: asAccount);
       return result;
     }
 
     var roomStatus = status == 2;
-    // 主要是为了获取cookie,用于弹幕websocket连接
-    var headers = await getRequestHeaders();
+    // 弹幕 args cookie 跟随身份：账号态为 loginCookie，游客态为 ttwid
+    var headers = await getRequestHeaders(asAccount: asAccount);
 
     return LiveRoomDetail(
       roomId: webRid,
@@ -352,15 +360,16 @@ class DouyinSite implements LiveSite {
   /// - 返回直播间信息
   Future<LiveRoomDetail> getRoomDetailByWebRid(
     String webRid,
-    String shareUrl,
-  ) async {
+    String shareUrl, {
+    bool asAccount = false,
+  }) async {
     // 无进场副作用：优先 GET HTML；失败再用 shareUrl 走 reflow
     try {
-      return await _getRoomDetailByWebRidHtml(webRid);
+      return await _getRoomDetailByWebRidHtml(webRid, asAccount: asAccount);
     } catch (e) {
       CoreLog.error(e);
       if (shareUrl != "") {
-        return await _getRoomDetailByShareUrl(shareUrl);
+        return await _getRoomDetailByShareUrl(shareUrl, asAccount: asAccount);
       }
       rethrow;
     }
@@ -369,12 +378,15 @@ class DouyinSite implements LiveSite {
   /// 通过shareUrl访问直播间网页，从网页HTML中获取直播间信息
   /// - [shareUrl] 直播间shareUrl
   /// - 返回直播间信息
-  Future<LiveRoomDetail> _getRoomDetailByShareUrl(String shareUrl) async {
+  Future<LiveRoomDetail> _getRoomDetailByShareUrl(
+    String shareUrl, {
+    bool asAccount = false,
+  }) async {
     var roomId = await _parseDouyinShareRoomId(shareUrl);
     if (roomId.isEmpty) {
       throw Exception("无法解析此链接");
     }
-    return getRoomDetail(roomId: roomId);
+    return getRoomDetail(roomId: roomId, asAccount: asAccount);
   }
 
   Future<String> _parseDouyinShareRoomId(String url) async {
@@ -439,11 +451,18 @@ class DouyinSite implements LiveSite {
   /// 通过WebRid访问直播间网页，从网页HTML中获取直播间信息
   /// - [webRid] 直播间RID
   /// - 返回直播间信息
-  Future<LiveRoomDetail> _getRoomDetailByWebRidHtml(String webRid) async {
-    var roomData = await _getRoomDataByHtml(webRid);
-    var headers = await getRequestHeaders();
+  Future<LiveRoomDetail> _getRoomDetailByWebRidHtml(
+    String webRid, {
+    bool asAccount = false,
+  }) async {
+    var roomData = await _getRoomDataByHtml(webRid, asAccount: asAccount);
+    var headers = await getRequestHeaders(asAccount: asAccount);
     var room = roomData["roomStore"]?["roomInfo"]?["room"];
     if (room == null) {
+      // 账号态骨架更可能是被该房限制/拉黑：抛错交由进入流程回滚到游客态
+      if (asAccount) {
+        throw CoreError("无法以账号身份读取该房间（可能被主播限制）");
+      }
       // SSR 仅下发占位骨架、无场次信息：按未开播处理，不崩溃
       return buildOfflineDetail(
         webRid: webRid,
@@ -586,17 +605,22 @@ class DouyinSite implements LiveSite {
     );
   }
 
-  Future<Map> _getRoomDataByHtml(String webRid) async {
+  Future<Map> _getRoomDataByHtml(
+    String webRid, {
+    bool asAccount = false,
+  }) async {
+    final identityCookie = asAccount ? loginCookie : cookie;
     final fetcher = htmlFetcher;
     if (fetcher != null) {
       // 真实浏览器内核同源取页面（cookie 为空也合法：webview 已持有 ttwid）
-      final html = await fetcher(webRid, cookie);
+      final html = await fetcher(webRid, identityCookie);
       return parseRoomStateFromHtml(html);
     }
 
-    // 已登录则直接用登录 cookie（受信任可过风控，且纯 GET 文档不触发 enter 进场）；
-    // 未登录再降级为匿名 ttwid
-    var dyCookie = cookie.isNotEmpty ? cookie : await _getWebCookie(webRid);
+    // 身份 cookie 可用时直接携带；未设置再降级为匿名 ttwid。纯 GET 文档不触发进场
+    var dyCookie = identityCookie.isNotEmpty
+        ? identityCookie
+        : await _getWebCookie(webRid);
     var result = await _getText(
       "https://live.douyin.com/$webRid",
       queryParameters: {},
@@ -624,7 +648,7 @@ class DouyinSite implements LiveSite {
         "version_code": "99.99.99",
         "app_id": 6383,
       },
-      header: await getRequestHeaders(),
+      header: await getRequestHeaders(asAccount: false),
     );
     return result;
   }

@@ -37,7 +37,9 @@ class DouyinAccountService extends GetxService {
 
   void setSite() {
     var site = (Sites.allSites[Constant.kDouyin]!.liveSite as DouyinSite);
-    site.cookie = logined.value ? loginCookie : cookie;
+    // cookie 恒为设备 ttwid；登录 cookie 单独承载，打开房间默认不带登录身份
+    site.cookie = cookie;
+    site.loginCookie = logined.value ? loginCookie : "";
   }
 
   /// 打开真实 WebView 登录页（live.douyin.com），滑块安全验证与登录都在该页完成
