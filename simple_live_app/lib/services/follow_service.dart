@@ -257,14 +257,14 @@ class FollowService extends GetxService with WidgetsBindingObserver {
   @visibleForTesting
   Duration douyinRetryDelay = const Duration(minutes: 1);
 
-  /// 抖音队列并发数。缓存命中的状态走 guard reflow（普通 API、可并发）；
-  /// 冷缓存取页由 guard 内部串行，故此处可较高
+  /// 抖音队列并发数。命中 guard 内存缓存的请求亚毫秒返回、完全不发往抖音，
+  /// 故可高并发；冷缓存取页由 guard 内部串行，无软限流风险。
   @visibleForTesting
-  int douyinConcurrency = 6;
+  int douyinConcurrency = 16;
 
-  /// 抖音队列相邻请求发起的最小间隔
+  /// 抖音队列相邻请求发起的最小间隔（命中缓存时无需节流，尽量小）
   @visibleForTesting
-  Duration douyinLaunchInterval = const Duration(milliseconds: 100);
+  Duration douyinLaunchInterval = const Duration(milliseconds: 20);
 
   void startUpdateStatus({bool manual = false}) {
     if (!appInForeground) {

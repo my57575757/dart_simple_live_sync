@@ -235,8 +235,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
 
   void refreshRoom() {
     // 账号态刷新即退房回游客：best-effort 退出（在 loadData 换详情前发起）
-    if (site.id == Constant.kDouyin &&
-        presence.value == RoomPresence.account) {
+    if (site.id == Constant.kDouyin && presence.value == RoomPresence.account) {
       unawaited(_exitGuardRoom());
     }
     //messages.clear();
@@ -400,50 +399,47 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     final liveSite = site.liveSite;
     if (liveSite is! DouyinSite) return false;
     presence.value = RoomPresence.entering;
-    SmartDialog.showLoading(msg: "正在进入直播间");
+    // 不用全屏模态 loading：左上角「进入直播间」按钮在 entering 态自会转圈
+    // 反馈，画面继续播放、交互不被锁定
+    final LiveRoomDetail accountDetail;
     try {
-      final LiveRoomDetail accountDetail;
-      try {
-        accountDetail = await liveSite.getRoomDetail(
-          roomId: "$roomId;$shareUrl",
-          asAccount: true,
-        );
-      } catch (e) {
-        SmartDialog.showToast("无法以账号身份读取该房间（可能被主播限制）");
-        presence.value = RoomPresence.guest;
-        return false;
-      }
-
-      final ({String accountId, Map<String, dynamic> status})? entered;
-      try {
-        entered = await _requestGuardEnter();
-      } catch (e) {
-        SmartDialog.showToast("进入直播间失败，已保持游客观看");
-        presence.value = RoomPresence.guest;
-        return false;
-      }
-      if (entered == null) {
-        SmartDialog.showToast("进入直播间失败，已保持游客观看");
-        presence.value = RoomPresence.guest;
-        return false;
-      }
-
-      // 账号进场成功后才动弹幕：游客弹幕此刻停止，按账号身份重连
-      await liveDanmaku.stop();
-      detail.value = accountDetail;
-      online.value = accountDetail.online;
-      liveStatus.value = accountDetail.status || accountDetail.isRecord;
-      initDanmau();
-      await liveDanmaku.start(accountDetail.danmakuData);
-
-      _applyGuardStatus(entered.status);
-      _startGuardHeartbeat(entered.accountId);
-      presence.value = RoomPresence.account;
-      addSysMsg("已进入直播间");
-      return true;
-    } finally {
-      SmartDialog.dismiss(status: SmartStatus.loading);
+      accountDetail = await liveSite.getRoomDetail(
+        roomId: "$roomId;$shareUrl",
+        asAccount: true,
+      );
+    } catch (e) {
+      SmartDialog.showToast("无法以账号身份读取该房间（可能被主播限制）");
+      presence.value = RoomPresence.guest;
+      return false;
     }
+
+    final ({String accountId, Map<String, dynamic> status})? entered;
+    try {
+      entered = await _requestGuardEnter();
+    } catch (e) {
+      SmartDialog.showToast("进入直播间失败，已保持游客观看");
+      presence.value = RoomPresence.guest;
+      return false;
+    }
+    if (entered == null) {
+      SmartDialog.showToast("进入直播间失败，已保持游客观看");
+      presence.value = RoomPresence.guest;
+      return false;
+    }
+
+    // 账号进场成功后才动弹幕：游客弹幕此刻停止，按账号身份重连
+    await liveDanmaku.stop();
+    detail.value = accountDetail;
+    online.value = accountDetail.online;
+    liveStatus.value = accountDetail.status || accountDetail.isRecord;
+    initDanmau();
+    await liveDanmaku.start(accountDetail.danmakuData);
+
+    _applyGuardStatus(entered.status);
+    _startGuardHeartbeat(entered.accountId);
+    presence.value = RoomPresence.account;
+    addSysMsg("已进入直播间");
+    return true;
   }
 
   void _startGuardHeartbeat(String accountId) {
@@ -494,8 +490,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     guardJoined.value = false;
     guardStarRoom.value = false;
     // 抖音游客态：账号从未真实进场，不发 exit
-    if (site.id == Constant.kDouyin &&
-        presence.value != RoomPresence.account) {
+    if (site.id == Constant.kDouyin && presence.value != RoomPresence.account) {
       return;
     }
     if (!canStartDanmaku(detail.value)) return;
@@ -541,7 +536,8 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       }
 
       if (accountId != null) {
-        Future<DanmakuSendResult> sendOnce(String id, {bool retried = false}) async {
+        Future<DanmakuSendResult> sendOnce(String id,
+            {bool retried = false}) async {
           try {
             final data = await guard.sendDanmaku(
               platform: site.id,
@@ -572,9 +568,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
             return DanmakuSendResult(
               success: false,
               errorCode: "guard",
-              errorMessage: msg is String && msg.isNotEmpty
-                  ? msg
-                  : "网络请求失败",
+              errorMessage: msg is String && msg.isNotEmpty ? msg : "网络请求失败",
             );
           }
         }
@@ -614,13 +608,15 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
 
   final sendingAction = false.obs;
 
-  // enter 返回的房间状态：已加入粉丝团 / 星守护房间
+  // enter 返回的房间状态：已加入粉丝团 / 星守护房间 / 勋章当前点亮
   final guardJoined = false.obs;
   final guardStarRoom = false.obs;
+  final guardBadgeActive = false.obs;
 
   void _applyGuardStatus(Map<String, dynamic> status) {
     guardJoined.value = status["joined"] == true;
     guardStarRoom.value = status["starGuard"] == true;
+    guardBadgeActive.value = status["badgeActive"] == true;
   }
 
   Future<void> _sendGuardAction(String action) async {
@@ -639,7 +635,8 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
         return;
       }
 
-      Future<Map<String, dynamic>> runOnce(String id, {bool retried = false}) async {
+      Future<Map<String, dynamic>> runOnce(String id,
+          {bool retried = false}) async {
         try {
           return await guard.sendAction(
             accountId: id,
@@ -660,7 +657,11 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       if (data["success"] != true) {
         SmartDialog.showToast(data["message"]?.toString() ?? "操作失败");
       } else {
-        if (action == "join_club") guardJoined.value = true;
+        if (action == "join_club") {
+          guardJoined.value = true;
+          guardBadgeActive.value = true;
+        }
+        if (action == "light_up") guardBadgeActive.value = true;
         // 主动操作已在服务端抢占房间，恢复本端心跳保活
         _startGuardHeartbeat(accountId);
       }
@@ -681,19 +682,23 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   Future<void> like() => _sendGuardAction("like");
 
   Future<void> sendFansBadge() async {
-    // 灯牌为粉丝团成员专属：未入团或粉丝团已失效时，先引导入团
-    // （服务端 sendFansBadge 同样会拒绝非成员）
-    if (site.id == "douyin" && !guardJoined.value) {
-      SmartDialog.showToast("请先加入主播的粉丝团");
-      await joinFansClub();
-      return;
+    // 灯牌为粉丝团成员专属：未入团先入团；团还在但勋章已熄灭先点亮
+    if (site.id == "douyin") {
+      if (!guardJoined.value) {
+        SmartDialog.showToast("请先加入主播的粉丝团");
+        await joinFansClub();
+        return;
+      }
+      if (!guardBadgeActive.value) {
+        SmartDialog.showToast("粉丝团勋章已熄灭，请先点亮");
+        await lightUpFansBadge();
+        return;
+      }
     }
 
     final isStarRoom = site.id == "douyin" && guardStarRoom.value;
     final priceText = site.id == "douyin"
-        ? (isStarRoom
-            ? "星守护房间将送出点点星光（8 抖币）"
-            : "送出粉丝团灯牌（1 抖币）")
+        ? (isStarRoom ? "星守护房间将送出点点星光（8 抖币）" : "送出粉丝团灯牌（1 抖币）")
         : "免费";
     final confirmed = await Get.dialog<bool>(
       AlertDialog(
@@ -717,9 +722,14 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   }
 
   Future<void> joinFansClub() async {
-    // 客户端先拦一道；服务端入团接口同样校验已入团状态
+    // 成员关系仍在时不能再调入团接口：勋章活跃 → 无需重复；已熄灭 → 引导点亮
     if (guardJoined.value) {
-      SmartDialog.showToast("你已经加入该主播的粉丝团，无需重复加入");
+      if (guardBadgeActive.value) {
+        SmartDialog.showToast("你已经加入该主播的粉丝团，无需重复加入");
+        return;
+      }
+      SmartDialog.showToast("粉丝团勋章已熄灭，需重新点亮");
+      await lightUpFansBadge();
       return;
     }
     final contentText = site.id == "douyin"
@@ -745,6 +755,29 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       await _sendGuardAction("join_club");
     }
   }
+
+  Future<void> lightUpFansBadge() async {
+    final confirmed = await Get.dialog<bool>(
+      AlertDialog(
+        title: const Text("点亮粉丝团勋章"),
+        content: const Text("将消耗 1 抖币送出点亮礼物，重新点亮粉丝团勋章，确认吗？"),
+        actions: [
+          TextButton(
+            onPressed: () => Get.back(result: false),
+            child: const Text("取消"),
+          ),
+          TextButton(
+            onPressed: () => Get.back(result: true),
+            child: const Text("点亮"),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true) {
+      await _sendGuardAction("light_up");
+    }
+  }
+
   @override
   void handleKeyboardKey(KeyEvent event) {
     if (event is KeyDownEvent &&
@@ -1168,9 +1201,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     await player.open(Playlist(mediaList, index: currentLineIndex));
 
     // 后台状态下被重开（断线重试等）时，新流会自行播放，需重新应用后台策略
-    if ((Platform.isAndroid || Platform.isIOS) &&
-        isBackground &&
-        !pipActive) {
+    if ((Platform.isAndroid || Platform.isIOS) && isBackground && !pipActive) {
       await onBackgroundPlaybackPolicyChanged();
     }
   }
