@@ -84,6 +84,8 @@ void main() {
     }
 
     service = FollowService();
+    service.douyinGapForTesting = () => const Duration(milliseconds: 5);
+    service.douyinRetryDelay = const Duration(milliseconds: 5);
   });
 
   tearDown(() async {
@@ -95,7 +97,8 @@ void main() {
   test('444后不自动重试，自动轮询跳过抖音，手动刷新恢复', () async {
     await service.loadData(manual: true);
     await _waitFor(() => !service.updating.value);
-    expect(fake.statusCallCount, 2);
+    // 串行队列：队头 444 后后续不再请求，仅 1 次状态查询
+    expect(fake.statusCallCount, 1);
     expect(service.retryTimerCount, 0);
     expect(
       service.followList.every((u) => u.liveStatus.value == 0),
@@ -104,7 +107,7 @@ void main() {
 
     await service.loadData();
     await _waitFor(() => !service.updating.value);
-    expect(fake.statusCallCount, 2);
+    expect(fake.statusCallCount, 1);
     expect(
       service.followList.every((u) => u.liveStatus.value == 0),
       isTrue,
@@ -114,7 +117,8 @@ void main() {
     fake.living = true;
     await service.loadData(manual: true);
     await _waitFor(() => !service.updating.value);
-    expect(fake.statusCallCount, 4);
+    // 手动解除：队头重试成功（第 2 次），继续队列第二个（第 3 次）
+    expect(fake.statusCallCount, 3);
     expect(
       service.followList.every((u) => u.liveStatus.value == 2),
       isTrue,

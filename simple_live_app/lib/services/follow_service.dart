@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:collection';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 
 import 'package:dio/dio.dart';
 import 'package:file_picker/file_picker.dart';
@@ -196,27 +197,6 @@ class FollowService extends GetxService {
     return userSetting;
   }
 
-  /// 按平台交错排列，避免单一平台阻塞
-  List<FollowUser> interleaveByPlatform(List<FollowUser> list) {
-    // 按平台分组
-    var grouped = <String, Queue<FollowUser>>{};
-    for (var item in list) {
-      grouped.putIfAbsent(item.siteId, () => Queue<FollowUser>()).add(item);
-    }
-
-    // 交错处理
-    var result = <FollowUser>[];
-    while (grouped.values.any((queue) => queue.isNotEmpty)) {
-      for (var queue in grouped.values) {
-        if (queue.isNotEmpty) {
-          result.add(queue.removeFirst());
-        }
-      }
-    }
-
-    return result;
-  }
-
   /// 每次刷新递增，用于作废上一轮的重试
   int _runGeneration = 0;
 
@@ -230,6 +210,20 @@ class FollowService extends GetxService {
   int get retryTimerCount => _retryTimers.length;
 
   static const int _retryDelaySeconds = 15;
+
+  /// 抖音队列失败暂停后重试队头的间隔
+  @visibleForTesting
+  Duration douyinRetryDelay = const Duration(minutes: 1);
+
+  /// 抖音队列相邻请求间隔（生产为 1.5–2.5s 随机），测试可覆盖
+  @visibleForTesting
+  Duration Function()? douyinGapForTesting;
+
+  final Random _random = Random();
+
+  Duration _douyinGap() =>
+      douyinGapForTesting?.call() ??
+      Duration(milliseconds: 1500 + _random.nextInt(1001));
 
   void startUpdateStatus({bool manual = false}) {
     if (manual) {
@@ -248,55 +242,129 @@ class FollowService extends GetxService {
     }
     _retryTimers.clear();
 
-    var concurrency = getOptimalConcurrency();
-
-    Log.logPrint("开始更新关注状态，并发数: $concurrency，总数: ${followList.length}");
-
-    // 创建任务队列
-    var taskQueue =
-        Queue<FollowUser>.from(interleaveByPlatform(followList));
-
-    // 工作函数 - 持续从队列中取任务执行
-    Future<void> worker() async {
-      while (taskQueue.isNotEmpty) {
-        var item = taskQueue.removeFirst();
-        if (item.siteId == Constant.kDouyin && douyinBlocked) {
-          final previous = item.liveStatus.value;
-          item.liveStatus.value = 0;
-          item.liveStartTime = null;
-          _settleItem(item, changed: item.liveStatus.value != previous);
-          continue;
-        }
-        await updateLiveStatus(item, generation: generation);
+    final douyinItems = <FollowUser>[];
+    final otherItems = <FollowUser>[];
+    for (var item in followList) {
+      if (item.siteId == Constant.kDouyin) {
+        douyinItems.add(item);
+      } else {
+        otherItems.add(item);
       }
     }
 
-    // 启动固定数量的并发 worker
+    Log.logPrint(
+        "开始更新关注状态：抖音串行队列 ${douyinItems.length}，其余 ${otherItems.length}");
+
+    // 抖音：单队列串行（间隔约 2s 随机；失败暂停整队列，每 1 分钟重试队头）
+    unawaited(_runDouyinQueue(douyinItems, generation));
+
+    // 其余平台：保持并发 worker
+    if (otherItems.isEmpty) {
+      return;
+    }
+    var taskQueue = Queue<FollowUser>.from(otherItems);
+    var concurrency =
+        getOptimalConcurrency().clamp(1, otherItems.length);
+
+    Future<void> worker() async {
+      while (taskQueue.isNotEmpty) {
+        var item = taskQueue.removeFirst();
+        await updateOtherStatus(item, generation: generation);
+      }
+    }
+
     var workers = <Future>[];
     for (var i = 0; i < concurrency; i++) {
       workers.add(worker());
     }
 
     Future.wait(workers).then((_) {
-      Log.logPrint("关注状态更新完成");
+      Log.logPrint("其余平台状态更新完成");
     });
   }
 
-  /// 抖音请求节流：相邻两次抖音请求至少间隔 2s，避免触发风控
-  static const int _douyinMinIntervalMs = 2000;
-  DateTime _lastDouyinRequestTime = DateTime.fromMillisecondsSinceEpoch(0);
+  /// 抖音串行队列：逐个处理，请求间随机间隔约 2s；某请求失败（非 444）
+  /// 则暂停整个队列，等待 [douyinRetryDelay] 后重试同一队头，成功后继续剩余。
+  Future<void> _runDouyinQueue(List<FollowUser> items, int generation) async {
+    var index = 0;
+    while (index < items.length) {
+      if (generation != _runGeneration) {
+        return;
+      }
+      if (douyinBlocked) {
+        // 风控已触发：后续抖音用户本轮一律按未知处理，不再发请求
+        for (var k = index; k < items.length; k++) {
+          final item = items[k];
+          final previous = item.liveStatus.value;
+          item.liveStatus.value = 0;
+          item.liveStartTime = null;
+          if (generation == _runGeneration) {
+            _settleItem(item, changed: previous != 0);
+          }
+        }
+        return;
+      }
 
-  Future<void> _throttleDouyin() async {
-    var wait = _douyinMinIntervalMs -
-        DateTime.now().difference(_lastDouyinRequestTime).inMilliseconds;
-    if (wait > 0) {
-      await Future.delayed(Duration(milliseconds: wait));
+      final item = items[index];
+      final processed = await _processDouyinItem(item, generation);
+      if (generation != _runGeneration) {
+        return;
+      }
+      if (processed) {
+        index++;
+        if (index < items.length) {
+          await Future.delayed(_douyinGap());
+        }
+      } else {
+        // 失败暂停：后续不请求，等待后重试同一队头
+        await Future.delayed(douyinRetryDelay);
+      }
     }
-    _lastDouyinRequestTime = DateTime.now();
   }
 
-  /// 抖音直播状态：优先走 guard 服务端 reflow（服务端缓存 room_id，无进场副作用）；
-  /// guard 未配置/未登录时由 directFallback 走原有 WebView 取页路径
+  /// 处理单个抖音用户。
+  /// 返回 true：已落定（成功或 444 风控）；false：临时失败，未 settle，需重试。
+  Future<bool> _processDouyinItem(FollowUser item, int generation) async {
+    final previous = item.liveStatus.value;
+    try {
+      var site = Sites.allSites[item.siteId]!;
+      var queryId = "${item.roomId};${item.shareUrl}";
+      // 抖音统一走 guard（room_id 由服务端缓存），guard 未配置时回退 core 内置取页
+      var isLiving = await resolveDouyinLiving(
+        webRid: item.roomId,
+        directFallback: () => site.liveSite.getLiveStatus(roomId: queryId),
+      );
+      item.liveStatus.value = isLiving ? 2 : 1;
+      if (isLiving) {
+        var detail = await site.liveSite.getRoomDetail(roomId: queryId);
+        item.liveStartTime = detail.showTime;
+      } else {
+        item.liveStartTime = null;
+      }
+    } catch (e) {
+      Log.logPrint(e);
+      if (e is CoreError && e.statusCode == 444) {
+        // 抖音风控：停止本轮后续抖音请求，由用户手动刷新解除
+        item.liveStatus.value = 0;
+        item.liveStartTime = null;
+        douyinBlocked = true;
+        if (generation == _runGeneration) {
+          _settleItem(item, changed: previous != 0);
+        }
+        return true;
+      }
+      _applyTransientFailure(item);
+      return false;
+    }
+    if (generation != _runGeneration) {
+      return true;
+    }
+    _settleItem(item, changed: item.liveStatus.value != previous);
+    return true;
+  }
+
+  /// 抖音直播状态统一走 guard（服务端缓存 room_id、无进场副作用）：登录用户
+  /// 带账号查，游客走匿名；guard 未配置时由 directFallback 走 core 内置取页
   @visibleForTesting
   Future<bool> resolveDouyinLiving({
     required String webRid,
@@ -304,8 +372,9 @@ class FollowService extends GetxService {
   }) async {
     if (!Get.isRegistered<GuardServerService>()) return directFallback();
     final guard = GuardServerService.instance;
-    var accountId = await guard.ensureAccount("douyin");
-    if (accountId == null) return directFallback();
+    if (!guard.configured) return directFallback();
+    // 登录返回账号 id；游客返回 null，服务端走匿名（拉黑房自动游客复核）
+    final accountId = await guard.ensureAccount("douyin");
     try {
       final data = await guard.getLiveStatus(
         accountId: accountId,
@@ -325,30 +394,16 @@ class FollowService extends GetxService {
     }
   }
 
-  Future updateLiveStatus(FollowUser item,
+  /// 非抖音平台状态更新：并发执行，失败保留旧状态并安排一次性重试
+  Future updateOtherStatus(FollowUser item,
       {required int generation}) async {
     final previous = item.liveStatus.value;
-    if (item.siteId == Constant.kDouyin) {
-      await _throttleDouyin();
-    }
     try {
       var site = Sites.allSites[item.siteId]!;
-      var queryId = item.siteId == Constant.kDouyin
-          ? "${item.roomId};${item.shareUrl}"
-          : item.roomId;
-      // 先只查状态：抖音走 guard 服务端 reflow（room_id 由服务端缓存），
-      // guard 未配置账号时回退原有 WebView 直连
-      var isLiving = item.siteId == Constant.kDouyin
-          ? await resolveDouyinLiving(
-              webRid: item.roomId,
-              directFallback: () =>
-                  site.liveSite.getLiveStatus(roomId: queryId),
-            )
-          : await site.liveSite.getLiveStatus(roomId: queryId);
+      var isLiving = await site.liveSite.getLiveStatus(roomId: item.roomId);
       item.liveStatus.value = isLiving ? 2 : 1;
       if (isLiving) {
-        // 只有正在直播时才查详细信息
-        var detail = await site.liveSite.getRoomDetail(roomId: queryId);
+        var detail = await site.liveSite.getRoomDetail(roomId: item.roomId);
         item.liveStartTime = detail.showTime;
       } else {
         item.liveStartTime = null;
@@ -356,10 +411,8 @@ class FollowService extends GetxService {
     } catch (e) {
       Log.logPrint(e);
       if (e is CoreError && e.statusCode == 444) {
-        // 抖音风控：停止自动获取其直播状态，由用户手动刷新
         item.liveStatus.value = 0;
         item.liveStartTime = null;
-        douyinBlocked = true;
       } else {
         // 查询失败：保留上轮状态与位置，等待重试
         _applyTransientFailure(item);
@@ -445,7 +498,7 @@ class FollowService extends GetxService {
         return;
       }
       Log.logPrint("$_retryDelaySeconds秒后重试更新:${item.userName}");
-      updateLiveStatus(item, generation: generation);
+      updateOtherStatus(item, generation: generation);
     });
     _retryTimers.add(timer);
   }
