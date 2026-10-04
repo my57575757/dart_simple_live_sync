@@ -84,7 +84,8 @@ void main() {
     }
 
     service = FollowService();
-    service.douyinGapForTesting = () => const Duration(milliseconds: 5);
+    service.douyinConcurrency = 1;
+    service.douyinLaunchInterval = const Duration(milliseconds: 1);
     service.douyinRetryDelay = const Duration(milliseconds: 5);
   });
 

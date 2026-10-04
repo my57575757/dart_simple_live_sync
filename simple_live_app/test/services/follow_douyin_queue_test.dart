@@ -126,7 +126,7 @@ void main() {
     await db.followBox.put(b0.id, b0);
 
     service = FollowService();
-    service.douyinGapForTesting = () => const Duration(milliseconds: 5);
+    service.douyinLaunchInterval = const Duration(milliseconds: 5);
     service.douyinRetryDelay = const Duration(milliseconds: 60);
   });
 
@@ -136,7 +136,8 @@ void main() {
     await tmp.delete(recursive: true);
   });
 
-  test('抖音串行：队头失败暂停后续不请求，重试成功后继续队列', () async {
+  test('队头失败暂停后续不请求，重试成功后继续队列；bili并发不受影响', () async {
+    service.douyinConcurrency = 1;
     douyinFake.configure("10000000000", failTimes: 2, living: false);
     douyinFake.configure("10000000001", living: true);
     biliFake.configure("20000000000", living: false);
@@ -163,7 +164,7 @@ void main() {
     expect(byId["20000000000"]!.liveStatus.value, 1);
   });
 
-  test('抖音全部成功：严格串行，请求间存在间隔', () async {
+  test('抖音全部成功：并发2、约每500ms发起一个，顺序按队列', () async {
     douyinFake.configure("10000000000", living: true);
     douyinFake.configure("10000000001", living: true);
     biliFake.configure("20000000000", living: false);

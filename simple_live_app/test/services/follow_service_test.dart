@@ -33,7 +33,7 @@ class FakeGuard extends GuardServerService {
 
   @override
   Future<Map<String, dynamic>> getLiveStatus({
-    required String accountId,
+    String? accountId,
     String roomId = '',
     String webRid = '',
   }) async {
@@ -58,6 +58,8 @@ void main() {
     Get.put<LocalStorageService>(FakeLocalStorage());
     guard = FakeGuard();
     Get.put<GuardServerService>(guard);
+    // onInit 会从（返回默认空值的）FakeLocalStorage 重置 serverUrl，故在其后设置
+    guard.serverUrl = 'http://guard';
     follow = FollowService();
   });
 
@@ -81,15 +83,40 @@ void main() {
     });
   });
 
-  test('guard 未配置账号时走直连回退', () async {
+  test('游客（未登录）走 guard 匿名查询，不走直连', () async {
     guard.accountId = null;
+    var fallbackCalled = false;
 
     final living = await follow.resolveDouyinLiving(
       webRid: '96252793301',
-      directFallback: () async => true,
+      directFallback: () async {
+        fallbackCalled = true;
+        return false;
+      },
     );
 
     expect(living, true);
+    expect(fallbackCalled, false);
+    expect(guard.statusCalls.single, {
+      'accountId': null,
+      'webRid': '96252793301',
+    });
+  });
+
+  test('guard 未配置（无地址）时走直连回退', () async {
+    guard.serverUrl = '';
+    var fallbackCalled = false;
+
+    final living = await follow.resolveDouyinLiving(
+      webRid: '96252793301',
+      directFallback: () async {
+        fallbackCalled = true;
+        return true;
+      },
+    );
+
+    expect(living, true);
+    expect(fallbackCalled, true);
     expect(guard.statusCalls, isEmpty);
   });
 

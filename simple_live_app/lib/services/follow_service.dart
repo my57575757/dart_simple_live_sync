@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:collection';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:math';
 
 import 'package:dio/dio.dart';
 import 'package:file_picker/file_picker.dart';
@@ -215,15 +214,14 @@ class FollowService extends GetxService {
   @visibleForTesting
   Duration douyinRetryDelay = const Duration(minutes: 1);
 
-  /// 抖音队列相邻请求间隔（生产为 1.5–2.5s 随机），测试可覆盖
+  /// 抖音队列并发数。缓存命中的状态走 guard reflow（普通 API、可并发）；
+  /// 冷缓存取页由 guard 内部串行，故此处可较高
   @visibleForTesting
-  Duration Function()? douyinGapForTesting;
+  int douyinConcurrency = 6;
 
-  final Random _random = Random();
-
-  Duration _douyinGap() =>
-      douyinGapForTesting?.call() ??
-      Duration(milliseconds: 1500 + _random.nextInt(1001));
+  /// 抖音队列相邻请求发起的最小间隔
+  @visibleForTesting
+  Duration douyinLaunchInterval = const Duration(milliseconds: 100);
 
   void startUpdateStatus({bool manual = false}) {
     if (manual) {
@@ -253,7 +251,7 @@ class FollowService extends GetxService {
     }
 
     Log.logPrint(
-        "开始更新关注状态：抖音串行队列 ${douyinItems.length}，其余 ${otherItems.length}");
+        "开始更新关注状态：抖音并发$douyinConcurrency队列 ${douyinItems.length}，其余 ${otherItems.length}");
 
     // 抖音：单队列串行（间隔约 2s 随机；失败暂停整队列，每 1 分钟重试队头）
     unawaited(_runDouyinQueue(douyinItems, generation));
@@ -283,16 +281,34 @@ class FollowService extends GetxService {
     });
   }
 
-  /// 抖音串行队列：逐个处理，请求间随机间隔约 2s；某请求失败（非 444）
-  /// 则暂停整个队列，等待 [douyinRetryDelay] 后重试同一队头，成功后继续剩余。
+  /// 抖音队列：有界并发（[douyinConcurrency]，默认 2），相邻发起间隔
+  /// [douyinLaunchInterval]（默认 500ms，约每秒 2 个）。某请求失败（非 444）
+  /// 则暂停调度、等待在途结束，每 [douyinRetryDelay] 重试失败项，全部成功后继续剩余。
   Future<void> _runDouyinQueue(List<FollowUser> items, int generation) async {
     var index = 0;
-    while (index < items.length) {
+    final running = <FollowUser, Future<bool>>{};
+    final outcomes = <FollowUser, bool>{};
+    DateTime? lastLaunch;
+
+    void launch(FollowUser item) {
+      lastLaunch = DateTime.now();
+      final future = _processDouyinItem(item, generation);
+      running[item] = future;
+      future.then((ok) {
+        running.remove(item);
+        outcomes[item] = ok;
+      });
+    }
+
+    while (index < items.length || running.isNotEmpty) {
       if (generation != _runGeneration) {
         return;
       }
+
       if (douyinBlocked) {
-        // 风控已触发：后续抖音用户本轮一律按未知处理，不再发请求
+        if (running.isNotEmpty) {
+          await Future.wait(running.values);
+        }
         for (var k = index; k < items.length; k++) {
           final item = items[k];
           final previous = item.liveStatus.value;
@@ -305,19 +321,70 @@ class FollowService extends GetxService {
         return;
       }
 
-      final item = items[index];
-      final processed = await _processDouyinItem(item, generation);
+      // 发起直到占满并发额度，相邻发起保持最小间隔
+      while (index < items.length && running.length < douyinConcurrency) {
+        final wait = lastLaunch == null
+            ? 0
+            : douyinLaunchInterval.inMilliseconds -
+                DateTime.now().difference(lastLaunch!).inMilliseconds;
+        if (wait > 0) {
+          await Future.delayed(Duration(milliseconds: wait));
+          if (generation != _runGeneration) {
+            return;
+          }
+          if (douyinBlocked) {
+            break;
+          }
+        }
+        launch(items[index]);
+        index++;
+      }
+
+      if (running.isEmpty) {
+        break;
+      }
+      await Future.any(running.values);
       if (generation != _runGeneration) {
         return;
       }
-      if (processed) {
-        index++;
-        if (index < items.length) {
-          await Future.delayed(_douyinGap());
+
+      final failed = outcomes.entries
+          .where((e) => !e.value)
+          .map((e) => e.key)
+          .toList();
+      for (final key in outcomes.keys.toList()) {
+        if (!failed.contains(key)) {
+          outcomes.remove(key);
         }
-      } else {
-        // 失败暂停：后续不请求，等待后重试同一队头
+      }
+
+      if (failed.isEmpty) {
+        continue;
+      }
+
+      // 暂停：等在途结束，按固定间隔重试所有失败项直到全部成功
+      outcomes.removeWhere((k, _) => failed.contains(k));
+      if (running.isNotEmpty) {
+        await Future.wait(running.values);
+      }
+      var retryList = failed;
+      while (retryList.isNotEmpty) {
         await Future.delayed(douyinRetryDelay);
+        if (generation != _runGeneration) {
+          return;
+        }
+        if (douyinBlocked) {
+          break;
+        }
+        final still = <FollowUser>[];
+        for (final item in retryList) {
+          final ok = await _processDouyinItem(item, generation);
+          if (!ok) still.add(item);
+        }
+        retryList = still;
+      }
+      if (douyinBlocked) {
+        continue; // 回到循环顶部走 blocked 收尾
       }
     }
   }
@@ -336,8 +403,17 @@ class FollowService extends GetxService {
       );
       item.liveStatus.value = isLiving ? 2 : 1;
       if (isLiving) {
-        var detail = await site.liveSite.getRoomDetail(roomId: queryId);
-        item.liveStartTime = detail.showTime;
+        // 开播时间不阻塞状态队列：异步补充，下次列表刷新自然显示
+        unawaited(() async {
+          try {
+            var detail = await site.liveSite.getRoomDetail(roomId: queryId);
+            if (generation == _runGeneration) {
+              item.liveStartTime = detail.showTime;
+            }
+          } catch (detailError) {
+            Log.logPrint(detailError);
+          }
+        }());
       } else {
         item.liveStartTime = null;
       }
