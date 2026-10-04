@@ -62,4 +62,61 @@ void main() {
       throwsA(isA<DioException>()),
     );
   });
+
+  test('getLiveStatus: 游客不传 accountId，请求体无该字段', () async {
+    late Map<String, dynamic> received;
+    server.listen((req) async {
+      received = jsonDecode(await utf8.decoder.bind(req).join());
+      req.response.headers.contentType = ContentType.json;
+      req.response.write(jsonEncode({
+        'code': 0,
+        'message': 'ok',
+        'data': {'living': false},
+      }));
+      await req.response.close();
+    });
+
+    expect(await service.getLiveStatus(webRid: 'r'), {'living': false});
+    expect(received.containsKey('accountId'), isFalse);
+    expect(received['webRid'], 'r');
+  });
+
+  test('fetchRoomHtml: 带 accountId、guest=false，返回 html', () async {
+    late Map<String, dynamic> received;
+    server.listen((req) async {
+      expect(req.uri.path, '/api/room/html');
+      received = jsonDecode(await utf8.decoder.bind(req).join());
+      req.response.headers.contentType = ContentType.json;
+      req.response.write(jsonEncode({
+        'code': 0,
+        'message': 'ok',
+        'data': {'html': '<ROOM/>', 'guest': false},
+      }));
+      await req.response.close();
+    });
+
+    expect(
+      await service.fetchRoomHtml(webRid: 'r', accountId: 'douyin-1'),
+      '<ROOM/>',
+    );
+    expect(received['accountId'], 'douyin-1');
+    expect(received['webRid'], 'r');
+  });
+
+  test('fetchRoomHtml: 游客匿名、guest=true，返回 html', () async {
+    late Map<String, dynamic> received;
+    server.listen((req) async {
+      received = jsonDecode(await utf8.decoder.bind(req).join());
+      req.response.headers.contentType = ContentType.json;
+      req.response.write(jsonEncode({
+        'code': 0,
+        'message': 'ok',
+        'data': {'html': '<GUEST/>', 'guest': true},
+      }));
+      await req.response.close();
+    });
+
+    expect(await service.fetchRoomHtml(webRid: 'r'), '<GUEST/>');
+    expect(received.containsKey('accountId'), isFalse);
+  });
 }

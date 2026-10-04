@@ -21,9 +21,13 @@ import 'package:simple_live_app/services/db_service.dart';
 import 'package:simple_live_app/services/guard_server_service.dart';
 import 'package:simple_live_core/simple_live_core.dart';
 
-class FollowService extends GetxService {
+class FollowService extends GetxService with WidgetsBindingObserver {
   StreamSubscription<dynamic>? subscription;
   static FollowService get instance => Get.find<FollowService>();
+
+  /// App 是否在前台：后台时不发起任何直播状态获取，回前台才刷新
+  @visibleForTesting
+  bool appInForeground = true;
 
   final StreamController _updatedListController = StreamController.broadcast();
   Stream get updatedListStream => _updatedListController.stream;
@@ -65,6 +69,7 @@ class FollowService extends GetxService {
 
   @override
   void onInit() {
+    WidgetsBinding.instance.addObserver(this);
     subscription = EventBus.instance.listen(Constant.kUpdateFollow, (p0) {
       loadData(updateStatus: false);
     });
@@ -74,6 +79,7 @@ class FollowService extends GetxService {
 
   @override
   void onClose() {
+    WidgetsBinding.instance.removeObserver(this);
     updateTimer?.cancel();
     listNotifyTimer?.cancel();
     for (var timer in _retryTimers) {
@@ -82,6 +88,30 @@ class FollowService extends GetxService {
     _retryTimers.clear();
     subscription?.cancel();
     super.onClose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused) {
+      onAppPaused();
+    } else if (state == AppLifecycleState.resumed) {
+      onAppResumed();
+    }
+  }
+
+  /// 进入后台：取消定时刷新，在途轮次不再发起新请求
+  @visibleForTesting
+  void onAppPaused() {
+    appInForeground = false;
+    updateTimer?.cancel();
+  }
+
+  /// 回到前台：重建定时器并立即刷新一次状态
+  @visibleForTesting
+  void onAppResumed() {
+    appInForeground = true;
+    initTimer();
+    loadData();
   }
 
   // 添加标签
@@ -174,9 +204,22 @@ class FollowService extends GetxService {
       return;
     }
     followList.assignAll(list);
+    syncDouyinWarmRooms();
     if (updateStatus) {
       startUpdateStatus(manual: manual);
     }
+  }
+
+  /// 把当前抖音关注房 webRid 清单同步给 guard 持久化，供其定时冷启动预热
+  void syncDouyinWarmRooms() {
+    if (!Get.isRegistered<GuardServerService>()) return;
+    final guard = GuardServerService.instance;
+    if (!guard.configured) return;
+    final ids = followList
+        .where((item) => item.siteId == Constant.kDouyin)
+        .map((item) => item.roomId)
+        .toList();
+    unawaited(guard.syncDouyinWarmRooms(ids));
   }
 
   /// 获取最优并发数
@@ -224,6 +267,10 @@ class FollowService extends GetxService {
   Duration douyinLaunchInterval = const Duration(milliseconds: 100);
 
   void startUpdateStatus({bool manual = false}) {
+    if (!appInForeground) {
+      updating.value = false;
+      return;
+    }
     if (manual) {
       douyinBlocked = false;
     }
@@ -266,6 +313,7 @@ class FollowService extends GetxService {
 
     Future<void> worker() async {
       while (taskQueue.isNotEmpty) {
+        if (!appInForeground) return;
         var item = taskQueue.removeFirst();
         await updateOtherStatus(item, generation: generation);
       }
@@ -301,7 +349,7 @@ class FollowService extends GetxService {
     }
 
     while (index < items.length || running.isNotEmpty) {
-      if (generation != _runGeneration) {
+      if (generation != _runGeneration || !appInForeground) {
         return;
       }
 
@@ -329,7 +377,7 @@ class FollowService extends GetxService {
                 DateTime.now().difference(lastLaunch!).inMilliseconds;
         if (wait > 0) {
           await Future.delayed(Duration(milliseconds: wait));
-          if (generation != _runGeneration) {
+          if (generation != _runGeneration || !appInForeground) {
             return;
           }
           if (douyinBlocked) {
@@ -344,7 +392,7 @@ class FollowService extends GetxService {
         break;
       }
       await Future.any(running.values);
-      if (generation != _runGeneration) {
+      if (generation != _runGeneration || !appInForeground) {
         return;
       }
 
@@ -370,7 +418,7 @@ class FollowService extends GetxService {
       var retryList = failed;
       while (retryList.isNotEmpty) {
         await Future.delayed(douyinRetryDelay);
-        if (generation != _runGeneration) {
+        if (generation != _runGeneration || !appInForeground) {
           return;
         }
         if (douyinBlocked) {
@@ -569,6 +617,7 @@ class FollowService extends GetxService {
     timer = Timer(const Duration(seconds: _retryDelaySeconds), () {
       _retryTimers.remove(timer);
       if (generation != _runGeneration ||
+          !appInForeground ||
           douyinBlocked ||
           !followList.any((e) => e.id == item.id)) {
         return;

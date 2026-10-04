@@ -1,6 +1,7 @@
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:get/get.dart' hide Response;
+import 'package:simple_live_app/models/db/follow_user.dart';
 import 'package:simple_live_app/services/follow_service.dart';
 import 'package:simple_live_app/services/guard_server_service.dart';
 import 'package:simple_live_app/services/local_storage_service.dart';
@@ -20,6 +21,12 @@ class FakeGuard extends GuardServerService {
   String? reregisterResult = 'douyin-2';
   int reregisterCalls = 0;
   final List<Map<String, dynamic>> statusCalls = [];
+  final List<List<String>> warmSyncs = [];
+
+  @override
+  Future<void> syncDouyinWarmRooms(List<String> webRids) async {
+    warmSyncs.add(webRids);
+  }
 
   @override
   Future<String?> ensureAccount(String platform) async => accountId;
@@ -50,6 +57,22 @@ class FakeGuard extends GuardServerService {
   }
 }
 
+class TestFollowService extends FollowService {
+  int loadDataCalls = 0;
+  int initTimerCalls = 0;
+
+  @override
+  Future<void> loadData(
+      {bool updateStatus = true, bool manual = false}) async {
+    loadDataCalls++;
+  }
+
+  @override
+  void initTimer() {
+    initTimerCalls++;
+  }
+}
+
 void main() {
   late FollowService follow;
   late FakeGuard guard;
@@ -60,7 +83,7 @@ void main() {
     Get.put<GuardServerService>(guard);
     // onInit 会从（返回默认空值的）FakeLocalStorage 重置 serverUrl，故在其后设置
     guard.serverUrl = 'http://guard';
-    follow = FollowService();
+    follow = TestFollowService();
   });
 
   tearDown(Get.reset);
@@ -132,5 +155,75 @@ void main() {
     expect(guard.reregisterCalls, 1);
     expect(guard.statusCalls[0]['accountId'], 'douyin-1');
     expect(guard.statusCalls[1]['accountId'], 'douyin-2');
+  });
+
+  FollowUser followUser(String id, String roomId, String siteId) => FollowUser(
+        id: id,
+        roomId: roomId,
+        siteId: siteId,
+        userName: '',
+        face: '',
+        addTime: DateTime.now(),
+      );
+
+  test('同步抖音关注房清单：仅取抖音房间，排除其他平台', () async {
+    follow.followList.assignAll([
+      followUser('douyin_a', 'a', 'douyin'),
+      followUser('douyin_b', 'b', 'douyin'),
+      followUser('bili_c', 'c', 'bilibili'),
+    ]);
+
+    follow.syncDouyinWarmRooms();
+    await Future<void>.delayed(Duration.zero);
+
+    expect(guard.warmSyncs.single, ['a', 'b']);
+  });
+
+  test('guard 未配置（无地址）时不同步', () async {
+    guard.serverUrl = '';
+    follow.followList.assignAll([followUser('douyin_a', 'a', 'douyin')]);
+
+    follow.syncDouyinWarmRooms();
+    await Future<void>.delayed(Duration.zero);
+
+    expect(guard.warmSyncs, isEmpty);
+  });
+
+  test('App 切后台：不发起状态查询，updating 复位', () async {
+    follow.followList.assignAll([followUser('douyin_a', 'a', 'douyin')]);
+    follow.didChangeAppLifecycleState(AppLifecycleState.paused);
+
+    follow.startUpdateStatus();
+    await Future<void>.delayed(Duration.zero);
+
+    expect(guard.statusCalls, isEmpty);
+    expect(follow.updating.value, false);
+  });
+
+  test('App 回前台：立即刷新并重建定时器', () async {
+    follow.didChangeAppLifecycleState(AppLifecycleState.paused);
+    follow.didChangeAppLifecycleState(AppLifecycleState.resumed);
+
+    final testFollow = follow as TestFollowService;
+    expect(testFollow.loadDataCalls, 1);
+    expect(testFollow.initTimerCalls, 1);
+    expect(follow.appInForeground, true);
+  });
+
+  test('后台后回前台：抖音状态查询恢复', () async {
+    follow.followList.assignAll([followUser('douyin_a', 'a', 'douyin')]);
+    follow.onAppPaused();
+    follow.startUpdateStatus();
+    await Future<void>.delayed(Duration.zero);
+    expect(guard.statusCalls, isEmpty);
+
+    follow.onAppResumed();
+    // loadData 在 TestFollowService 中被覆写，手动触发一轮验证门控已解除
+    follow.startUpdateStatus();
+    for (var i = 0; i < 5; i++) {
+      await Future<void>.delayed(Duration.zero);
+    }
+
+    expect(guard.statusCalls, isNotEmpty);
   });
 }

@@ -25,7 +25,9 @@ import 'package:simple_live_app/routes/app_pages.dart';
 import 'package:simple_live_app/routes/route_path.dart';
 import 'package:simple_live_app/services/bilibili_account_service.dart';
 import 'package:simple_live_app/services/douyin_account_service.dart';
-import 'package:simple_live_app/services/douyin_webview_service.dart';
+import 'package:simple_live_app/app/constant.dart';
+import 'package:simple_live_app/app/sites.dart';
+import 'package:simple_live_core/simple_live_core.dart';
 import 'package:simple_live_app/services/douyu_account_service.dart';
 import 'package:simple_live_app/services/db_service.dart';
 import 'package:simple_live_app/services/follow_service.dart';
@@ -143,7 +145,7 @@ Future initServices() async {
 
   Get.put(DouyinAccountService());
 
-  Get.put(DouyinWebViewService());
+  bindDouyinHtmlFetcher();
 
   if (Platform.isWindows) unawaited(Get.put(WindowsImeWatchdog()).start());
 
@@ -163,6 +165,21 @@ Future initServices() async {
   unawaited(GuardServerService.instance.rehydrate());
 
   initCoreLog();
+}
+
+// guard 已配置时，抖音房间 HTML 由 guard 统一代理：默认游客匿名取页；
+// 显式进入（asAccount）时走账号视角，服务端检测到拉黑会自动降级匿名
+void bindDouyinHtmlFetcher() {
+  final guard = GuardServerService.instance;
+  if (!guard.configured) return;
+  final douyinSite = Sites.allSites[Constant.kDouyin]!.liveSite as DouyinSite;
+  douyinSite.htmlFetcher = (webRid, cookie) async {
+    final accountId = cookie.contains('sessionid=')
+        ? await GuardServerService.instance.ensureAccount('douyin')
+        : null;
+    return GuardServerService.instance
+        .fetchRoomHtml(webRid: webRid, accountId: accountId);
+  };
 }
 
 void initCoreLog() {

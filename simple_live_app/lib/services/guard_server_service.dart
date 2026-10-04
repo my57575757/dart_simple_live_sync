@@ -154,6 +154,38 @@ class GuardServerService extends GetxService {
     await dio.delete<dynamic>("/api/account/$accountId", options: _options);
   }
 
+  /// 同步抖音关注房 webRid 清单给 guard，供其定时冷启动预热；未配置则忽略。
+  Future<void> syncDouyinWarmRooms(List<String> webRids) async {
+    if (!configured) return;
+    try {
+      final dio = Dio(BaseOptions(
+        baseUrl: serverUrl,
+        connectTimeout: const Duration(seconds: 10),
+      ));
+      await dio.post<dynamic>(
+        "/api/warm/rooms",
+        data: {"webRids": webRids},
+        options: _options,
+      );
+    } catch (e) {
+      Log.logPrint("同步预热房间清单失败: $e");
+    }
+  }
+
+  /// 立即触发一轮后台预热（不等待完成）
+  Future<void> triggerWarm() async {
+    if (!configured) return;
+    try {
+      final dio = Dio(BaseOptions(
+        baseUrl: serverUrl,
+        connectTimeout: const Duration(seconds: 10),
+      ));
+      await dio.post<dynamic>("/api/warm/run", options: _options);
+    } catch (e) {
+      Log.logPrint("触发预热失败: $e");
+    }
+  }
+
   /// 进入直播间；返回房间状态：joined 已加入粉丝团、starGuard 星守护房间
   Future<Map<String, dynamic>> enterRoom({
     required String accountId,
@@ -178,9 +210,10 @@ class GuardServerService extends GetxService {
     return Map<String, dynamic>.from(res.data["data"] as Map);
   }
 
-  /// 直播状态被动查询：服务端缓存 room_id，不进场、无副作用
+  /// 直播状态被动查询：服务端缓存 room_id，不进场、无副作用。
+  /// accountId 为空走游客匿名；服务端对拉黑房自动游客复核
   Future<Map<String, dynamic>> getLiveStatus({
-    required String accountId,
+    String? accountId,
     String roomId = "",
     String webRid = "",
   }) async {
@@ -191,13 +224,38 @@ class GuardServerService extends GetxService {
     final res = await dio.post<dynamic>(
       "/api/room/status",
       data: {
-        "accountId": accountId,
+        if (accountId != null) "accountId": accountId,
         "roomId": roomId,
         "webRid": webRid,
       },
       options: _options,
     );
     return Map<String, dynamic>.from(res.data["data"] as Map);
+  }
+
+  /// 取房间 SSR HTML（供 DouyinSite.htmlFetcher）。accountId 为空走游客匿名；
+  /// 非空时服务端对「账号被该房拉黑」自动降级匿名 HTML
+  Future<String> fetchRoomHtml({
+    required String webRid,
+    String? accountId,
+  }) async {
+    final dio = Dio(BaseOptions(
+      baseUrl: serverUrl,
+      connectTimeout: const Duration(seconds: 15),
+    ));
+    final res = await dio.post<dynamic>(
+      "/api/room/html",
+      data: {
+        "webRid": webRid,
+        if (accountId != null) "accountId": accountId,
+      },
+      options: _options,
+    );
+    final data = Map<String, dynamic>.from(res.data["data"] as Map);
+    if (data["guest"] == true) {
+      Log.logPrint("抖音账号被该房拉黑，已以游客观看 webRid=$webRid");
+    }
+    return data["html"].toString();
   }
 
   Future<Map<String, dynamic>> heartbeat({    required String accountId,
