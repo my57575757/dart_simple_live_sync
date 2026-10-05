@@ -127,7 +127,7 @@ void main() {
 
     service = FollowService();
     service.douyinLaunchInterval = const Duration(milliseconds: 5);
-    service.douyinRetryDelay = const Duration(milliseconds: 60);
+    service.itemRetryDelay = const Duration(milliseconds: 30);
   });
 
   tearDown(() async {
@@ -136,7 +136,7 @@ void main() {
     await tmp.delete(recursive: true);
   });
 
-  test('队头失败暂停后续不请求，重试成功后继续队列；bili并发不受影响', () async {
+  test('队头失败本轮不暂停：第二个抖音照常发起，loading正常结束；后台复核队头成功', () async {
     service.douyinConcurrency = 1;
     douyinFake.configure("10000000000", failTimes: 2, living: false);
     douyinFake.configure("10000000001", living: true);
@@ -144,19 +144,19 @@ void main() {
 
     await service.loadData(manual: true);
 
-    // 队头首次失败：暂停，第二个抖音从未请求；bili 不受影响已落定
-    await _waitFor(() => douyinFake.callOrder.where((e) => e == "10000000000").length == 1);
-    expect(douyinFake.callOrder, isNot(contains("10000000001")));
-    expect(service.updating.value, isTrue);
-    expect(service.updatedCount, 1); // 仅 bili 落定
-
-    // 队头重试两次后成功（未开播），随后第二个抖音继续并成功（开播）
+    // 本轮不等待重试：队头失败后第二个抖音立即发起，loading 正常结束
     await _waitFor(() => !service.updating.value);
     expect(
       douyinFake.callOrder.where((e) => e == "10000000000").length,
-      3,
+      1,
     );
-    expect(douyinFake.callOrder.last, "10000000001");
+    expect(douyinFake.callOrder, contains("10000000001"));
+
+    // 队头后台重试两次后成功（未开播）
+    await _waitFor(
+      () =>
+          douyinFake.callOrder.where((e) => e == "10000000000").length == 3,
+    );
 
     var byId = {for (var u in service.followList) u.roomId: u};
     expect(byId["10000000000"]!.liveStatus.value, 1);

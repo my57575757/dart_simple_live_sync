@@ -98,7 +98,7 @@ class GuardServerService extends GetxService {
   Options get _options => Options(headers: {"Authorization": "Bearer $token"});
 
   Future<String> registerAccount(String platform, String cookie) async {
-    final dio = Dio(BaseOptions(baseUrl: serverUrl, connectTimeout: const Duration(seconds: 10)));
+    final dio = Dio(BaseOptions(baseUrl: serverUrl, connectTimeout: const Duration(seconds: 10), receiveTimeout: const Duration(seconds: 20)));
     final res = await dio.post<dynamic>(
       "/api/account",
       data: {"platform": platform, "cookie": cookie},
@@ -222,6 +222,7 @@ class GuardServerService extends GetxService {
     final dio = Dio(BaseOptions(
       baseUrl: serverUrl,
       connectTimeout: const Duration(seconds: 10),
+      receiveTimeout: const Duration(seconds: 15),
     ));
     final res = await dio.post<dynamic>(
       "/api/room/status",
@@ -244,6 +245,7 @@ class GuardServerService extends GetxService {
     final dio = Dio(BaseOptions(
       baseUrl: serverUrl,
       connectTimeout: const Duration(seconds: 15),
+      receiveTimeout: const Duration(seconds: 30),
     ));
     final res = await dio.post<dynamic>(
       "/api/room/html",
@@ -277,6 +279,7 @@ class GuardServerService extends GetxService {
     final dio = Dio(BaseOptions(
       baseUrl: serverUrl,
       connectTimeout: const Duration(seconds: 10),
+      receiveTimeout: const Duration(seconds: 20),
     ));
     final res = await dio.post<dynamic>(
       "/api/room/trust",
@@ -297,6 +300,7 @@ class GuardServerService extends GetxService {
     final dio = Dio(BaseOptions(
       baseUrl: serverUrl,
       connectTimeout: const Duration(seconds: 10),
+      receiveTimeout: const Duration(seconds: 20),
     ));
     final res = await dio.post<dynamic>(
       "/api/room/heartbeat",
@@ -320,6 +324,7 @@ class GuardServerService extends GetxService {
     final dio = Dio(BaseOptions(
       baseUrl: serverUrl,
       connectTimeout: const Duration(seconds: 10),
+      receiveTimeout: const Duration(seconds: 20),
     ));
     await dio.post<dynamic>(
       "/api/room/exit",

@@ -253,9 +253,9 @@ class FollowService extends GetxService with WidgetsBindingObserver {
 
   static const int _retryDelaySeconds = 15;
 
-  /// 抖音队列失败暂停后重试队头的间隔
+  /// 后台单个复核的等待间隔（测试可覆盖）
   @visibleForTesting
-  Duration douyinRetryDelay = const Duration(minutes: 1);
+  Duration itemRetryDelay = const Duration(seconds: _retryDelaySeconds);
 
   /// 抖音队列并发数。命中 guard 内存缓存的请求亚毫秒返回、完全不发往抖音，
   /// 故可高并发；冷缓存取页由 guard 内部串行，无软限流风险。
@@ -300,7 +300,7 @@ class FollowService extends GetxService with WidgetsBindingObserver {
     Log.logPrint(
         "开始更新关注状态：抖音并发$douyinConcurrency队列 ${douyinItems.length}，其余 ${otherItems.length}");
 
-    // 抖音：单队列串行（间隔约 2s 随机；失败暂停整队列，每 1 分钟重试队头）
+    // 抖音：并发 worker，失败项本轮即落定、后台单独复核
     unawaited(_runDouyinQueue(douyinItems, generation));
 
     // 其余平台：保持并发 worker
@@ -329,24 +329,14 @@ class FollowService extends GetxService with WidgetsBindingObserver {
     });
   }
 
-  /// 抖音队列：有界并发（[douyinConcurrency]，默认 2），相邻发起间隔
-  /// [douyinLaunchInterval]（默认 500ms，约每秒 2 个）。某请求失败（非 444）
-  /// 则暂停调度、等待在途结束，每 [douyinRetryDelay] 重试失败项，全部成功后继续剩余。
+  /// 抖音队列：有界并发（[douyinConcurrency]，默认 16），相邻发起间隔
+  /// [douyinLaunchInterval]（默认 20ms）。任何结果都立即落定本轮状态，
+  /// loading 不被单个失败拖住；失败/预热中的房间不影响其余请求，
+  /// 由后台定时器单独复核，直至成功或命中 444 封禁。
   Future<void> _runDouyinQueue(List<FollowUser> items, int generation) async {
     var index = 0;
-    final running = <FollowUser, Future<bool>>{};
-    final outcomes = <FollowUser, bool>{};
+    final running = <FollowUser, Future<void>>{};
     DateTime? lastLaunch;
-
-    void launch(FollowUser item) {
-      lastLaunch = DateTime.now();
-      final future = _processDouyinItem(item, generation);
-      running[item] = future;
-      future.then((ok) {
-        running.remove(item);
-        outcomes[item] = ok;
-      });
-    }
 
     while (index < items.length || running.isNotEmpty) {
       if (generation != _runGeneration || !appInForeground) {
@@ -374,7 +364,7 @@ class FollowService extends GetxService with WidgetsBindingObserver {
         final wait = lastLaunch == null
             ? 0
             : douyinLaunchInterval.inMilliseconds -
-                DateTime.now().difference(lastLaunch!).inMilliseconds;
+                DateTime.now().difference(lastLaunch).inMilliseconds;
         if (wait > 0) {
           await Future.delayed(Duration(milliseconds: wait));
           if (generation != _runGeneration || !appInForeground) {
@@ -384,62 +374,26 @@ class FollowService extends GetxService with WidgetsBindingObserver {
             break;
           }
         }
-        launch(items[index]);
+        if (index >= items.length) {
+          break;
+        }
+        final item = items[index];
+        lastLaunch = DateTime.now();
         index++;
+        final future = _processDouyinItem(item, generation);
+        running[item] = future;
+        future.whenComplete(() => running.remove(item));
       }
 
       if (running.isEmpty) {
         break;
       }
       await Future.any(running.values);
-      if (generation != _runGeneration || !appInForeground) {
-        return;
-      }
-
-      final failed = outcomes.entries
-          .where((e) => !e.value)
-          .map((e) => e.key)
-          .toList();
-      for (final key in outcomes.keys.toList()) {
-        if (!failed.contains(key)) {
-          outcomes.remove(key);
-        }
-      }
-
-      if (failed.isEmpty) {
-        continue;
-      }
-
-      // 暂停：等在途结束，按固定间隔重试所有失败项直到全部成功
-      outcomes.removeWhere((k, _) => failed.contains(k));
-      if (running.isNotEmpty) {
-        await Future.wait(running.values);
-      }
-      var retryList = failed;
-      while (retryList.isNotEmpty) {
-        await Future.delayed(douyinRetryDelay);
-        if (generation != _runGeneration || !appInForeground) {
-          return;
-        }
-        if (douyinBlocked) {
-          break;
-        }
-        final still = <FollowUser>[];
-        for (final item in retryList) {
-          final ok = await _processDouyinItem(item, generation);
-          if (!ok) still.add(item);
-        }
-        retryList = still;
-      }
-      if (douyinBlocked) {
-        continue; // 回到循环顶部走 blocked 收尾
-      }
     }
   }
 
-  /// 处理单个抖音用户。
-  /// 返回 true：已落定（成功或 444 风控）；false：临时失败，未 settle，需重试。
-  Future<bool> _processDouyinItem(FollowUser item, int generation) async {
+  /// 处理单个抖音用户：立即落定，临时失败转后台复核，不阻塞本轮
+  Future<void> _processDouyinItem(FollowUser item, int generation) async {
     final previous = item.liveStatus.value;
     try {
       var site = Sites.allSites[item.siteId]!;
@@ -466,11 +420,12 @@ class FollowService extends GetxService with WidgetsBindingObserver {
         item.liveStartTime = null;
       }
     } on _RoomStatusWarming {
-      // guard 冷缓存预热中：保留当前显示值，不暂停队列，后续刷新自然修正
+      // guard 冷缓存预热中：保留当前显示值立即落定，后台单独刷新
+      _scheduleDouyinItemRetry(item);
       if (generation == _runGeneration) {
         _settleItem(item, changed: false);
       }
-      return true;
+      return;
     } catch (e) {
       Log.logPrint(e);
       if (e is CoreError && e.statusCode == 444) {
@@ -481,16 +436,70 @@ class FollowService extends GetxService with WidgetsBindingObserver {
         if (generation == _runGeneration) {
           _settleItem(item, changed: previous != 0);
         }
-        return true;
+        return;
       }
+      // 临时失败：保留旧值立即落定，后台单独重试，不暂停整队列
       _applyTransientFailure(item);
-      return false;
+      _scheduleDouyinItemRetry(item);
+      if (generation == _runGeneration) {
+        _settleItem(item, changed: false);
+      }
+      return;
     }
     if (generation != _runGeneration) {
-      return true;
+      return;
     }
     _settleItem(item, changed: item.liveStatus.value != previous);
-    return true;
+  }
+
+  /// 安排单个抖音关注的后台复核（不依附刷新轮次）；
+  /// 仍失败会继续安排下一次，直到成功或命中 444
+  void _scheduleDouyinItemRetry(FollowUser item) {
+    late Timer timer;
+    timer = Timer(itemRetryDelay, () async {
+      _retryTimers.remove(timer);
+      if (!appInForeground ||
+          douyinBlocked ||
+          !followList.any((e) => e.id == item.id)) {
+        return;
+      }
+      await _recheckDouyinItem(item);
+    });
+    _retryTimers.add(timer);
+  }
+
+  Future<void> _recheckDouyinItem(FollowUser item) async {
+    final previous = item.liveStatus.value;
+    try {
+      var site = Sites.allSites[item.siteId]!;
+      var queryId = "${item.roomId};${item.shareUrl}";
+      var isLiving = await resolveDouyinLiving(
+        webRid: item.roomId,
+        directFallback: () => site.liveSite.getLiveStatus(roomId: queryId),
+      );
+      item.liveStatus.value = isLiving ? 2 : 1;
+      if (isLiving) {
+        try {
+          var detail = await site.liveSite.getRoomDetail(roomId: queryId);
+          item.liveStartTime = detail.showTime;
+        } catch (_) {}
+      } else {
+        item.liveStartTime = null;
+      }
+    } catch (e) {
+      if (e is CoreError && e.statusCode == 444) {
+        item.liveStatus.value = 0;
+        item.liveStartTime = null;
+        douyinBlocked = true;
+      } else {
+        Log.logPrint(e);
+        _scheduleDouyinItemRetry(item);
+      }
+      return;
+    }
+    if (item.liveStatus.value != previous) {
+      _scheduleListNotify();
+    }
   }
 
   /// 抖音直播状态统一走 guard（服务端缓存 room_id、无进场副作用）：登录用户

@@ -19,12 +19,17 @@ class _FakeDouyinSite extends LiveSite {
   int statusCallCount = 0;
   bool throw444 = true;
   bool living = false;
+  int transientFailures = 0;
 
   @override
   Future<bool> getLiveStatus({required String roomId}) async {
     statusCallCount++;
     if (throw444) {
       throw CoreError("", statusCode: 444);
+    }
+    if (transientFailures > 0) {
+      transientFailures--;
+      throw CoreError("临时失败");
     }
     return living;
   }
@@ -48,9 +53,15 @@ void main() {
   setUp(() async {
     tmp = await Directory.systemTemp.createTemp("sl_follow_test");
     Hive.init(tmp.path);
-    Hive.registerAdapter(FollowUserAdapter());
-    Hive.registerAdapter(HistoryAdapter());
-    Hive.registerAdapter(FollowUserTagAdapter());
+    if (!Hive.isAdapterRegistered(1)) {
+      Hive.registerAdapter(FollowUserAdapter());
+    }
+    if (!Hive.isAdapterRegistered(2)) {
+      Hive.registerAdapter(HistoryAdapter());
+    }
+    if (!Hive.isAdapterRegistered(3)) {
+      Hive.registerAdapter(FollowUserTagAdapter());
+    }
 
     var localStorage = LocalStorageService();
     await localStorage.init();
@@ -86,7 +97,7 @@ void main() {
     service = FollowService();
     service.douyinConcurrency = 1;
     service.douyinLaunchInterval = const Duration(milliseconds: 1);
-    service.douyinRetryDelay = const Duration(milliseconds: 5);
+    service.itemRetryDelay = const Duration(milliseconds: 5);
   });
 
   tearDown(() async {
@@ -124,5 +135,25 @@ void main() {
       service.followList.every((u) => u.liveStatus.value == 2),
       isTrue,
     );
+  });
+
+  test('临时失败本轮立即结束loading，后台复核成功后自动更新为直播中', () async {
+    fake.throw444 = false;
+    fake.living = true;
+    fake.transientFailures = 2; // 两个关注首次都失败
+    service.itemRetryDelay = const Duration(milliseconds: 400);
+    await service.loadData(manual: true);
+    await _waitFor(() => !service.updating.value);
+    // 本轮不再暂停等待：两个都已发起（共 2 次），状态保留初始 0
+    expect(fake.statusCallCount, 2);
+    expect(
+      service.followList.every((u) => u.liveStatus.value == 0),
+      isTrue,
+    );
+    // 后台 ~5ms 复核：两次再请求，状态自动变为直播中
+    await _waitFor(
+      () => service.followList.every((u) => u.liveStatus.value == 2),
+    );
+    expect(fake.statusCallCount, 4);
   });
 }
