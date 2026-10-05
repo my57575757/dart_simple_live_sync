@@ -51,6 +51,9 @@ class DouyinGuestVerifyController extends GetxController {
     usedClearFallback = true;
     final cm = CookieManager.instance();
     savedCookies = await cm.getCookies(url: roomUrl);
+    // host-only cookie：删除指令不带 Domain
+    await cm.deleteCookies(url: roomUrl);
+    // Domain=.douyin.com 的域 cookie
     await cm.deleteCookies(url: roomUrl, domain: ".douyin.com");
   }
 
@@ -103,6 +106,16 @@ class DouyinGuestVerifyController extends GetxController {
     await submit();
   }
 
+  static bool isAccountCookieName(String name) => [
+        "sessionid",
+        "sid_",
+        "ssid_",
+        "uid_",
+        "passport_",
+        "sso_",
+        "toutiao_sso",
+      ].any(name.startsWith);
+
   Future<void> submit() async {
     final c = webController;
     if (c == null || submitting.value) return;
@@ -111,6 +124,7 @@ class DouyinGuestVerifyController extends GetxController {
       final cm = CookieManager.instance(webViewEnvironment: environment);
       final cookies = await cm.getCookies(url: roomUrl);
       final cookieStr = cookies
+          .where((item) => !isAccountCookieName(item.name))
           .map((item) => "${item.name}=${item.value}")
           .join("; ");
       final ua = await InAppWebViewController.getDefaultUserAgent();

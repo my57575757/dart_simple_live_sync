@@ -1104,6 +1104,12 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       startLiveDurationTimer(); // 启动开播时长定时器
     } on DouyinGuestVerifyRequired catch (e) {
       Log.logPrint(e);
+      if (guestVerifyReplays >= 1) {
+        loadError.value = true;
+        error = e;
+        SmartDialog.showToast("验证未生效，请手动重试");
+        return;
+      }
       if (guestVerifyPrompting) return;
       guestVerifyPrompting = true;
       final result = await Get.toNamed<bool>(
