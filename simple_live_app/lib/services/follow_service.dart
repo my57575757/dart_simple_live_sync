@@ -465,6 +465,12 @@ class FollowService extends GetxService with WidgetsBindingObserver {
       } else {
         item.liveStartTime = null;
       }
+    } on _RoomStatusWarming {
+      // guard 冷缓存预热中：保留当前显示值，不暂停队列，后续刷新自然修正
+      if (generation == _runGeneration) {
+        _settleItem(item, changed: false);
+      }
+      return true;
     } catch (e) {
       Log.logPrint(e);
       if (e is CoreError && e.statusCode == 444) {
@@ -506,6 +512,9 @@ class FollowService extends GetxService with WidgetsBindingObserver {
       );
       return data["living"] == true;
     } on DioException catch (e) {
+      if (e.response?.statusCode == 503) {
+        throw _RoomStatusWarming();
+      }
       // 服务端重建后旧 accountId 失效：重新注册并重试一次
       if (e.response?.statusCode != 404) rethrow;
       final newId = await guard.reregister("douyin");
@@ -817,3 +826,5 @@ class FollowService extends GetxService with WidgetsBindingObserver {
     }
   }
 }
+
+class _RoomStatusWarming implements Exception {}

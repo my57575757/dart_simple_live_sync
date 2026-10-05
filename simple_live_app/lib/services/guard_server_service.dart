@@ -251,11 +251,40 @@ class GuardServerService extends GetxService {
       },
       options: _options,
     );
-    final data = Map<String, dynamic>.from(res.data["data"] as Map);
+    final body = Map<String, dynamic>.from(res.data as Map);
+    if (body["code"] == 4031) {
+      final data =
+          body["data"] is Map ? Map<String, dynamic>.from(body["data"] as Map)
+              : null;
+      throw DouyinGuestVerifyRequired(
+        data?["webRid"]?.toString() ?? webRid,
+      );
+    }
+    final data = Map<String, dynamic>.from(body["data"] as Map);
     if (data["guest"] == true) {
       Log.logPrint("抖音账号被该房拉黑，已以游客观看 webRid=$webRid");
     }
     return data["html"].toString();
+  }
+
+  Future<void> saveRoomTrust({
+    required String webRid,
+    required String cookies,
+    required String ua,
+  }) async {
+    final dio = Dio(BaseOptions(
+      baseUrl: serverUrl,
+      connectTimeout: const Duration(seconds: 10),
+    ));
+    final res = await dio.post<dynamic>(
+      "/api/room/trust",
+      data: {"webRid": webRid, "cookies": cookies, "ua": ua},
+      options: _options,
+    );
+    final body = Map<String, dynamic>.from(res.data as Map);
+    if (body["code"] != 0) {
+      throw Exception(body["message"]?.toString() ?? "保存验证信息失败");
+    }
   }
 
   Future<Map<String, dynamic>> heartbeat({    required String accountId,
@@ -301,4 +330,9 @@ class GuardServerService extends GetxService {
       options: _options,
     );
   }
+}
+
+class DouyinGuestVerifyRequired implements Exception {
+  final String webRid;
+  DouyinGuestVerifyRequired(this.webRid);
 }
