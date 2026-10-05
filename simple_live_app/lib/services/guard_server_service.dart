@@ -2,6 +2,8 @@ import 'dart:async';
 
 import 'package:dio/dio.dart';
 import 'package:get/get.dart';
+import 'package:simple_live_core/simple_live_core.dart'
+    show DouyinGuestVerifyRequired;
 import 'package:simple_live_app/app/log.dart';
 import 'package:simple_live_app/services/local_storage_service.dart';
 
@@ -330,9 +332,4 @@ class GuardServerService extends GetxService {
       options: _options,
     );
   }
-}
-
-class DouyinGuestVerifyRequired implements Exception {
-  final String webRid;
-  DouyinGuestVerifyRequired(this.webRid);
 }

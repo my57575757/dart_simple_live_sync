@@ -14,6 +14,12 @@ typedef DouyinHtmlFetcher = Future<String> Function(
   String cookie,
 );
 
+/// 房间页命中验证码中间页：宿主应弹出游客验证窗口，而非走其他取房兜底
+class DouyinGuestVerifyRequired implements Exception {
+  final String webRid;
+  DouyinGuestVerifyRequired(this.webRid);
+}
+
 class DouyinSite implements LiveSite {
   @override
   String id = "douyin";
@@ -366,6 +372,9 @@ class DouyinSite implements LiveSite {
     // 无进场副作用：优先 GET HTML；失败再用 shareUrl 走 reflow
     try {
       return await _getRoomDetailByWebRidHtml(webRid, asAccount: asAccount);
+    } on DouyinGuestVerifyRequired {
+      // 验证信号必须直达宿主弹窗，不能被 shareUrl 直连兜底吞掉
+      rethrow;
     } catch (e) {
       CoreLog.error(e);
       if (shareUrl != "") {
