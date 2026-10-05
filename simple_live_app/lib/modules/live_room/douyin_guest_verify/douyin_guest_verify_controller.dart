@@ -19,6 +19,7 @@ class DouyinGuestVerifyController extends GetxController {
   List<Cookie> savedCookies = [];
   bool usedClearFallback = false;
   bool finished = false;
+  bool canceled = false;
 
   WebUri get roomUrl => WebUri("https://live.douyin.com/$webRid");
 
@@ -62,27 +63,44 @@ class DouyinGuestVerifyController extends GetxController {
     webController = c;
   }
 
-  void onLoadStop(InAppWebViewController c, Uri? uri) async {
+  Future<bool> checkVerified() async {
     try {
+      final c = webController;
+      if (c == null) return false;
       final result = await c.evaluateJavascript(
         source:
             'JSON.stringify({title: document.title, hasVideo: !!document.querySelector("video"), path: location.pathname})',
       );
-      if (result == null) return;
+      if (result == null) return false;
       final info = json.decode(result.toString()) as Map<String, dynamic>;
-      final verified = info["title"] != "验证码中间页" &&
+      return info["title"] != "验证码中间页" &&
           info["path"] == "/$webRid" &&
           info["hasVideo"] == true;
-      if (verified && !ready.value) {
-        ready.value = true;
-        await Future.delayed(const Duration(seconds: 1));
-        if (ready.value && !submitting.value && !finished) {
-          await submit();
-        }
-      }
     } catch (e) {
       Log.logPrint("验证完成检测失败：$e");
+      return false;
     }
+  }
+
+  void onLoadStop(InAppWebViewController c, Uri? uri) async {
+    final verified = await checkVerified();
+    if (verified && !ready.value) {
+      ready.value = true;
+      await Future.delayed(const Duration(seconds: 1));
+      if (ready.value && !submitting.value && !finished) {
+        await submit();
+      }
+    }
+  }
+
+  Future<void> manualSubmit() async {
+    if (submitting.value) return;
+    final verified = await checkVerified();
+    if (!verified && !ready.value) {
+      SmartDialog.showToast("请先完成页面验证");
+      return;
+    }
+    await submit();
   }
 
   Future<void> submit() async {
@@ -101,6 +119,10 @@ class DouyinGuestVerifyController extends GetxController {
         cookies: cookieStr,
         ua: ua,
       );
+      if (canceled) {
+        Log.logPrint("验证信息已保存但页面已取消，不再退窗");
+        return;
+      }
       finished = true;
       await restore();
       Get.back(result: true);
@@ -112,6 +134,7 @@ class DouyinGuestVerifyController extends GetxController {
   }
 
   Future<void> cancel() async {
+    canceled = true;
     finished = true;
     await restore();
     Get.back(result: false);
@@ -126,13 +149,17 @@ class DouyinGuestVerifyController extends GetxController {
     if (usedClearFallback) {
       final cm = CookieManager.instance();
       for (final item in savedCookies) {
-        await cm.setCookie(
-          url: roomUrl,
-          name: item.name,
-          value: item.value,
-          path: item.path ?? "/",
-          domain: item.domain,
-        );
+        try {
+          await cm.setCookie(
+            url: roomUrl,
+            name: item.name,
+            value: item.value,
+            path: item.path ?? "/",
+            domain: item.domain,
+          );
+        } catch (e) {
+          Log.logPrint("恢复 cookie 失败(${item.name})：$e");
+        }
       }
     }
   }

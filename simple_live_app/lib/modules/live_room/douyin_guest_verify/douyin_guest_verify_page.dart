@@ -55,18 +55,9 @@ class _DouyinGuestVerifyPageState extends State<DouyinGuestVerifyPage> {
           onPressed: controller.cancel,
         ),
         actions: [
-          Obx(
-            () => TextButton(
-              onPressed: controller.ready.value ? controller.submit : null,
-              child: Text(
-                "完成验证",
-                style: TextStyle(
-                  color: controller.ready.value
-                      ? Theme.of(context).colorScheme.primary
-                      : Theme.of(context).disabledColor,
-                ),
-              ),
-            ),
+          TextButton(
+            onPressed: controller.manualSubmit,
+            child: const Text("完成验证"),
           ),
         ],
       ),
