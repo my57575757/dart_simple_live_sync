@@ -20,10 +20,14 @@ class _FakeDouyinSite extends LiveSite {
   bool throw444 = true;
   bool living = false;
   int transientFailures = 0;
+  int delayMs = 0;
 
   @override
   Future<bool> getLiveStatus({required String roomId}) async {
     statusCallCount++;
+    if (delayMs > 0) {
+      await Future<void>.delayed(Duration(milliseconds: delayMs));
+    }
     if (throw444) {
       throw CoreError("", statusCode: 444);
     }
@@ -155,5 +159,25 @@ void main() {
       () => service.followList.every((u) => u.liveStatus.value == 2),
     );
     expect(fake.statusCallCount, 4);
+  });
+
+  test('单个房间状态很慢时，loading到硬上限立即结束，不无限等待', () async {
+    fake.throw444 = false;
+    fake.living = false;
+    fake.delayMs = 800; // 每个状态查询都慢
+    service.loadingMaxDuration = const Duration(milliseconds: 150);
+
+    final sw = Stopwatch()..start();
+    await service.loadData(manual: true);
+    for (var i = 0; i < 40; i++) {
+      if (!service.updating.value) break;
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+    }
+    sw.stop();
+    expect(service.updating.value, isFalse);
+    expect(sw.elapsedMilliseconds, lessThan(500));
+
+    // 等慢请求全部落地，避免悬空 future
+    await Future<void>.delayed(const Duration(milliseconds: 2000));
   });
 }

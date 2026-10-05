@@ -20,6 +20,7 @@ import 'package:simple_live_app/app/sites.dart';
 import 'package:simple_live_app/app/utils.dart';
 import 'package:simple_live_app/models/db/follow_user.dart';
 import 'package:simple_live_app/models/db/history.dart';
+import 'package:simple_live_app/modules/live_room/player/playback_watchdog.dart';
 import 'package:simple_live_app/modules/live_room/player/player_controller.dart';
 import 'package:simple_live_app/modules/settings/danmu_settings_page.dart';
 import 'package:simple_live_app/routes/route_path.dart';
@@ -154,9 +155,39 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   @visibleForTesting
   void stopGuardHeartbeatForTesting() => _stopGuardHeartbeat();
 
+  /// 进入缓冲且迟迟不播放（libmpv 对死流有时只停在 buffering、
+  /// 不抛 error）时的兜底看门狗：超时按播放失败处理，自动重试/切线路
+  late final PlaybackWatchdog _playbackWatchdog = PlaybackWatchdog(
+    timeout: bufferingWatchdogTimeout,
+    isPlaying: () => player.state.playing,
+    isActive: () => !isBackground && liveStatus.value,
+    onTimeout: () {
+      Log.logPrint(
+          "缓冲超过${bufferingWatchdogTimeout.inSeconds}s未播放，按播放失败处理");
+      mediaError("缓冲超时");
+    },
+  );
+
+  StreamSubscription<bool>? _watchdogBufferingSub;
+  StreamSubscription<bool>? _watchdogPlayingSub;
+
+  /// 缓冲超时阈值（测试可调短）
+  @visibleForTesting
+  Duration bufferingWatchdogTimeout = const Duration(seconds: 15);
+
+  void initPlaybackWatchdog() {
+    _watchdogBufferingSub = player.stream.buffering.listen(
+      _playbackWatchdog.onBufferingChanged,
+    );
+    _watchdogPlayingSub = player.stream.playing.listen(
+      _playbackWatchdog.onPlayingChanged,
+    );
+  }
+
   @override
   void onInit() {
     WidgetsBinding.instance.addObserver(this);
+    initPlaybackWatchdog();
     if (FollowService.instance.followList.isEmpty) {
       FollowService.instance.loadData();
     }
@@ -1050,6 +1081,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       } else {
         detail.value = await liveSite.getRoomDetail(roomId: roomId);
       }
+      Log.logPrint("直播间信息读取完成 roomId=${detail.value?.roomId}");
 
       if (site.id == Constant.kDouyin) {
         // 1.6.0之前收藏的WebRid
@@ -1147,6 +1179,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
         SmartDialog.showToast("无法读取播放清晰度");
         return;
       }
+      Log.logPrint("播放清晰度读取完成 ${playQualites.length}个");
       qualites.value = playQualites;
       var qualityLevel = await getQualityLevel();
       if (qualityLevel == 2) {
@@ -1187,19 +1220,24 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     currentQualityInfo.value = qualites[currentQuality].quality;
     currentLineInfo.value = "";
     currentLineIndex = -1;
-    var playUrl = await site.liveSite
-        .getPlayUrls(detail: detail.value!, quality: qualites[currentQuality]);
-    if (playUrl.urls.isEmpty) {
+    try {
+      var playUrl = await site.liveSite
+          .getPlayUrls(detail: detail.value!, quality: qualites[currentQuality]);
+      if (playUrl.urls.isEmpty) {
+        SmartDialog.showToast("无法读取播放地址");
+        return;
+      }
+      playUrls.value = playUrl.urls;
+      playHeaders = playUrl.headers;
+      currentLineIndex = 0;
+      currentLineInfo.value = "线路${currentLineIndex + 1}";
+      //重置错误次数
+      mediaErrorRetryCount = 0;
+      initPlaylist();
+    } catch (e) {
+      Log.logPrint(e);
       SmartDialog.showToast("无法读取播放地址");
-      return;
     }
-    playUrls.value = playUrl.urls;
-    playHeaders = playUrl.headers;
-    currentLineIndex = 0;
-    currentLineInfo.value = "线路${currentLineIndex + 1}";
-    //重置错误次数
-    mediaErrorRetryCount = 0;
-    initPlaylist();
   }
 
   void changePlayLine(int index) {
@@ -1225,6 +1263,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     await initializePlayer();
 
     await player.open(Playlist(mediaList, index: currentLineIndex));
+    Log.logPrint("播放器已打开，等待首帧");
 
     // 后台状态下被重开（断线重试等）时，新流会自行播放，需重新应用后台策略
     if ((Platform.isAndroid || Platform.isIOS) && isBackground && !pipActive) {
@@ -1952,6 +1991,9 @@ ${error is Error ? (error as Error).stackTrace : ""}''');
   @override
   void onClose() {
     WidgetsBinding.instance.removeObserver(this);
+    _playbackWatchdog.cancel();
+    _watchdogBufferingSub?.cancel();
+    _watchdogPlayingSub?.cancel();
     scrollController.removeListener(scrollListener);
     autoExitTimer?.cancel();
 

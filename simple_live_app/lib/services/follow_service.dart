@@ -58,6 +58,14 @@ class FollowService extends GetxService with WidgetsBindingObserver {
   /// 状态变化后合并刷新通知的防抖定时器
   Timer? listNotifyTimer;
 
+  /// loading 硬上限定时器：到点无论是否全部查完都结束转圈，
+  /// 未完成项继续在后台更新、成功后逐个替换，弱网/慢平台也不会无限等待
+  Timer? _loadingGuardTimer;
+
+  /// loading 最长展示时间（测试可调短）
+  @visibleForTesting
+  Duration loadingMaxDuration = const Duration(seconds: 6);
+
   /// 本轮是否有状态实际变化（开播/下播）
   bool hasStatusChanged = false;
 
@@ -82,6 +90,7 @@ class FollowService extends GetxService with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(this);
     updateTimer?.cancel();
     listNotifyTimer?.cancel();
+    _loadingGuardTimer?.cancel();
     for (var timer in _retryTimers) {
       timer.cancel();
     }
@@ -92,26 +101,31 @@ class FollowService extends GetxService with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.paused) {
+    // Windows 最小化只给 hidden；移动端切后台给 paused：二者都按后台处理
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.hidden) {
       onAppPaused();
     } else if (state == AppLifecycleState.resumed) {
       onAppResumed();
     }
   }
 
-  /// 进入后台：取消定时刷新，在途轮次不再发起新请求
+  /// 进入后台：在途轮次不再发起新请求。定时器保留运行，
+  /// 到点只标记错过、不刷新
   @visibleForTesting
   void onAppPaused() {
     appInForeground = false;
-    updateTimer?.cancel();
   }
 
-  /// 回到前台：重建定时器并立即刷新一次状态
+  /// 回到前台：仅当后台期间错过了定时刷新点才立即补刷；
+  /// 没错过不做任何刷新，避免一切前台就更新
   @visibleForTesting
   void onAppResumed() {
     appInForeground = true;
-    initTimer();
-    loadData();
+    if (refreshDue) {
+      refreshDue = false;
+      loadData();
+    }
   }
 
   // 添加标签
@@ -177,6 +191,9 @@ class FollowService extends GetxService with WidgetsBindingObserver {
     await DBService.instance.addFollow(follow);
   }
 
+  /// 后台期间定时点到却无法刷新：回前台后立即补刷一次
+  bool refreshDue = false;
+
   void initTimer() {
     if (AppSettingsController.instance.autoUpdateFollowEnable.value) {
       updateTimer?.cancel();
@@ -186,7 +203,12 @@ class FollowService extends GetxService with WidgetsBindingObserver {
                 AppSettingsController.instance.autoUpdateFollowDuration.value),
         (timer) {
           Log.logPrint("Update Follow Timer");
-          loadData();
+          // 后台也保留定时器：到点在前台才刷，后台只记录、等回前台补
+          if (appInForeground) {
+            loadData();
+          } else {
+            refreshDue = true;
+          }
         },
       );
     } else {
@@ -251,6 +273,12 @@ class FollowService extends GetxService with WidgetsBindingObserver {
   @visibleForTesting
   int get retryTimerCount => _retryTimers.length;
 
+  @visibleForTesting
+  int get settledCountForTesting => _settledIds.length;
+
+  @visibleForTesting
+  Set<String> get settledIdsForTesting => _settledIds;
+
   static const int _retryDelaySeconds = 15;
 
   /// 后台单个复核的等待间隔（测试可覆盖）
@@ -281,6 +309,15 @@ class FollowService extends GetxService with WidgetsBindingObserver {
     listNotifyTimer?.cancel();
     updatedCount = 0;
     updating.value = true;
+
+    _loadingGuardTimer?.cancel();
+    _loadingGuardTimer = Timer(loadingMaxDuration, () {
+      if (updating.value) {
+        Log.logPrint(
+            "状态更新超过${loadingMaxDuration.inSeconds}s，先结束loading，剩余房间后台逐个替换");
+        updating.value = false;
+      }
+    });
 
     for (var timer in _retryTimers) {
       timer.cancel();
@@ -545,8 +582,15 @@ class FollowService extends GetxService with WidgetsBindingObserver {
       var isLiving = await site.liveSite.getLiveStatus(roomId: item.roomId);
       item.liveStatus.value = isLiving ? 2 : 1;
       if (isLiving) {
-        var detail = await site.liveSite.getRoomDetail(roomId: item.roomId);
-        item.liveStartTime = detail.showTime;
+        // 开播时间不阻塞 settle：后台补充，避免慢详情拖住整轮 loading
+        unawaited(() async {
+          try {
+            var detail = await site.liveSite.getRoomDetail(roomId: item.roomId);
+            if (generation == _runGeneration) {
+              item.liveStartTime = detail.showTime;
+            }
+          } catch (_) {}
+        }());
       } else {
         item.liveStartTime = null;
       }
@@ -596,6 +640,8 @@ class FollowService extends GetxService with WidgetsBindingObserver {
   }
 
   void _finishRound() {
+    _loadingGuardTimer?.cancel();
+    _loadingGuardTimer = null;
     if (hasStatusChanged) {
       // 本轮结束立即刷新，不再等防抖窗口
       listNotifyTimer?.cancel();

@@ -201,14 +201,37 @@ void main() {
     expect(follow.updating.value, false);
   });
 
-  test('App 回前台：立即刷新并重建定时器', () async {
+  test('没错过定时点回前台：不刷新、不重建定时器', () async {
     follow.didChangeAppLifecycleState(AppLifecycleState.paused);
     follow.didChangeAppLifecycleState(AppLifecycleState.resumed);
 
     final testFollow = follow as TestFollowService;
-    expect(testFollow.loadDataCalls, 1);
-    expect(testFollow.initTimerCalls, 1);
+    expect(testFollow.loadDataCalls, 0);
+    expect(testFollow.initTimerCalls, 0);
     expect(follow.appInForeground, true);
+    expect(follow.refreshDue, false);
+  });
+
+  test('Windows最小化(hidden)按后台处理，错过定时点回前台补刷', () async {
+    follow.didChangeAppLifecycleState(AppLifecycleState.hidden);
+    expect(follow.appInForeground, false);
+
+    follow.refreshDue = true;
+    follow.didChangeAppLifecycleState(AppLifecycleState.resumed);
+
+    final testFollow = follow as TestFollowService;
+    expect(testFollow.loadDataCalls, 1);
+    expect(follow.appInForeground, true);
+  });
+
+  test('后台错过定时点：回前台立即补刷一次', () async {
+    follow.didChangeAppLifecycleState(AppLifecycleState.paused);
+    follow.refreshDue = true;
+    follow.didChangeAppLifecycleState(AppLifecycleState.resumed);
+
+    final testFollow = follow as TestFollowService;
+    expect(testFollow.loadDataCalls, 1);
+    expect(follow.refreshDue, false);
   });
 
   test('后台后回前台：抖音状态查询恢复', () async {
