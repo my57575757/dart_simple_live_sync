@@ -17,6 +17,7 @@ import 'package:simple_live_app/app/sites.dart';
 import 'package:simple_live_app/app/utils.dart';
 import 'package:simple_live_app/models/db/follow_user.dart';
 import 'package:simple_live_app/models/db/follow_user_tag.dart';
+import 'package:simple_live_app/routes/route_path.dart';
 import 'package:simple_live_app/services/db_service.dart';
 import 'package:simple_live_app/services/guard_server_service.dart';
 import 'package:simple_live_core/simple_live_core.dart';
@@ -75,6 +76,12 @@ class FollowService extends GetxService with WidgetsBindingObserver {
   /// 抖音返回 444 后置为 true：停止自动获取抖音直播状态，由用户手动刷新解除
   bool douyinBlocked = false;
 
+  /// 最近一次撞游客风控的房间 webRid（环境级风控，任一房均可验证）
+  String? _verifyWebRid;
+
+  /// 同一前台会话内验证弹窗只弹一次，避免定时刷新反复打扰
+  bool _verifyPromptShown = false;
+
   @override
   void onInit() {
     WidgetsBinding.instance.addObserver(this);
@@ -115,6 +122,8 @@ class FollowService extends GetxService with WidgetsBindingObserver {
   @visibleForTesting
   void onAppPaused() {
     appInForeground = false;
+    _verifyPromptShown = false;
+    _verifyWebRid = null;
   }
 
   /// 回到前台：仅当后台期间错过了定时刷新点才立即补刷；
@@ -456,6 +465,15 @@ class FollowService extends GetxService with WidgetsBindingObserver {
       } else {
         item.liveStartTime = null;
       }
+    } on _RoomVerifyRequired {
+      // guard 浏览器环境撞游客风控：保留当前显示值立即落定，
+      // 后台冷却期间继续低成本复核，并提示用户打开验证页
+      _markVerifyRequired(item.roomId);
+      _scheduleDouyinItemRetry(item);
+      if (generation == _runGeneration) {
+        _settleItem(item, changed: false);
+      }
+      return;
     } on _RoomStatusWarming {
       // guard 冷缓存预热中：保留当前显示值立即落定，后台单独刷新
       _scheduleDouyinItemRetry(item);
@@ -523,6 +541,13 @@ class FollowService extends GetxService with WidgetsBindingObserver {
       } else {
         item.liveStartTime = null;
       }
+    } on _RoomVerifyRequired {
+      _markVerifyRequired(item.roomId);
+      _scheduleDouyinItemRetry(item);
+      return;
+    } on _RoomStatusWarming {
+      _scheduleDouyinItemRetry(item);
+      return;
     } catch (e) {
       if (e is CoreError && e.statusCode == 444) {
         item.liveStatus.value = 0;
@@ -559,7 +584,11 @@ class FollowService extends GetxService with WidgetsBindingObserver {
       return data["living"] == true;
     } on DioException catch (e) {
       if (e.response?.statusCode == 503) {
-        throw _RoomStatusWarming();
+        final body = e.response?.data;
+        final verifyRequired = body is Map &&
+            body["data"] is Map &&
+            (body["data"] as Map)["verifyRequired"] == true;
+        throw verifyRequired ? _RoomVerifyRequired() : _RoomStatusWarming();
       }
       // 服务端重建后旧 accountId 失效：重新注册并重试一次
       if (e.response?.statusCode != 404) rethrow;
@@ -571,6 +600,58 @@ class FollowService extends GetxService with WidgetsBindingObserver {
       );
       return data["living"] == true;
     }
+  }
+
+  /// 记录撞风控房间并（在前台时）弹出一次验证提示
+  void _markVerifyRequired(String webRid) {
+    _verifyWebRid ??= webRid;
+    unawaited(_maybePromptDouyinVerify());
+  }
+
+  /// 测试可覆盖的验证弹窗：返回 true 表示用户已完成验证
+  @visibleForTesting
+  Future<bool> Function(String webRid)? verifyPromptCallback;
+
+  /// 默认弹窗：确认后打开游客验证页，完成滑块由该页提交 trust；
+  /// 返回 true 表示验证信息已提交后端
+  Future<bool> _defaultVerifyPrompt(String webRid) async {
+    final confirmed = await Get.dialog<bool>(
+      AlertDialog(
+        title: const Text("抖音访问验证"),
+        content: const Text("检测到抖音需要游客验证，是否立即打开验证页面？完成后将自动恢复直播状态刷新。"),
+        actions: [
+          TextButton(
+            onPressed: () => Get.back(result: false),
+            child: const Text("稍后"),
+          ),
+          TextButton(
+            onPressed: () => Get.back(result: true),
+            child: const Text("去验证"),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return false;
+    final result =
+        await Get.toNamed(RoutePath.kDouyinGuestVerify, arguments: webRid);
+    return result == true;
+  }
+
+  /// 前台检测到游客风控：弹窗引导打开游客验证页，完成后 trust 提交给后端，
+  /// 后端解除风控冷却，随后立即补刷一轮
+  Future<void> _maybePromptDouyinVerify() async {
+    if (!appInForeground || _verifyPromptShown) return;
+    final webRid = _verifyWebRid;
+    if (webRid == null || webRid.isEmpty) return;
+    _verifyPromptShown = true;
+    final verified =
+        await (verifyPromptCallback ?? _defaultVerifyPrompt)(webRid);
+    if (verified) {
+      _verifyPromptShown = false;
+      _verifyWebRid = null;
+      loadData();
+    }
+    // 用户取消：本前台会话不再弹，等下次回前台
   }
 
   /// 非抖音平台状态更新：并发执行，失败保留旧状态并安排一次性重试
@@ -883,3 +964,5 @@ class FollowService extends GetxService with WidgetsBindingObserver {
 }
 
 class _RoomStatusWarming implements Exception {}
+
+class _RoomVerifyRequired implements Exception {}
