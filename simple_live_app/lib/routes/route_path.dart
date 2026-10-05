@@ -12,6 +12,9 @@ class RoutePath {
   /// 直播间
   static const kLiveRoomDetail = "/room/detail";
 
+  /// 抖音游客验证
+  static const kDouyinGuestVerify = "/live-room/douyin-guest-verify";
+
   /// 弹幕设置
   static const kSettingsDanmu = "/settings/danmu";
 

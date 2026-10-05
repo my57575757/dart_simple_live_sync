@@ -6,6 +6,8 @@ import 'package:simple_live_app/modules/category/detail/category_detail_page.dar
 import 'package:simple_live_app/modules/indexed/indexed_controller.dart';
 import 'package:simple_live_app/modules/live_room/live_room_controller.dart';
 import 'package:simple_live_app/modules/live_room/live_room_page.dart';
+import 'package:simple_live_app/modules/live_room/douyin_guest_verify/douyin_guest_verify_controller.dart';
+import 'package:simple_live_app/modules/live_room/douyin_guest_verify/douyin_guest_verify_page.dart';
 import 'package:simple_live_app/modules/settings/follow_settings_page.dart';
 import 'package:simple_live_app/modules/sync/remote_sync/webdav/remote_sync_webdav_config_page.dart';
 import 'package:simple_live_app/modules/sync/remote_sync/webdav/remote_sync_webdav_controller.dart';
@@ -107,6 +109,14 @@ class AppPages {
           pShareUrl: Get.parameters["shareUrl"] ?? "",
         ),
       ),
+    ),
+    //抖音游客验证
+    GetPage(
+      name: RoutePath.kDouyinGuestVerify,
+      page: () => const DouyinGuestVerifyPage(),
+      binding: BindingsBuilder(() {
+        Get.put(DouyinGuestVerifyController());
+      }),
     ),
     //弹幕设置
     GetPage(
