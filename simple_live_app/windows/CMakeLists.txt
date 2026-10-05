@@ -32,6 +32,9 @@ set(CMAKE_CXX_FLAGS_PROFILE "${CMAKE_CXX_FLAGS_RELEASE}")
 # Use Unicode for all projects.
 add_definitions(-DUNICODE -D_UNICODE)
 
+# 代码页 936 环境下插件源码触发 C4819，统一关闭该警告避免 /WX 构建失败
+add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:/wd4819>")
+
 # Compilation settings that should be applied to most targets.
 #
 # Be cautious about adding new options here, as plugins use this function by
