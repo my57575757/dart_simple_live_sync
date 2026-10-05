@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:get/get.dart';
@@ -72,17 +73,24 @@ class DouyinGuestVerifyController extends GetxController {
       if (c == null) return false;
       final result = await c.evaluateJavascript(
         source:
-            'JSON.stringify({title: document.title, hasVideo: !!document.querySelector("video"), path: location.pathname})',
+            'JSON.stringify({title: document.title, path: location.pathname, hasVideo: !!document.querySelector("video"), hasCaptcha: !!document.querySelector(".secsdk-captcha-drag-icon, [class*=captcha], [id*=captcha]") || /请完成验证|滑动验证|点击按钮完成验证/.test(document.body.innerText || "")})',
       );
-      if (result == null) return false;
-      final info = json.decode(result.toString()) as Map<String, dynamic>;
-      return info["title"] != "验证码中间页" &&
-          info["path"] == "/$webRid" &&
-          info["hasVideo"] == true;
+      return parseVerified(result?.toString(), webRid);
     } catch (e) {
       Log.logPrint("验证完成检测失败：$e");
       return false;
     }
+  }
+
+  /// 验证完成判据：不在验证码中间页、路径正确且无验证码控件。
+  /// 不能要求有 video——未开播房间验证通过后本就没有视频。
+  @visibleForTesting
+  static bool parseVerified(String? result, String webRid) {
+    if (result == null) return false;
+    final info = json.decode(result) as Map<String, dynamic>;
+    return info["title"] != "验证码中间页" &&
+        info["path"] == "/$webRid" &&
+        info["hasCaptcha"] != true;
   }
 
   void onLoadStop(InAppWebViewController c, Uri? uri) async {
