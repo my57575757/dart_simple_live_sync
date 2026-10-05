@@ -244,6 +244,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     _danmakuSuspended = false;
     presence.value = RoomPresence.guest;
 
+    guestVerifyReplays = 0;
     loadData();
   }
 
@@ -1026,6 +1027,9 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     addSysMsg("弹幕服务器连接正常");
   }
 
+  bool guestVerifyPrompting = false;
+  int guestVerifyReplays = 0;
+
   /// 加载直播间信息
   void loadData() async {
     presence.value = RoomPresence.guest;
@@ -1098,9 +1102,25 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
         addSysMsg("当前主播未开播，不连接弹幕服务器");
       }
       startLiveDurationTimer(); // 启动开播时长定时器
+    } on DouyinGuestVerifyRequired catch (e) {
+      Log.logPrint(e);
+      if (guestVerifyPrompting) return;
+      guestVerifyPrompting = true;
+      final result = await Get.toNamed<bool>(
+        RoutePath.kDouyinGuestVerify,
+        arguments: e.webRid,
+      );
+      guestVerifyPrompting = false;
+      SmartDialog.dismiss(status: SmartStatus.loading);
+      if (result == true && guestVerifyReplays < 1) {
+        guestVerifyReplays++;
+        loadData();
+        return;
+      }
+      loadError.value = true;
+      error = e;
     } catch (e) {
       Log.logPrint(e);
-      //SmartDialog.showToast(e.toString());
       loadError.value = true;
       error = e;
     } finally {
@@ -1859,6 +1879,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     }
 
     // 刷新信息
+    guestVerifyReplays = 0;
     loadData();
   }
 
