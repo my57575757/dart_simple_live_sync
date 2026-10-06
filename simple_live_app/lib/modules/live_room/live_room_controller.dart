@@ -155,33 +155,22 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   @visibleForTesting
   void stopGuardHeartbeatForTesting() => _stopGuardHeartbeat();
 
-  /// 进入缓冲且迟迟不播放（libmpv 对死流有时只停在 buffering、
-  /// 不抛 error）时的兜底看门狗：超时按播放失败处理，自动重试/切线路
+  /// 播放卡死兜底看门狗：播放位置长时间不推进（libmpv 对死流有时仍停在
+  /// playing 状态、不抛 error/completed）时，按播放失败处理。生效条件不含
+  /// playing——恢复期 playing=false 时仍需检测，否则会永久静默成死局。
   late final PlaybackWatchdog _playbackWatchdog = PlaybackWatchdog(
     timeout: bufferingWatchdogTimeout,
-    isPlaying: () => player.state.playing,
     isActive: () => !isBackground && liveStatus.value,
-    onTimeout: () {
-      Log.logPrint(
-          "缓冲超过${bufferingWatchdogTimeout.inSeconds}s未播放，按播放失败处理");
-      mediaError("缓冲超时");
-    },
+    position: () => player.state.position,
+    onTimeout: () => mediaError("播放卡死"),
   );
-
-  StreamSubscription<bool>? _watchdogBufferingSub;
-  StreamSubscription<bool>? _watchdogPlayingSub;
 
   /// 缓冲超时阈值（测试可调短）
   @visibleForTesting
   Duration bufferingWatchdogTimeout = const Duration(seconds: 15);
 
   void initPlaybackWatchdog() {
-    _watchdogBufferingSub = player.stream.buffering.listen(
-      _playbackWatchdog.onBufferingChanged,
-    );
-    _watchdogPlayingSub = player.stream.playing.listen(
-      _playbackWatchdog.onPlayingChanged,
-    );
+    _playbackWatchdog.start();
   }
 
   @override
@@ -1247,7 +1236,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     setPlayer();
   }
 
-  void initPlaylist() async {
+  Future<void> initPlaylist() async {
     currentLineInfo.value = "线路${currentLineIndex + 1}";
     errorMsg.value = "";
 
@@ -1263,7 +1252,8 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     await initializePlayer();
 
     await player.open(Playlist(mediaList, index: currentLineIndex));
-    Log.logPrint("播放器已打开，等待首帧");
+    // 看门狗一次性触发后会自行 cancel，每次 open 新流后重新 arm（幂等）。
+    _playbackWatchdog.start();
 
     // 后台状态下被重开（断线重试等）时，新流会自行播放，需重新应用后台策略
     if ((Platform.isAndroid || Platform.isIOS) && isBackground && !pipActive) {
@@ -1348,6 +1338,12 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   @override
   void mediaEnd() async {
     super.mediaEnd();
+    if (site.id == Constant.kDouyu) {
+      // 斗鱼地址 expire=300，CDN 每 5 分钟准点断流，旧地址立即作废，
+      // 重放 / 切到同时签发的备用线路必然失败，直接重新签发。
+      _recoverDouyuStream();
+      return;
+    }
     if (mediaErrorRetryCount < 2) {
       Log.d("播放结束，尝试第${mediaErrorRetryCount + 1}次刷新");
       if (mediaErrorRetryCount == 1) {
@@ -1372,10 +1368,76 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     }
   }
 
+  /// 斗鱼断流恢复是否正在进行
+  bool _recovering = false;
+
+  /// 上次恢复时间，10 秒内的重复 EOF/error 不重入
+  DateTime? _lastStreamRecoverAt;
+
+  /// 斗鱼 CDN 断流后重新签发播放地址。循环重试，失败后间隔退避，直到
+  /// 成功、确认下播或页面关闭。恢复期间看门狗停止，新流 open 后重启。
+  void _recoverDouyuStream() async {
+    if (_recovering) {
+      return;
+    }
+    final last = _lastStreamRecoverAt;
+    if (last != null &&
+        DateTime.now().difference(last) < const Duration(seconds: 10)) {
+      return;
+    }
+    _recovering = true;
+    _lastStreamRecoverAt = DateTime.now();
+    _playbackWatchdog.cancel();
+
+    addSysMsg("直播中断，正在重新连接");
+
+    const maxAttempts = 8;
+    for (var attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        if (attempt == 1) {
+          final live = await site.liveSite.getLiveStatus(roomId: roomId);
+          if (!live) {
+            liveStatus.value = false;
+            unawaited(_stopAudioServiceIfActive());
+            _recovering = false;
+            return;
+          }
+        }
+
+        final playUrl = await site.liveSite.getPlayUrls(
+            detail: detail.value!, quality: qualites[currentQuality]);
+        if (playUrl.urls.isEmpty) {
+          throw Exception("server returned empty urls");
+        }
+        playUrls.value = playUrl.urls;
+        playHeaders = playUrl.headers;
+        currentLineIndex = 0;
+        mediaErrorRetryCount = 0;
+        await initPlaylist();
+        _recovering = false;
+        return;
+      } catch (e) {
+        Log.logPrint(e);
+        if (attempt < maxAttempts) {
+          await Future.delayed(
+              Duration(seconds: attempt < 3 ? 3 : 15));
+        }
+      }
+    }
+
+    _recovering = false;
+    errorMsg.value = "播放失败，请手动刷新";
+    SmartDialog.showToast("重连失败，请手动刷新");
+  }
+
   int mediaErrorRetryCount = 0;
   @override
   void mediaError(String error) async {
     super.mediaEnd();
+    if (site.id == Constant.kDouyu) {
+      _recoverDouyuStream();
+      return;
+    }
     if (mediaErrorRetryCount < 2) {
       Log.d("播放失败，尝试第${mediaErrorRetryCount + 1}次刷新");
       if (mediaErrorRetryCount == 1) {
@@ -1992,8 +2054,6 @@ ${error is Error ? (error as Error).stackTrace : ""}''');
   void onClose() {
     WidgetsBinding.instance.removeObserver(this);
     _playbackWatchdog.cancel();
-    _watchdogBufferingSub?.cancel();
-    _watchdogPlayingSub?.cancel();
     scrollController.removeListener(scrollListener);
     autoExitTimer?.cancel();
 
@@ -2006,7 +2066,7 @@ ${error is Error ? (error as Error).stackTrace : ""}''');
     }
     BackgroundAudioService.instance.setStopRequestedHandler(null);
     danmakuController = null;
-    _liveDurationTimer?.cancel(); // 页面关闭时取消定时器
+    _liveDurationTimer?.cancel();
     super.onClose();
   }
 

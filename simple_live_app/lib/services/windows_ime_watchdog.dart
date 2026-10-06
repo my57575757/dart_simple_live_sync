@@ -8,24 +8,23 @@ import 'package:get/get.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:simple_live_app/app/log.dart';
 
-// 仅 Windows：在窗口失焦/回焦的生命周期里预防性重建 IME 输入上下文。
+// 仅 Windows：触发原生侧（窗口线程）重建 IME 输入上下文。
 //
-// Flutter Windows 引擎存在缺陷（flutter/flutter #190042，官方修复 PR #190043
-// 未合并）：窗口焦点切换后，绑定在 HWND 上的 IMM32↔TSF 会话可能僵死，
-// Windows 不再发送 WM_IME_COMPOSITION，表现为英文数字正常、中文无反应，
-// 且僵死后再 ImmCreateContext / IACE_DEFAULT 都救不回来。
+// Flutter Windows 引擎存在缺陷（flutter/flutter #190042）：窗口焦点切换后，
+// 绑定在引擎子窗口上的 IMM32↔TSF 会话会陈旧僵死，Windows 不再发送
+// WM_IME_COMPOSITION，表现为英文数字正常、中文无反应。
 //
-// 因此这里采用 PR 验证过的预防策略：窗口失焦时摘除 IMC，回焦后恢复默认 IMC，
-// 强制系统在新一次激活时建立全新的 IMM32↔TSF 会话。
+// IMM 上下文只能在窗口所属线程操作：外部进程 / Dart 线程调用
+// ImmAssociateContextEx 均失败，且 IACE_DEFAULT 恢复线程默认上下文是
+// no-op。真正的修复在 windows/runner 原生侧：ImmCreateContext 建立全新
+// 上下文并关联。本服务只负责在检测到回焦 / App 内导航时，向顶层窗口
+// PostMessage（WM_APP+0x42），由窗口线程执行重建。
 //
-// 只用 dart:ffi 且在 start() 内打开系统库：本文件在非 Windows 平台也会被引用，
-// 顶层 DynamicLibrary.open 会让 Android/iOS 启动即崩。
+// 只用 dart:ffi 且在 start() 内打开系统库：本文件在非 Windows 平台也会被
+// 引用，顶层 DynamicLibrary.open 会让 Android/iOS 启动即崩。
 
-const _gwChild = 5;
-const _gwHwndNext = 2;
 const _gaRootOwner = 3;
-const _gcsCompstr = 0x0008;
-const _iaceDefault = 0x0010;
+const _rebuildImeMessage = 0x8042; // WM_APP + 0x42
 const _maxLogBytes = 256 * 1024;
 
 enum FocusEvent { activated, deactivated }
@@ -66,26 +65,13 @@ typedef _GetCurrentProcessIdDart = int Function();
 typedef _GetAncestorNative = IntPtr Function(IntPtr hwnd, Uint32 flags);
 typedef _GetAncestorDart = int Function(int hwnd, int flags);
 
-typedef _GetWindowNative = IntPtr Function(IntPtr hwnd, Uint32 cmd);
-typedef _GetWindowDart = int Function(int hwnd, int cmd);
-
 typedef _GetKeyboardLayoutNative = IntPtr Function(Uint32 thread);
 typedef _GetKeyboardLayoutDart = int Function(int thread);
 
-typedef _GetContextNative = IntPtr Function(IntPtr hwnd);
-typedef _GetContextDart = int Function(int hwnd);
-
-typedef _ReleaseContextNative = Int32 Function(IntPtr hwnd, IntPtr himc);
-typedef _ReleaseContextDart = int Function(int hwnd, int himc);
-
-typedef _GetCompositionStringNative = Int32 Function(
-    IntPtr himc, Uint32 index, Pointer<NativeType> buf, Uint32 len);
-typedef _GetCompositionStringDart = int Function(
-    int himc, int index, Pointer<NativeType> buf, int len);
-
-typedef _AssociateContextExNative = Int32 Function(
-    IntPtr hwnd, IntPtr himc, Uint32 flags);
-typedef _AssociateContextExDart = int Function(int hwnd, int himc, int flags);
+typedef _PostMessageNative = Int32 Function(
+    IntPtr hwnd, Uint32 msg, IntPtr wparam, IntPtr lparam);
+typedef _PostMessageDart = int Function(
+    int hwnd, int msg, int wparam, int lparam);
 
 class WindowsImeWatchdog extends GetxService {
   Timer? _timer;
@@ -100,20 +86,14 @@ class WindowsImeWatchdog extends GetxService {
   late final int Function() _getForeground;
   late final int Function(int, Pointer<Uint32>) _getWindowThreadProcessId;
   late final int Function(int, int) _getAncestor;
-  late final int Function(int, int) _getWindow;
   late final int Function(int) _getKeyboardLayout;
-  late final int Function(int) _immGetContext;
-  late final int Function(int, int) _immReleaseContext;
-  late final int Function(int, int, Pointer<NativeType>, int)
-      _immGetCompositionString;
-  late final int Function(int, int, int) _immAssociateContextEx;
+  late final int Function(int, int, int, int) _postMessage;
 
   Future<void> start() async {
     if (!Platform.isWindows || _timer != null) return;
 
     final user32 = DynamicLibrary.open('user32.dll');
     final kernel32 = DynamicLibrary.open('kernel32.dll');
-    final imm32 = DynamicLibrary.open('imm32.dll');
 
     _getForeground = user32
         .lookupFunction<_GetForegroundNative, _GetForegroundDart>(
@@ -123,19 +103,11 @@ class WindowsImeWatchdog extends GetxService {
         _GetWindowThreadProcessIdDart>('GetWindowThreadProcessId');
     _getAncestor = user32.lookupFunction<_GetAncestorNative, _GetAncestorDart>(
         'GetAncestor');
-    _getWindow = user32.lookupFunction<_GetWindowNative, _GetWindowDart>(
-        'GetWindow');
     _getKeyboardLayout =
         user32.lookupFunction<_GetKeyboardLayoutNative,
             _GetKeyboardLayoutDart>('GetKeyboardLayout');
-    _immGetContext = imm32.lookupFunction<_GetContextNative, _GetContextDart>(
-        'ImmGetContext');
-    _immReleaseContext = imm32.lookupFunction<_ReleaseContextNative,
-        _ReleaseContextDart>('ImmReleaseContext');
-    _immGetCompositionString = imm32.lookupFunction<_GetCompositionStringNative,
-        _GetCompositionStringDart>('ImmGetCompositionStringW');
-    _immAssociateContextEx = imm32.lookupFunction<_AssociateContextExNative,
-        _AssociateContextExDart>('ImmAssociateContextEx');
+    _postMessage = user32.lookupFunction<_PostMessageNative,
+        _PostMessageDart>('PostMessageW');
     _currentPid = kernel32
         .lookupFunction<_GetCurrentProcessIdNative, _GetCurrentProcessIdDart>(
             'GetCurrentProcessId')();
@@ -177,81 +149,39 @@ class WindowsImeWatchdog extends GetxService {
     final event = _machine.poll(ours);
     if (event != null) _handleTransition(event);
 
-    // 键盘布局属于前台窗口线程（非本 Dart 线程），仅本窗口前台时采样
+    // 键盘布局属于前台窗口线程，仅本窗口前台时采样，用于诊断
     if (ours) {
       final threadId = _getWindowThreadProcessId(foreground, nullptr);
       if (_layoutMachine.poll(_getKeyboardLayout(threadId))) {
-        _writeLog('keyboard-layout: ${cycleSessionEntries().join(", ")}');
+        _writeLog('keyboard-layout changed');
       }
     }
   }
 
-  /// 供 App 在应用内切换直播间等导航时调用，预防性重建 IME 会话
+  /// 供 App 在应用内切换直播间等导航时调用，通知原生侧重建 IME 会话
   void cycleSession() {
-    if (_timer == null) return;
-    _writeLog('app-navigation: ${cycleSessionEntries().join(", ")}');
-  }
-
-  /// 遍历全部窗口：先摘除空闲 IMC，再恢复默认 IMC
-  List<String> cycleSessionEntries() {
-    final detached = _walkWindows(_detachIfIdle);
-    final attached = _walkWindows((hwnd) => _associateDefault(hwnd) != 0);
-    return [...detached, ...attached];
+    _writeLog('app-navigation: ${_postRebuild() ? "posted" : "failed"}');
   }
 
   void _handleTransition(FocusEvent event) {
-    final root = _rootHwnd;
-    if (root == null) {
-      _writeLog('${event.name}: root window not cached, skip');
-      return;
-    }
-
-    final results = event == FocusEvent.deactivated
-        ? _walkWindows(_detachIfIdle)
-        : _walkWindows((hwnd) => _associateDefault(hwnd) != 0);
-    _writeLog('${event.name}: ${results.join(", ")}');
-  }
-
-  List<String> _walkWindows(bool Function(int hwnd) action) {
-    final root = _rootHwnd;
-    if (root == null) return [];
-    final results = <String>[];
-
-    void walk(int hwnd) {
-      if (hwnd == 0) return;
-      final ok = action(hwnd);
-      final himc = _immGetContext(hwnd);
-      if (himc != 0) _immReleaseContext(hwnd, himc);
-      results.add(
-          '0x${hwnd.toRadixString(16)}:${ok ? "ok" : "skip"}:himc=$himc');
-
-      var child = _getWindow(hwnd, _gwChild);
-      while (child != 0) {
-        walk(child);
-        child = _getWindow(child, _gwHwndNext);
+    // deactivate 由原生 WM_ACTIVATE 处理；回焦时补发一次重建作为保险。
+    if (event == FocusEvent.activated) {
+      final root = _rootHwnd;
+      if (root == null) {
+        _writeLog('activated: root window not cached, skip');
+        return;
       }
-    }
-
-    walk(root);
-    return results;
-  }
-
-  // 摘除 IMC；组词进行中（GCS_COMPSTR 非空）或窗口本无 IMC 时跳过。
-  bool _detachIfIdle(int hwnd) {
-    final himc = _immGetContext(hwnd);
-    if (himc == 0) return false;
-    try {
-      final composing =
-          _immGetCompositionString(himc, _gcsCompstr, nullptr, 0);
-      if (composing > 0) return false;
-      return _immAssociateContextEx(hwnd, 0, 0) != 0;
-    } finally {
-      _immReleaseContext(hwnd, himc);
+      _writeLog('activated: ${_postRebuild() ? "posted" : "failed"}');
+    } else {
+      _writeLog('deactivated');
     }
   }
 
-  int _associateDefault(int hwnd) =>
-      _immAssociateContextEx(hwnd, 0, _iaceDefault);
+  bool _postRebuild() {
+    final root = _rootHwnd;
+    if (root == null) return false;
+    return _postMessage(root, _rebuildImeMessage, 0, 0) != 0;
+  }
 
   void _writeLog(String message) {
     unawaited(_doWriteLog(message));

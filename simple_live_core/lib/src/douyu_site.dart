@@ -157,7 +157,9 @@ class DouyuSite implements LiveSite {
     int rate,
     String cdn,
   ) async {
-    args += "&cdn=$cdn&rate=$rate";
+    // ive=1：让服务端签发 expire=0（不设会话时长）的播放地址；不带此参数
+    // 时返回 expire=300，CDN 每 5 分钟准点断开长连接。
+    args += "&cdn=$cdn&rate=$rate&ive=1";
     var result = await HttpClient.instance.postJson(
       "https://www.douyu.com/lapi/live/getH5Play/$roomId",
       data: args,

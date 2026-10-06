@@ -2,69 +2,67 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:simple_live_app/modules/live_room/player/playback_watchdog.dart';
 
 void main() {
-  test('缓冲持续不播放：超时触发一次onTimeout', () async {
+  test('位置持续不推进：超时触发一次onTimeout', () async {
     var fires = 0;
-    var playing = false;
-    var active = true;
     final w = PlaybackWatchdog(
       timeout: const Duration(milliseconds: 50),
-      isPlaying: () => playing,
-      isActive: () => active,
+      pollInterval: const Duration(milliseconds: 20),
+      isActive: () => true,
+      position: () => const Duration(seconds: 10),
       onTimeout: () => fires++,
     );
 
-    w.onBufferingChanged(true);
+    w.start();
     await Future<void>.delayed(const Duration(milliseconds: 120));
     expect(fires, 1);
   });
 
-  test('超时前开始播放：不触发', () async {
+  test('位置持续推进：不触发', () async {
     var fires = 0;
-    var playing = false;
+    var seconds = 0;
     final w = PlaybackWatchdog(
       timeout: const Duration(milliseconds: 80),
-      isPlaying: () => playing,
+      pollInterval: const Duration(milliseconds: 20),
       isActive: () => true,
+      position: () => Duration(seconds: seconds++),
       onTimeout: () => fires++,
     );
 
-    w.onBufferingChanged(true);
-    await Future<void>.delayed(const Duration(milliseconds: 30));
-    playing = true;
-    w.onPlayingChanged(true);
-    await Future<void>.delayed(const Duration(milliseconds: 100));
+    w.start();
+    await Future<void>.delayed(const Duration(milliseconds: 150));
     expect(fires, 0);
   });
 
-  test('超时触发时已在后台/下播：不触发', () async {
+  test('非活动状态（暂停/后台/下播）：不触发，恢复后重新基线', () async {
     var fires = 0;
     var active = true;
     final w = PlaybackWatchdog(
       timeout: const Duration(milliseconds: 50),
-      isPlaying: () => false,
+      pollInterval: const Duration(milliseconds: 20),
       isActive: () => active,
+      position: () => const Duration(seconds: 10),
       onTimeout: () => fires++,
     );
 
-    w.onBufferingChanged(true);
-    await Future<void>.delayed(const Duration(milliseconds: 20));
+    w.start();
+    await Future<void>.delayed(const Duration(milliseconds: 30));
     active = false;
     await Future<void>.delayed(const Duration(milliseconds: 80));
     expect(fires, 0);
   });
 
-  test('缓冲结束(false)：取消，不触发', () async {
+  test('尚未起播（位置为0）：不触发', () async {
     var fires = 0;
     final w = PlaybackWatchdog(
-      timeout: const Duration(milliseconds: 50),
-      isPlaying: () => false,
+      timeout: const Duration(milliseconds: 40),
+      pollInterval: const Duration(milliseconds: 20),
       isActive: () => true,
+      position: () => Duration.zero,
       onTimeout: () => fires++,
     );
 
-    w.onBufferingChanged(true);
-    w.onBufferingChanged(false);
-    await Future<void>.delayed(const Duration(milliseconds: 90));
+    w.start();
+    await Future<void>.delayed(const Duration(milliseconds: 120));
     expect(fires, 0);
   });
 }

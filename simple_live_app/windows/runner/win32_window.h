@@ -71,6 +71,9 @@ class Win32Window {
   // Called when Destroy is called.
   virtual void OnDestroy();
 
+  // Window handle of the hosted Flutter content.
+  HWND child_content() const { return child_content_; }
+
  private:
   friend class WindowClassRegistrar;
 

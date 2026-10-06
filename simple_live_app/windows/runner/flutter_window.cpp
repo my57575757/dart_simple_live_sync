@@ -3,6 +3,16 @@
 #include <optional>
 
 #include "flutter/generated_plugin_registrant.h"
+#include "ime_rebuilder.h"
+
+namespace {
+
+// Posted to run IME context work on the window thread after focus processing.
+// Dart posts kRebuildImeMessage directly for in-app navigation.
+constexpr UINT kRebuildImeMessage = WM_APP + 0x42;
+constexpr UINT kDetachImeMessage = WM_APP + 0x43;
+
+}  // namespace
 
 FlutterWindow::FlutterWindow(const flutter::DartProject& project)
     : project_(project) {}
@@ -40,6 +50,13 @@ bool FlutterWindow::OnCreate() {
 }
 
 void FlutterWindow::OnDestroy() {
+  // Restore the default IMC and destroy self-created contexts before the
+  // engine child window goes away, or the active IME TIP may crash on
+  // shutdown (observed in SogouPY.ime).
+  if (HWND child = child_content()) {
+    ShutdownImeContexts(child);
+  }
+
   if (flutter_controller_) {
     flutter_controller_ = nullptr;
   }
@@ -62,6 +79,24 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
   }
 
   switch (message) {
+    case kRebuildImeMessage:
+      if (HWND child = child_content()) {
+        RebuildImeContext(child);
+      }
+      return 0;
+    case kDetachImeMessage:
+      if (HWND child = child_content()) {
+        DetachImeContext(child);
+      }
+      return 0;
+    case WM_ACTIVATE:
+      // Runs after focus/DefWindowProc processing: detach on deactivation,
+      // build a fresh context on activation.
+      PostMessage(hwnd,
+                  LOWORD(wparam) == WA_INACTIVE ? kDetachImeMessage
+                                                : kRebuildImeMessage,
+                  0, 0);
+      break;
     case WM_FONTCHANGE:
       flutter_controller_->engine()->ReloadSystemFonts();
       break;
