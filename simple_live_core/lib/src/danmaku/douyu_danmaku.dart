@@ -52,9 +52,14 @@ class DouyuDanmaku extends LiveDanmaku {
   /// 实例是否已停止；停止后 _initSendChannel 不得再建立连接
   bool _stopped = false;
 
+  /// 服务端在发送连接上明确拒绝登录态（type@=error/code@=42），用于
+  /// 本地无法解码 jwt exp 时的兜底判定。
+  bool _serverSessionRejected = false;
+
   @override
   Future start(dynamic args) async {
     _stopped = false;
+    _serverSessionRejected = false;
     danmakuArgs = args is DouyuDanmakuArgs
         ? args
         : DouyuDanmakuArgs(roomId: int.tryParse(args.toString()) ?? 0);
@@ -195,6 +200,7 @@ class DouyuDanmaku extends LiveDanmaku {
     var fields = _parseStt(stt);
     var type = fields["type"];
     if (type == "loginres") {
+      _serverSessionRejected = false;
       if (_loginCompleter != null && !_loginCompleter!.isCompleted) {
         _loginCompleter!.complete();
       }
@@ -235,13 +241,14 @@ class DouyuDanmaku extends LiveDanmaku {
         _pendingAck!.complete();
       }
     } else if (type == "error") {
-      // code 42：jwt 无效/过期。立即结束登录等待并标记，由 sendMessage 转成
-      // “登录态已过期”，不必干等 8 秒超时。
-      if (fields["code"] == "42" &&
-          _loginCompleter != null &&
-          !_loginCompleter!.isCompleted) {
-        _loginCompleter!.future.catchError((_) {});
-        _loginCompleter!.completeError("session_expired");
+      // code 42：jwt 无效/过期。标记服务端拒绝并立即结束登录等待，
+      // 由 sendMessage 转成“登录态已过期”，不必干等 8 秒超时。
+      if (fields["code"] == "42") {
+        _serverSessionRejected = true;
+        if (_loginCompleter != null && !_loginCompleter!.isCompleted) {
+          _loginCompleter!.future.catchError((_) {});
+          _loginCompleter!.completeError("session_expired");
+        }
       }
     }
   }
@@ -272,24 +279,23 @@ class DouyuDanmaku extends LiveDanmaku {
         errorMessage: "未登录斗鱼",
       );
     }
+    // 登录态校验必须在连接检查之前：过期 jwt 会令服务端在进房时立即断开
+    // 发送连接（此时 _sendChannel 已是 null），若放在 null 检查之后会先误报网络异常。
+    var nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    var exp = jwtExpirySec(cookieValue(cookie, "acf_dmjwt_token"));
+    if ((exp != null && exp <= nowSec) || _serverSessionRejected) {
+      return DanmakuSendResult(
+        success: false,
+        errorCode: "session_expired",
+        errorMessage: "斗鱼登录态已过期，请重新登录",
+      );
+    }
     if (_sendChannel == null) {
       // 含连接建立中与已断开两种状态；不做自动重连，重进房间恢复
       return DanmakuSendResult(
         success: false,
         errorCode: "network_error",
         errorMessage: "连接已断开，请稍后重试",
-      );
-    }
-    // acf_dmjwt_token 自登录起 7 天过期，过期后发布连接能登录但发言被静默丢弃。
-    // 本地先按 exp 判定，直接提示重新登录，避免干等到超时仍报误导性的“网络异常”。
-    var jwt = cookieValue(cookie, "acf_dmjwt_token");
-    var exp = jwtExpirySec(jwt);
-    if (exp != null &&
-        exp <= DateTime.now().millisecondsSinceEpoch ~/ 1000) {
-      return DanmakuSendResult(
-        success: false,
-        errorCode: "session_expired",
-        errorMessage: "斗鱼登录态已过期，请重新登录",
       );
     }
     if (DateTime.now().difference(_lastSendTime).inSeconds < 2) {
@@ -326,7 +332,6 @@ class DouyuDanmaku extends LiveDanmaku {
     if (did.isEmpty) {
       did = _randomDid();
     }
-    var nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
     var cst = DateTime.now().millisecondsSinceEpoch +
         8000 +
         Random().nextInt(2000);

@@ -603,9 +603,14 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
         result = await liveDanmaku.sendMessage(content);
       }
       if (!result.success) {
-        SmartDialog.showToast(
-          danmakuErrorText(site.id, result),
-        );
+        if (site.id == Constant.kDouyu &&
+            result.errorCode == "session_expired") {
+          await reloginDouyu();
+        } else {
+          SmartDialog.showToast(
+            danmakuErrorText(site.id, result),
+          );
+        }
       }
     } catch (e) {
       // core 侧异常（如对已关闭 sink.add 抛 StateError）兜底，避免无反馈
@@ -619,6 +624,33 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     } finally {
       sendingDanmaku.value = false;
     }
+  }
+
+  /// 斗鱼弹幕登录态（7 天）过期：弹窗引导重新登录，成功后用新 cookie 重启弹幕
+  Future<void> reloginDouyu() async {
+    final go = await Utils.showAlertDialog(
+      "斗鱼登录态已过期，是否重新登录？",
+      title: "登录已过期",
+    );
+    if (!go) return;
+    await DouyuAccountService.instance.startWebLogin();
+    if (!DouyuAccountService.instance.logined.value) return;
+    await _restartDouyuDanmaku();
+  }
+
+  Future<void> _restartDouyuDanmaku() async {
+    final oldArgs = detail.value?.danmakuData;
+    final roomIdInt = oldArgs is DouyuDanmakuArgs
+        ? oldArgs.roomId
+        : int.tryParse(roomId.toString()) ?? 0;
+    final newArgs = DouyuDanmakuArgs(
+      roomId: roomIdInt,
+      cookie: DouyuAccountService.instance.cookie,
+    );
+    await liveDanmaku.stop();
+    liveDanmaku = site.liveSite.getDanmaku();
+    initDanmau();
+    await liveDanmaku.start(newArgs);
   }
 
   /// 点赞/送灯牌是否可用：仅抖音、B站，且已配置签名服务并登录

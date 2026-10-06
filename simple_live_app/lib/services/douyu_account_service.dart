@@ -35,8 +35,8 @@ class DouyuAccountService extends GetxService {
     site.cookie = cookie;
   }
 
-  void startWebLogin() {
-    Get.toNamed(
+  Future<void> startWebLogin() async {
+    await Get.toNamed(
       RoutePath.kWebLogin,
       arguments: WebLoginArgs(
         title: "斗鱼账号登录",
