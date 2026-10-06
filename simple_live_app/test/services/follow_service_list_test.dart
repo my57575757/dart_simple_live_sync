@@ -25,7 +25,7 @@ void main() {
   });
 
   group('关注列表更新通知', () {
-    test('一轮结束且无状态变化：不通知 UI，列表不重排', () {
+    test('一轮结束即使无状态变化：也重排一次，直播中置顶', () async {
       final a = makeUser('a', status: 1);
       final b = makeUser('b', status: 2);
       follow.followList.assignAll([a, b]);
@@ -36,8 +36,10 @@ void main() {
 
       follow.settleItemForTesting(a, changed: false);
       follow.settleItemForTesting(b, changed: false);
+      await Future.delayed(Duration.zero);
 
-      expect(events, 0);
+      expect(events, 1);
+      expect(follow.followList.map((e) => e.id), ['b', 'a']);
       expect(follow.updating.value, false);
     });
 

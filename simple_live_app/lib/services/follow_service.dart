@@ -67,9 +67,6 @@ class FollowService extends GetxService with WidgetsBindingObserver {
   @visibleForTesting
   Duration loadingMaxDuration = const Duration(seconds: 6);
 
-  /// 本轮是否有状态实际变化（开播/下播）
-  bool hasStatusChanged = false;
-
   /// 防抖窗口：窗口内多次变化只重建一次列表
   static const int listNotifyDebounceMs = 800;
 
@@ -314,7 +311,6 @@ class FollowService extends GetxService with WidgetsBindingObserver {
     _runGeneration++;
     var generation = _runGeneration;
     _settledIds.clear();
-    hasStatusChanged = false;
     listNotifyTimer?.cancel();
     updatedCount = 0;
     updating.value = true;
@@ -697,9 +693,6 @@ class FollowService extends GetxService with WidgetsBindingObserver {
   void _settleItem(FollowUser item, {required bool changed}) {
     _settledIds.add(item.id);
     updatedCount = _settledIds.length;
-    if (changed) {
-      hasStatusChanged = true;
-    }
     if (_settledIds.length >= followList.length) {
       _finishRound();
     } else if (changed) {
@@ -723,12 +716,11 @@ class FollowService extends GetxService with WidgetsBindingObserver {
   void _finishRound() {
     _loadingGuardTimer?.cancel();
     _loadingGuardTimer = null;
-    if (hasStatusChanged) {
-      // 本轮结束立即刷新，不再等防抖窗口
-      listNotifyTimer?.cancel();
-      listNotifyTimer = null;
-      filterData();
-    }
+    // 无条件重排：手动刷新时列表按 Hive 顺序重建，即使状态均未变化也需恢复
+    // 「直播中在前」；本轮立即执行，不再等防抖窗口
+    listNotifyTimer?.cancel();
+    listNotifyTimer = null;
+    filterData();
     updating.value = false;
   }
 
