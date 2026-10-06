@@ -1045,11 +1045,27 @@ class SendDanmakuBar extends StatefulWidget {
 class _SendDanmakuBarState extends State<SendDanmakuBar> {
   // 只创建一次：避免父级重建时换新 controller 导致输入框重配、打断 IME（搜狗偶发不生效）
   final inputController = TextEditingController();
+  final inputFocusNode = FocusNode();
+  bool inputFocused = false;
   LiveRoomController get roomController => widget.roomController;
 
   @override
+  void initState() {
+    super.initState();
+    inputFocusNode.addListener(onFocusChanged);
+  }
+
+  void onFocusChanged() {
+    if (inputFocusNode.hasFocus != inputFocused) {
+      setState(() => inputFocused = inputFocusNode.hasFocus);
+    }
+  }
+
+  @override
   void dispose() {
+    inputFocusNode.removeListener(onFocusChanged);
     inputController.dispose();
+    inputFocusNode.dispose();
     super.dispose();
   }
 
@@ -1064,44 +1080,54 @@ class _SendDanmakuBarState extends State<SendDanmakuBar> {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: AppStyle.edgeInsetsH12.copyWith(top: 6, bottom: 6),
-      color: Theme.of(context).cardColor,
-      child: Row(
-        children: [
-          Expanded(
-            child: TextField(
-              controller: inputController,
-              maxLength: 200,
-              textInputAction: TextInputAction.send,
-              decoration: InputDecoration(
-                hintText: "说点什么…",
-                counterText: "",
-                isDense: true,
-                contentPadding: AppStyle.edgeInsetsA12,
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(20),
+    // 输入框聚焦、键盘弹起时，安卓返回键先失焦收起键盘，而不是直接退出直播间。
+    return PopScope(
+      canPop: !inputFocused,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop && inputFocusNode.hasFocus) {
+          inputFocusNode.unfocus();
+        }
+      },
+      child: Container(
+        padding: AppStyle.edgeInsetsH12.copyWith(top: 6, bottom: 6),
+        color: Theme.of(context).cardColor,
+        child: Row(
+          children: [
+            Expanded(
+              child: TextField(
+                focusNode: inputFocusNode,
+                controller: inputController,
+                maxLength: 200,
+                textInputAction: TextInputAction.send,
+                decoration: InputDecoration(
+                  hintText: "说点什么…",
+                  counterText: "",
+                  isDense: true,
+                  contentPadding: AppStyle.edgeInsetsA12,
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(20),
+                  ),
                 ),
+                onSubmitted: submit,
               ),
-              onSubmitted: submit,
             ),
-          ),
-          AppStyle.hGap8,
-          Obx(
-            () => IconButton(
-              onPressed: roomController.sendingDanmaku.value
-                  ? null
-                  : () => submit(inputController.text),
-              icon: roomController.sendingDanmaku.value
-                  ? const SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.send),
+            AppStyle.hGap8,
+            Obx(
+              () => IconButton(
+                onPressed: roomController.sendingDanmaku.value
+                    ? null
+                    : () => submit(inputController.text),
+                icon: roomController.sendingDanmaku.value
+                    ? const SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.send),
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }

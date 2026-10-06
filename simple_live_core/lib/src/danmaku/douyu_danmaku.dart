@@ -234,6 +234,15 @@ class DouyuDanmaku extends LiveDanmaku {
       if (_pendingAck != null && !_pendingAck!.isCompleted) {
         _pendingAck!.complete();
       }
+    } else if (type == "error") {
+      // code 42：jwt 无效/过期。立即结束登录等待并标记，由 sendMessage 转成
+      // “登录态已过期”，不必干等 8 秒超时。
+      if (fields["code"] == "42" &&
+          _loginCompleter != null &&
+          !_loginCompleter!.isCompleted) {
+        _loginCompleter!.future.catchError((_) {});
+        _loginCompleter!.completeError("session_expired");
+      }
     }
   }
 
@@ -271,6 +280,18 @@ class DouyuDanmaku extends LiveDanmaku {
         errorMessage: "连接已断开，请稍后重试",
       );
     }
+    // acf_dmjwt_token 自登录起 7 天过期，过期后发布连接能登录但发言被静默丢弃。
+    // 本地先按 exp 判定，直接提示重新登录，避免干等到超时仍报误导性的“网络异常”。
+    var jwt = cookieValue(cookie, "acf_dmjwt_token");
+    var exp = jwtExpirySec(jwt);
+    if (exp != null &&
+        exp <= DateTime.now().millisecondsSinceEpoch ~/ 1000) {
+      return DanmakuSendResult(
+        success: false,
+        errorCode: "session_expired",
+        errorMessage: "斗鱼登录态已过期，请重新登录",
+      );
+    }
     if (DateTime.now().difference(_lastSendTime).inSeconds < 2) {
       return DanmakuSendResult(
         success: false,
@@ -287,6 +308,13 @@ class DouyuDanmaku extends LiveDanmaku {
         errorMessage: "连接登录超时",
       );
     } catch (e) {
+      if (e == "session_expired") {
+        return DanmakuSendResult(
+          success: false,
+          errorCode: "session_expired",
+          errorMessage: "斗鱼登录态已过期，请重新登录",
+        );
+      }
       return DanmakuSendResult(
         success: false,
         errorCode: "login_failed",
@@ -357,6 +385,25 @@ class DouyuDanmaku extends LiveDanmaku {
     return md5
         .convert("$currentTimeSecs$vkSecret$did".codeUnits)
         .toString();
+  }
+
+  /// 解析 acf_dmjwt_token（标准 JWT）payload 中的 exp（秒）；非 JWT 返回 null。
+  static int? jwtExpirySec(String jwt) {
+    try {
+      var parts = jwt.split('.');
+      if (parts.length < 2) {
+        return null;
+      }
+      var p = parts[1].replaceAll('-', '+').replaceAll('_', '/');
+      if (p.length % 4 != 0) {
+        p = p.padRight(p.length + (4 - p.length % 4), '=');
+      }
+      var payload = json.decode(utf8.decode(base64.decode(p))) as Map;
+      var exp = payload['exp'];
+      return exp is int ? exp : int.tryParse("$exp");
+    } catch (_) {
+      return null;
+    }
   }
 
   static String escapeStt(String v) =>

@@ -919,6 +919,9 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     if (code == "rate_limit") {
       return "发言太快，请稍后再试";
     }
+    if (code == "session_expired") {
+      return "登录态已过期，请在账号管理中重新登录";
+    }
     if (code == "network_error" || code == "timeout") {
       return "网络异常，请稍后再试";
     }
