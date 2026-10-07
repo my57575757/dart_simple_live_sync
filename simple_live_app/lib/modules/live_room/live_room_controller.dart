@@ -830,7 +830,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     return AlertDialog(
       title: Text(isStarRoom ? "每日任务 · 点点星光" : "每日任务"),
       content: SizedBox(
-        width: double.maxFinite,
+        width: 340,
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,

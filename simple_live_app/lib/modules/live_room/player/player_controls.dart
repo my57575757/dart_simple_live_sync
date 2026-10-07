@@ -459,7 +459,12 @@ Widget buildGuardActions(LiveRoomController controller) {
             ),
           ),
           IconButton(
-            tooltip: controller.guardJoined.value ? "每日任务" : "加入粉丝团",
+            tooltip: !controller.guardJoined.value
+                ? "加入粉丝团"
+                : (controller.site.id != "douyin" ||
+                        controller.guardBadgeActive.value
+                    ? "每日任务"
+                    : "点亮粉丝团"),
             onPressed: busy ? null : () => controller.joinFansClub(),
             icon: const Icon(
               Remix.team_line,
