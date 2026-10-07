@@ -750,39 +750,197 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     }
 
     final isStarRoom = site.id == "douyin" && guardStarRoom.value;
-    final priceText = site.id == "douyin"
-        ? (isStarRoom ? "星守护房间将送出点点星光（8 抖币）" : "送出粉丝团灯牌（1 抖币）")
-        : "免费";
     final confirmed = await Get.dialog<bool>(
-      AlertDialog(
-        title: Text(isStarRoom ? "送出点点星光" : "送出粉丝团灯牌"),
-        content: Text("$priceText，确认送给主播吗？"),
-        actions: [
-          TextButton(
-            onPressed: () => Get.back(result: false),
-            child: const Text("取消"),
-          ),
-          TextButton(
-            onPressed: () => Get.back(result: true),
-            child: const Text("送出"),
-          ),
-        ],
-      ),
+      _buildSendBadgeConfirmDialog(isStarRoom),
     );
     if (confirmed == true) {
       await _sendGuardAction("fans_badge");
     }
   }
 
+  /// 查询粉丝团每日任务；任何失败返回 null，由调用方降级为普通确认弹窗
+  Future<Map<String, dynamic>?> _queryDailyTasks() async {
+    final guard = GuardServerService.instance;
+    var accountId = await guard.ensureAccount(site.id);
+    if (accountId == null) return null;
+
+    Future<Map<String, dynamic>> runOnce(String id,
+        {bool retried = false}) async {
+      try {
+        return await guard.getDailyTasks(
+          accountId: id,
+          roomId: _guardRoomId,
+          webRid: _guardWebRid,
+        );
+      } on DioException catch (e) {
+        if (e.response?.statusCode == 404 && !retried) {
+          final newId = await guard.reregister(site.id);
+          if (newId != null) return runOnce(newId, retried: true);
+        }
+        rethrow;
+      }
+    }
+
+    SmartDialog.showLoading(msg: "查询每日任务...");
+    try {
+      return await runOnce(accountId);
+    } catch (e) {
+      Log.logPrint("每日任务查询失败: $e");
+      return null;
+    } finally {
+      SmartDialog.dismiss(status: SmartStatus.loading);
+    }
+  }
+
+  Widget _buildSendBadgeConfirmDialog(bool isStarRoom) {
+    final priceText = site.id == "douyin"
+        ? (isStarRoom ? "星守护房间将送出点点星光（8 抖币）" : "送出粉丝团灯牌（1 抖币）")
+        : "免费";
+    return AlertDialog(
+      title: Text(isStarRoom ? "送出点点星光" : "送出粉丝团灯牌"),
+      content: Text("$priceText，确认送给主播吗？"),
+      actions: [
+        TextButton(
+          onPressed: () => Get.back(result: false),
+          child: const Text("取消"),
+        ),
+        TextButton(
+          onPressed: () => Get.back(result: true),
+          child: const Text("送出"),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildDailyTasksDialog(
+      Map<String, dynamic> tasks, String primaryAction) {
+    final isStarRoom = primaryAction == "fans_badge" &&
+        site.id == "douyin" &&
+        guardStarRoom.value;
+    final theme = Theme.of(Get.context!);
+    final level = _taskInt(tasks["level"]);
+    final intimacy = _taskInt(tasks["intimacy"]);
+    final nextIntimacy = _taskInt(tasks["nextIntimacy"]);
+    final medalName = tasks["medalName"]?.toString() ?? "";
+    final items = (tasks["tasks"] as List?)
+            ?.whereType<Map>()
+            .toList(growable: false) ??
+        const <Map>[];
+
+    return AlertDialog(
+      title: Text(isStarRoom ? "每日任务 · 点点星光" : "每日任务"),
+      content: SizedBox(
+        width: double.maxFinite,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Icon(Icons.workspace_premium, size: 20),
+                const SizedBox(width: 6),
+                Text(
+                  "Lv.$level${medalName.isNotEmpty ? " · $medalName" : ""}",
+                  style: theme.textTheme.titleSmall,
+                ),
+                const Spacer(),
+                if (nextIntimacy > 0)
+                  Text(
+                    "$intimacy/$nextIntimacy",
+                    style: theme.textTheme.bodySmall,
+                  ),
+              ],
+            ),
+            if (nextIntimacy > 0) ...[
+              const SizedBox(height: 6),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(4),
+                child: LinearProgressIndicator(
+                  minHeight: 6,
+                  value: (intimacy / nextIntimacy).clamp(0.0, 1.0),
+                ),
+              ),
+            ],
+            const SizedBox(height: 8),
+            Flexible(
+              child: ListView.builder(
+                shrinkWrap: true,
+                itemCount: items.length,
+                itemBuilder: (_, i) => _buildTaskRow(
+                  items[i].cast<String, dynamic>(),
+                  theme,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Get.back(result: false),
+          child: const Text("取消"),
+        ),
+        TextButton(
+          onPressed: () => Get.back(result: true),
+          child: Text(isStarRoom ? "送出星光" : "送出灯牌"),
+        ),
+      ],
+    );
+  }
+
+  int _taskInt(dynamic value) =>
+      value is num ? value.toInt() : int.tryParse(value?.toString() ?? "") ?? 0;
+
+  Widget _buildTaskRow(Map<String, dynamic> task, ThemeData theme) {
+    final done = task["done"] == true;
+    final title = task["title"]?.toString() ?? "";
+    final progress = task["progress"]?.toString() ?? "";
+    final reward = task["reward"]?.toString() ?? "";
+    final trailing = [progress, reward].where((s) => s.isNotEmpty).join("  ");
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 5),
+      child: Row(
+        children: [
+          Icon(
+            done ? Icons.check_circle : Icons.radio_button_unchecked,
+            size: 19,
+            color: done ? Colors.green : theme.disabledColor,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              title,
+              style: done
+                  ? theme.textTheme.bodyMedium
+                      ?.copyWith(color: theme.disabledColor)
+                  : theme.textTheme.bodyMedium,
+            ),
+          ),
+          if (trailing.isNotEmpty)
+            Text(trailing, style: theme.textTheme.bodySmall),
+        ],
+      ),
+    );
+  }
+
   Future<void> joinFansClub() async {
-    // 成员关系仍在时不能再调入团接口：勋章活跃 → 无需重复；已熄灭 → 引导点亮
+    // 已入团：抖音勋章熄灭先引导点亮；否则展示每日任务，确认后送灯牌
     if (guardJoined.value) {
-      if (guardBadgeActive.value) {
-        SmartDialog.showToast("你已经加入该主播的粉丝团，无需重复加入");
+      if (site.id == "douyin" && !guardBadgeActive.value) {
+        SmartDialog.showToast("粉丝团勋章已熄灭，需重新点亮");
+        await lightUpFansBadge();
         return;
       }
-      SmartDialog.showToast("粉丝团勋章已熄灭，需重新点亮");
-      await lightUpFansBadge();
+      final isStarRoom = site.id == "douyin" && guardStarRoom.value;
+      final tasks = await _queryDailyTasks();
+      final confirmed = await Get.dialog<bool>(
+        tasks != null
+            ? _buildDailyTasksDialog(tasks, "fans_badge")
+            : _buildSendBadgeConfirmDialog(isStarRoom),
+      );
+      if (confirmed == true) {
+        await _sendGuardAction("fans_badge");
+      }
       return;
     }
     final contentText = site.id == "douyin"

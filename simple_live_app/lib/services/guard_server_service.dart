@@ -212,6 +212,29 @@ class GuardServerService extends GetxService {
     return Map<String, dynamic>.from(res.data["data"] as Map);
   }
 
+  /// 粉丝团每日任务：勋章等级/亲密度 + 当日任务完成情况
+  Future<Map<String, dynamic>> getDailyTasks({
+    required String accountId,
+    required String roomId,
+    String webRid = "",
+  }) async {
+    final dio = Dio(BaseOptions(
+      baseUrl: serverUrl,
+      connectTimeout: const Duration(seconds: 10),
+      receiveTimeout: const Duration(seconds: 20),
+    ));
+    final res = await dio.post<dynamic>(
+      "/api/room/tasks",
+      data: {
+        "accountId": accountId,
+        "roomId": roomId,
+        "webRid": webRid,
+      },
+      options: _options,
+    );
+    return Map<String, dynamic>.from(res.data["data"] as Map);
+  }
+
   /// 直播状态被动查询：服务端缓存 room_id，不进场、无副作用。
   /// accountId 为空走游客匿名；服务端对拉黑房自动游客复核
   Future<Map<String, dynamic>> getLiveStatus({
