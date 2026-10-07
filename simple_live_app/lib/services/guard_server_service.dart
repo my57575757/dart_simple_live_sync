@@ -271,6 +271,22 @@ class GuardServerService extends GetxService {
     return data["html"].toString();
   }
 
+  /// 抖音账号视角取 SSR HTML：本地 accountId 在服务端已失效（404）时，
+  /// 重新注册一次再取；与 enterRoom 的 404 自愈保持一致，避免会话丢失后
+  /// 账号详情这步先失败、根本走不到进场
+  Future<String> fetchDouyinAccountHtml({required String webRid}) async {
+    var accountId = await ensureAccount("douyin");
+    try {
+      return await fetchRoomHtml(webRid: webRid, accountId: accountId);
+    } on DioException catch (e) {
+      if (e.response?.statusCode != 404) rethrow;
+      final newId = await reregister("douyin");
+      if (newId == null) rethrow;
+      accountId = newId;
+      return fetchRoomHtml(webRid: webRid, accountId: accountId);
+    }
+  }
+
   Future<void> saveRoomTrust({
     required String webRid,
     required String cookies,

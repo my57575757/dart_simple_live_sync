@@ -174,11 +174,10 @@ void bindDouyinHtmlFetcher() {
   if (!guard.configured) return;
   final douyinSite = Sites.allSites[Constant.kDouyin]!.liveSite as DouyinSite;
   douyinSite.htmlFetcher = (webRid, cookie) async {
-    final accountId = cookie.contains('sessionid=')
-        ? await GuardServerService.instance.ensureAccount('douyin')
-        : null;
-    return GuardServerService.instance
-        .fetchRoomHtml(webRid: webRid, accountId: accountId);
+    final guard = GuardServerService.instance;
+    return cookie.contains('sessionid=')
+        ? guard.fetchDouyinAccountHtml(webRid: webRid)
+        : guard.fetchRoomHtml(webRid: webRid);
   };
 }
 
