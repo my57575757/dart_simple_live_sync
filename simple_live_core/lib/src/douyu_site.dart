@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
 
+import 'package:simple_live_core/src/common/douyu_web_encrypt.dart';
 import 'package:simple_live_core/src/common/http_client.dart';
 import 'package:simple_live_core/src/danmaku/douyu_danmaku.dart';
 import 'package:simple_live_core/src/interface/live_danmaku.dart';
@@ -27,6 +28,8 @@ class DouyuSite implements LiveSite {
 
   /// 用户设置的 cookie
   String cookie = "";
+
+  late final DouyuWebEncrypt webEncrypt = DouyuWebEncrypt();
 
   @override
   LiveDanmaku getDanmaku() => DouyuDanmaku();
@@ -98,19 +101,16 @@ class DouyuSite implements LiveSite {
   Future<List<LivePlayQuality>> getPlayQualites({
     required LiveRoomDetail detail,
   }) async {
-    var data = detail.data.toString();
-    data += "&cdn=&rate=-1&ver=Douyu_223061205&iar=1&ive=1&hevc=0&fa=0";
-    List<LivePlayQuality> qualities = [];
-    var result = await HttpClient.instance.postJson(
-      "https://www.douyu.com/lapi/live/getH5Play/${detail.roomId}",
-      data: data,
-      formUrlEncoded: true,
+    // 首调 rate=0（原画），响应同时给出 multirates / cdnsWithName
+    final playData = await webEncrypt.getPlayData(
+      detail.roomId,
+      rate: 0,
     );
 
-    var cdns = <String>[];
-    for (var item in result["data"]["cdnsWithName"]) {
-      cdns.add(item["cdn"].toString());
-    }
+    var cdns = <String>[
+      for (var item in (playData["cdnsWithName"] as List))
+        item["cdn"].toString(),
+    ];
 
     // 如果cdn以scdn开头，将其放到最后
     cdns.sort((a, b) {
@@ -122,15 +122,16 @@ class DouyuSite implements LiveSite {
       return 0;
     });
 
-    for (var item in result["data"]["multirates"]) {
-      qualities.add(
+    return <LivePlayQuality>[
+      for (var item in (playData["multirates"] as List))
         LivePlayQuality(
           quality: item["name"].toString(),
-          data: DouyuPlayData(item["rate"], cdns),
+          data: DouyuPlayData(
+            int.tryParse(item["rate"].toString()) ?? 0,
+            cdns,
+          ),
         ),
-      );
-    }
-    return qualities;
+    ];
   }
 
   @override
@@ -138,12 +139,11 @@ class DouyuSite implements LiveSite {
     required LiveRoomDetail detail,
     required LivePlayQuality quality,
   }) async {
-    var args = detail.data.toString();
     var data = quality.data as DouyuPlayData;
 
     List<String> urls = [];
     for (var item in data.cdns) {
-      var url = await getPlayUrl(detail.roomId, args, data.rate, item);
+      var url = await getPlayUrl(detail.roomId, data.rate, item);
       if (url.isNotEmpty) {
         urls.add(url);
       }
@@ -153,25 +153,16 @@ class DouyuSite implements LiveSite {
 
   Future<String> getPlayUrl(
     String roomId,
-    String args,
     int rate,
     String cdn,
   ) async {
-    // ive=1：让服务端签发 expire=0（不设会话时长）的播放地址；不带此参数
-    // 时返回 expire=300，CDN 每 5 分钟准点断开长连接。
-    args += "&cdn=$cdn&rate=$rate&ive=1";
-    var result = await HttpClient.instance.postJson(
-      "https://www.douyu.com/lapi/live/getH5Play/$roomId",
-      data: args,
-      header: {
-        'referer': 'https://www.douyu.com/$roomId',
-        'user-agent':
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36 Edg/114.0.1823.43",
-      },
-      formUrlEncoded: true,
+    final playData = await webEncrypt.getPlayData(
+      roomId,
+      rate: rate,
+      cdn: cdn,
     );
 
-    return "${result["data"]["rtmp_url"]}/${HtmlUnescape().convert(result["data"]["rtmp_live"].toString())}";
+    return "${playData["rtmp_url"]}/${HtmlUnescape().convert(playData["rtmp_live"].toString())}";
   }
 
   @override
