@@ -3,7 +3,10 @@ import 'dart:io';
 
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:get/get.dart';
+import 'package:hive/hive.dart';
 import 'package:simple_live_app/services/guard_server_service.dart';
+import 'package:simple_live_app/services/local_storage_service.dart';
 
 void main() {
   late GuardServerService service;
@@ -118,5 +121,51 @@ void main() {
 
     expect(await service.fetchRoomHtml(webRid: 'r'), '<GUEST/>');
     expect(received.containsKey('accountId'), isFalse);
+  });
+
+  group('注册并发去重', () {
+    late Directory tempDir;
+
+    setUp(() async {
+      tempDir = await Directory.systemTemp.createTemp('guard_test');
+      Hive.init(tempDir.path);
+      final ls = LocalStorageService();
+      await ls.init();
+      Get.put<LocalStorageService>(ls);
+      await ls.setValue(LocalStorageService.kDouyinLoginCookie, 'ttwid=abc');
+    });
+
+    tearDown(() async {
+      await Hive.close();
+      await Get.delete<LocalStorageService>();
+      Get.reset();
+      if (await tempDir.exists()) {
+        await tempDir.delete(recursive: true);
+      }
+    });
+
+    test('并发 ensureAccount/reregister 只发一次注册', () async {
+      var registerHits = 0;
+      server.listen((req) async {
+        registerHits++;
+        expect(req.uri.path, '/api/account');
+        req.response.headers.contentType = ContentType.json;
+        req.response.write(jsonEncode({
+          'code': 0,
+          'message': 'ok',
+          'data': {'accountId': 'douyin_x'},
+        }));
+        await req.response.close();
+      });
+
+      final ids = await Future.wait([
+        service.ensureAccount('douyin'),
+        service.ensureAccount('douyin'),
+        service.reregister('douyin'),
+      ]);
+
+      expect(registerHits, 1);
+      expect(ids, ['douyin_x', 'douyin_x', 'douyin_x']);
+    });
   });
 }

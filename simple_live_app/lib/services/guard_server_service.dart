@@ -45,6 +45,8 @@ class GuardServerService extends GetxService {
 
   /// 发送前确保平台账号已在服务端注册。本地无 accountId 时用保存的
   /// cookie 自动注册；返回 null 表示未配置/未登录，调用方走直连。
+  final Map<String, Future<String?>> _registerInFlight = {};
+
   Future<String?> ensureAccount(String platform) async {
     if (!configured) return null;
     final saved = LocalStorageService.instance.getValue(
@@ -52,11 +54,32 @@ class GuardServerService extends GetxService {
       "",
     );
     if (saved.isNotEmpty) return saved;
-    return reregister(platform);
+    return _registerShared(platform);
   }
 
   /// 用本地保存的 cookie 重新注册并落库新的 accountId
-  Future<String?> reregister(String platform) async {
+  Future<String?> reregister(String platform) {
+    return _registerShared(platform);
+  }
+
+  /// 同平台并发注册共享一次请求，避免刷新时连发多个 /api/account
+  Future<String?> _registerShared(String platform) async {
+    final existing = _registerInFlight[platform];
+    if (existing != null) return existing;
+    final completer = Completer<String?>();
+    _registerInFlight[platform] = completer.future;
+    try {
+      completer.complete(await _doRegister(platform));
+    } catch (e, st) {
+      completer.completeError(e, st);
+    } finally {
+      _registerInFlight.remove(platform);
+    }
+    return completer.future;
+  }
+
+  Future<String?> _doRegister(String platform) async {
+    if (!configured) return null;
     final cookieKey = _platformCookieKeys[platform];
     if (cookieKey == null) return null;
     final cookie = LocalStorageService.instance.getValue(cookieKey, "");
