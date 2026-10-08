@@ -83,7 +83,7 @@ void DetachImeContext(HWND hwnd) {
   LogLine(msg);
 }
 
-void RebuildImeContext(HWND hwnd) {
+void RebuildImeContext(HWND hwnd, bool force) {
   if (!hwnd) {
     return;
   }
@@ -101,7 +101,8 @@ void RebuildImeContext(HWND hwnd) {
   }
 
   DWORD now = GetTickCount();
-  if (current_is_owned && now - LastRebuildTick() < kRebuildCooldownMs) {
+  if (!force && current_is_owned &&
+      now - LastRebuildTick() < kRebuildCooldownMs) {
     LogLine("rebuild: skipped (throttled)");
     return;
   }

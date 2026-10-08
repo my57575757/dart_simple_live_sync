@@ -4,15 +4,19 @@ import 'dart:ffi';
 import 'dart:io';
 
 import 'package:ffi/ffi.dart';
+import 'package:flutter/widgets.dart';
 import 'package:get/get.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:simple_live_app/app/log.dart';
 
 // 仅 Windows：触发原生侧（窗口线程）重建 IME 输入上下文。
 //
-// Flutter Windows 引擎存在缺陷（flutter/flutter #190042）：窗口焦点切换后，
-// 绑定在引擎子窗口上的 IMM32↔TSF 会话会陈旧僵死，Windows 不再发送
-// WM_IME_COMPOSITION，表现为英文数字正常、中文无反应。
+// Flutter Windows 引擎存在缺陷（flutter/flutter #190042、#191196）：窗口焦点
+// 切换后、以及应用内文本客户端切换（如弹出弹幕输入对话框）后，绑定在引擎
+// 子窗口上的 IMM32↔TSF 会话会陈旧僵死，Windows 不再发送
+// WM_IME_COMPOSITION，表现为英文数字正常、中文无反应。官方修复至今未合入
+// （#191196 无修复 PR），Dart 层唯一可用的缓解手段是在上述时机由窗口线程
+// 重新关联 IMM context。
 //
 // IMM 上下文只能在窗口所属线程操作：外部进程 / Dart 线程调用
 // ImmAssociateContextEx 均失败，且 IACE_DEFAULT 恢复线程默认上下文是
@@ -25,6 +29,8 @@ import 'package:simple_live_app/app/log.dart';
 
 const _gaRootOwner = 3;
 const _rebuildImeMessage = 0x8042; // WM_APP + 0x42
+const _forceRebuildImeMessage = 0x8044; // WM_APP + 0x44，绕过原生侧节流
+const _textFocusDebounceMs = 500;
 const _maxLogBytes = 256 * 1024;
 
 enum FocusEvent { activated, deactivated }
@@ -53,6 +59,28 @@ class KeyboardLayoutTransitionMachine {
   }
 }
 
+/// 检测任意 EditableText 获得焦点（引擎文本客户端切换）。仅在非文本→文本
+/// 翻转时产出，并对短时间内的反复切换防抖。对应 #191196：组字残留正是在
+/// 文本客户端切换时由引擎未能 AbortComposing 引起，必须在切换瞬间重建。
+class TextFocusTransitionMachine {
+  bool? _textFocused;
+  int? _lastEdgeAt;
+
+  bool poll({required bool textFocused, required int nowMs}) {
+    final previous = _textFocused;
+    _textFocused = textFocused;
+    if (previous == null || previous == textFocused) return false;
+    if (textFocused &&
+        _lastEdgeAt != null &&
+        nowMs - _lastEdgeAt! < _textFocusDebounceMs) {
+      _lastEdgeAt = nowMs;
+      return false;
+    }
+    _lastEdgeAt = nowMs;
+    return textFocused;
+  }
+}
+
 typedef _GetForegroundNative = IntPtr Function();
 typedef _GetForegroundDart = int Function();
 
@@ -78,6 +106,8 @@ class WindowsImeWatchdog extends GetxService {
   final FocusTransitionMachine _machine = FocusTransitionMachine();
   final KeyboardLayoutTransitionMachine _layoutMachine =
       KeyboardLayoutTransitionMachine();
+  final TextFocusTransitionMachine _textFocusMachine =
+      TextFocusTransitionMachine();
   int? _rootHwnd;
   File? _logFile;
   int _logBytes = 0;
@@ -114,6 +144,12 @@ class WindowsImeWatchdog extends GetxService {
 
     await _openLog();
     _timer = Timer.periodic(const Duration(milliseconds: 400), (_) => _poll());
+    WidgetsBinding.instance.focusManager.addListener(_onTextFocusChanged);
+    // 建立文本焦点基线，否则首次点击输入框因 previous==null 被吞掉
+    _textFocusMachine.poll(
+      textFocused: _currentFocusIsText(),
+      nowMs: DateTime.now().millisecondsSinceEpoch,
+    );
     _writeLog('watchdog started (pid=$_currentPid)');
   }
 
@@ -163,6 +199,32 @@ class WindowsImeWatchdog extends GetxService {
     _writeLog('app-navigation: ${_postRebuild() ? "posted" : "failed"}');
   }
 
+  bool _currentFocusIsText() {
+    final context =
+        WidgetsBinding.instance.focusManager.primaryFocus?.context;
+    if (context == null) return false;
+    // EditableText 内部用 Focus 承载外部传入的 focusNode，故需向上找
+    return context.widget is EditableText ||
+        context.findAncestorWidgetOfExactType<EditableText>() != null;
+  }
+
+  void _onTextFocusChanged() {
+    final shouldRebuild = _textFocusMachine.poll(
+      textFocused: _currentFocusIsText(),
+      nowMs: DateTime.now().millisecondsSinceEpoch,
+    );
+    if (shouldRebuild) {
+      final ok = _postForceRebuild();
+      _writeLog('text-client switch: ${ok ? "posted" : "failed"}');
+    }
+  }
+
+  bool _postForceRebuild() {
+    final root = _rootHwnd;
+    if (root == null) return false;
+    return _postMessage(root, _forceRebuildImeMessage, 0, 0) != 0;
+  }
+
   void _handleTransition(FocusEvent event) {
     // deactivate 由原生 WM_ACTIVATE 处理；回焦时补发一次重建作为保险。
     if (event == FocusEvent.activated) {
@@ -207,6 +269,7 @@ class WindowsImeWatchdog extends GetxService {
 
   @override
   void onClose() {
+    WidgetsBinding.instance.focusManager.removeListener(_onTextFocusChanged);
     _timer?.cancel();
     _timer = null;
     super.onClose();

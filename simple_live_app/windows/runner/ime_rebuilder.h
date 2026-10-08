@@ -16,7 +16,11 @@ void DetachImeContext(HWND hwnd);
 // replaced context if it was self-created. Forces Windows to establish a new
 // IMM32<->TSF session. Works around the stale-session bug described in
 // flutter/flutter #190042, for which IACE_DEFAULT is a no-op.
-void RebuildImeContext(HWND hwnd);
+//
+// |force| bypasses the rebuild cooldown. Used for text-client switches
+// (flutter/flutter #191196), where a fresh context is required even when the
+// previous rebuild happened within the cooldown window.
+void RebuildImeContext(HWND hwnd, bool force = false);
 
 // Must be called on the thread that owns |hwnd|, before the window/engine is
 // destroyed. Restores the default context and destroys every self-created

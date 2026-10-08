@@ -11,6 +11,7 @@ namespace {
 // Dart posts kRebuildImeMessage directly for in-app navigation.
 constexpr UINT kRebuildImeMessage = WM_APP + 0x42;
 constexpr UINT kDetachImeMessage = WM_APP + 0x43;
+constexpr UINT kForceRebuildImeMessage = WM_APP + 0x44;
 
 }  // namespace
 
@@ -87,6 +88,11 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
     case kDetachImeMessage:
       if (HWND child = child_content()) {
         DetachImeContext(child);
+      }
+      return 0;
+    case kForceRebuildImeMessage:
+      if (HWND child = child_content()) {
+        RebuildImeContext(child, /*force=*/true);
       }
       return 0;
     case WM_ACTIVATE:
