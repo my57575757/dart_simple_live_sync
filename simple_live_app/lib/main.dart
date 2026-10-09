@@ -147,6 +147,8 @@ Future initServices() async {
 
   bindDouyinHtmlFetcher();
 
+  bindDouyinSearchFetcher();
+
   if (Platform.isWindows) unawaited(Get.put(WindowsImeWatchdog()).start());
 
   Get.put(TwitchAccountService());
@@ -178,6 +180,17 @@ void bindDouyinHtmlFetcher() {
     return cookie.contains('sessionid=')
         ? guard.fetchDouyinAccountHtml(webRid: webRid)
         : guard.fetchRoomHtml(webRid: webRid);
+  };
+}
+
+// guard 已配置时，抖音直播搜索由 guard 在受信浏览器环境代理，绕过
+// verify_check 风控；未配置则 searchFetcher 为 null，searchRooms 走 Dio 直连兜底
+void bindDouyinSearchFetcher() {
+  final guard = GuardServerService.instance;
+  if (!guard.configured) return;
+  final douyinSite = Sites.allSites[Constant.kDouyin]!.liveSite as DouyinSite;
+  douyinSite.searchFetcher = (keyword, {page = 1}) {
+    return guard.searchDouyin(keyword: keyword, page: page);
   };
 }
 

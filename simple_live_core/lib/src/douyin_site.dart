@@ -14,10 +14,33 @@ typedef DouyinHtmlFetcher = Future<String> Function(
   String cookie,
 );
 
+/// 直播搜索获取器（keyword + page -> 搜索接口原始 JSON）。
+/// 由宿主 App 注入、在受信浏览器环境执行以通过风控；null 时走 Dio 直连
+typedef DouyinSearchFetcher = Future<Map<String, dynamic>> Function(
+  String keyword, {
+  int page,
+});
+
 /// 房间页命中验证码中间页：宿主应弹出游客验证窗口，而非走其他取房兜底
 class DouyinGuestVerifyRequired implements Exception {
   final String webRid;
   DouyinGuestVerifyRequired(this.webRid);
+}
+
+/// 搜索要求登录：抖音登录态缺失/失效，宿主应引导登录抖音账号
+class DouyinLoginRequired implements Exception {
+  final String message;
+  DouyinLoginRequired([this.message = "请先登录抖音账号"]);
+  @override
+  String toString() => message;
+}
+
+/// 搜索命中抖音风控校验（verify_check）
+class DouyinRiskControl implements Exception {
+  final String message;
+  DouyinRiskControl([this.message = "抖音风控校验，请稍后再试"]);
+  @override
+  String toString() => message;
 }
 
 class DouyinSite implements LiveSite {
@@ -52,6 +75,9 @@ class DouyinSite implements LiveSite {
 
   /// 宿主注入的房间 HTML 获取器；null = 走 Dio（console / 不支持 webview 的平台）
   DouyinHtmlFetcher? htmlFetcher;
+
+  /// 宿主注入的直播搜索获取器；null = 走 Dio 直连
+  DouyinSearchFetcher? searchFetcher;
 
   void _logDebug(String msg) {
     // 同时使用 print 和 CoreLog 确保日志输出
@@ -769,6 +795,19 @@ class DouyinSite implements LiveSite {
     String keyword, {
     int page = 1,
   }) async {
+    final fetcher = searchFetcher;
+    if (fetcher != null) {
+      return _parseSearchResult(await fetcher(keyword, page: page));
+    }
+    return _searchRoomsDirect(keyword, page);
+  }
+
+  /// Dio 直连兜底。搜索已强制受信浏览器环境，此路径通常会被风控；
+  /// 合并账号登录态后在部分网络/会话下仍可能成功
+  Future<LiveSearchRoomResult> _searchRoomsDirect(
+    String keyword,
+    int page,
+  ) async {
     String serverUrl = "https://www.douyin.com/aweme/v1/web/live/search/";
     var uri = Uri.parse(serverUrl).replace(
       scheme: "https",
@@ -825,6 +864,10 @@ class DouyinSite implements LiveSite {
         dyCookie += "$cookie;";
       }
     });
+    // 合并账号登录态（含 sessionid），否则接口以 status_code 2483 要求登录
+    if (loginCookie.contains("sessionid")) {
+      dyCookie = "$dyCookie; $loginCookie";
+    }
 
     var result = await _getJson(
       requlestUrl,
@@ -850,8 +893,26 @@ class DouyinSite implements LiveSite {
     if (result == "" || result == 'blocked') {
       throw Exception("抖音直播搜索被限制，请稍后再试");
     }
+    return _parseSearchResult(result);
+  }
+
+  /// 搜索结果统一解析：先查 status_code / 风控空结果，再解析 rawdata
+  LiveSearchRoomResult _parseSearchResult(Map<dynamic, dynamic> result) {
+    if (result["status_code"] == 2483) {
+      throw DouyinLoginRequired();
+    }
+    final nilInfo = result["search_nil_info"];
+    final nilType =
+        nilInfo is Map ? nilInfo["search_nil_type"]?.toString() : null;
+
     var items = <LiveRoomItem>[];
-    for (var item in result["data"] ?? []) {
+    final dataList = result["data"];
+    if (dataList == null || (dataList is List && dataList.isEmpty)) {
+      if (nilType == "verify_check") {
+        throw DouyinRiskControl();
+      }
+    }
+    for (var item in dataList ?? []) {
       var itemData = json.decode(item["lives"]["rawdata"].toString());
       var roomItem = LiveRoomItem(
         roomId: itemData["owner"]["web_rid"].toString(),

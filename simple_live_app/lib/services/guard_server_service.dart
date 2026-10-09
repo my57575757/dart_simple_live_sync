@@ -3,7 +3,7 @@ import 'dart:async';
 import 'package:dio/dio.dart';
 import 'package:get/get.dart';
 import 'package:simple_live_core/simple_live_core.dart'
-    show DouyinGuestVerifyRequired;
+    show DouyinGuestVerifyRequired, DouyinLoginRequired, DouyinRiskControl;
 import 'package:simple_live_app/app/log.dart';
 import 'package:simple_live_app/services/local_storage_service.dart';
 
@@ -331,6 +331,57 @@ class GuardServerService extends GetxService {
       accountId = newId;
       return fetchRoomHtml(webRid: webRid, accountId: accountId);
     }
+  }
+
+  /// 抖音直播搜索：在 guard 受信浏览器环境执行，绕过 verify_check 风控。
+  /// 本地 accountId 在服务端失效（404）时重新注册一次再试，与
+  /// fetchDouyinAccountHtml 的自愈保持一致
+  Future<Map<String, dynamic>> searchDouyin({
+    required String keyword,
+    int page = 1,
+  }) async {
+    var accountId = await ensureAccount("douyin");
+    if (accountId == null) throw DouyinLoginRequired();
+    try {
+      return await _postSearch(accountId, keyword, page);
+    } on DioException catch (e) {
+      if (e.response?.statusCode != 404) rethrow;
+      final newId = await reregister("douyin");
+      if (newId == null) rethrow;
+      return _postSearch(newId, keyword, page);
+    }
+  }
+
+  Future<Map<String, dynamic>> _postSearch(
+    String accountId,
+    String keyword,
+    int page,
+  ) async {
+    final dio = Dio(BaseOptions(
+      baseUrl: serverUrl,
+      connectTimeout: const Duration(seconds: 15),
+      receiveTimeout: const Duration(seconds: 30),
+    ));
+    final res = await dio.post<dynamic>(
+      "/api/search",
+      data: {"accountId": accountId, "keyword": keyword, "page": page},
+      options: _options,
+    );
+    final body = Map<String, dynamic>.from(res.data as Map);
+    if (body["code"] == 4032) {
+      throw DouyinLoginRequired(
+        body["message"]?.toString() ?? "请先登录抖音账号",
+      );
+    }
+    if (body["code"] == 4033) {
+      throw DouyinRiskControl(
+        body["message"]?.toString() ?? "抖音风控校验，请稍后再试",
+      );
+    }
+    if (body["code"] != 0) {
+      throw Exception(body["message"]?.toString() ?? "抖音搜索失败");
+    }
+    return Map<String, dynamic>.from(body["data"] as Map);
   }
 
   Future<void> saveRoomTrust({
