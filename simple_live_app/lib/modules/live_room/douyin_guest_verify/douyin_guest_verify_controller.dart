@@ -36,12 +36,19 @@ class DouyinGuestVerifyController extends GetxController {
         final support = await getApplicationSupportDirectory();
         final folder =
             "${support.path}${Platform.pathSeparator}guest_verify_env";
+        // Windows 平台线程上 create 偶发无限挂起（残留进程/资源压力时），
+        // 必须有超时：否则验证页永久转圈且无任何出口
         environment = await WebViewEnvironment.create(
           settings: WebViewEnvironmentSettings(userDataFolder: folder),
-        );
+        ).timeout(const Duration(seconds: 10));
+        if (canceled) {
+          await environment?.dispose().catchError((_) {});
+          environment = null;
+          return;
+        }
         return;
       } catch (e) {
-        Log.logPrint("Windows 独立环境创建失败，改走清 cookie：$e");
+        Log.logPrint("Windows 独立环境创建失败/超时，改走清 cookie：$e");
         environment = null;
       }
     }
@@ -135,7 +142,12 @@ class DouyinGuestVerifyController extends GetxController {
           .where((item) => !isAccountCookieName(item.name))
           .map((item) => "${item.name}=${item.value}")
           .join("; ");
-      final ua = await InAppWebViewController.getDefaultUserAgent();
+      // Windows 插件未实现静态 getDefaultUserAgent；直接取当前 webview 的
+      // UA，保证与所提交 cookie 的隔离环境一致
+      final uaRaw = await c.evaluateJavascript(
+        source: "JSON.stringify(navigator.userAgent)",
+      );
+      final ua = uaRaw == null ? "" : json.decode(uaRaw.toString());
       await GuardServerService.instance.saveRoomTrust(
         webRid: webRid,
         cookies: cookieStr,

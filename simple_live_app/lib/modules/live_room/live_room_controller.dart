@@ -20,6 +20,7 @@ import 'package:simple_live_app/app/sites.dart';
 import 'package:simple_live_app/app/utils.dart';
 import 'package:simple_live_app/models/db/follow_user.dart';
 import 'package:simple_live_app/models/db/history.dart';
+import 'package:simple_live_app/modules/live_room/douyin_guest_verify/douyin_guest_verify_gate.dart';
 import 'package:simple_live_app/modules/live_room/player/playback_watchdog.dart';
 import 'package:simple_live_app/modules/live_room/player/player_controller.dart';
 import 'package:simple_live_app/modules/settings/danmu_settings_page.dart';
@@ -1240,7 +1241,6 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     addSysMsg("弹幕服务器连接正常");
   }
 
-  bool guestVerifyPrompting = false;
   int guestVerifyReplays = 0;
 
   /// 加载直播间信息
@@ -1263,7 +1263,6 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       } else {
         detail.value = await liveSite.getRoomDetail(roomId: roomId);
       }
-      Log.logPrint("直播间信息读取完成 roomId=${detail.value?.roomId}");
 
       if (site.id == Constant.kDouyin) {
         // 1.6.0之前收藏的WebRid
@@ -1324,14 +1323,11 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
         SmartDialog.showToast("验证未生效，请手动重试");
         return;
       }
-      if (guestVerifyPrompting) return;
-      guestVerifyPrompting = true;
-      final result = await Get.toNamed<bool>(
-        RoutePath.kDouyinGuestVerify,
-        arguments: e.webRid,
-      );
-      guestVerifyPrompting = false;
+      // 打开验证页前必须先关全局 loading：SmartDialog 遮罩在 Navigator 之上，
+      // 会罩住验证页导致滑块无法操作（表现为无限转圈/卡死）
       SmartDialog.dismiss(status: SmartStatus.loading);
+      // 全局去重：进房与关注列表后台刷新共用同一验证页，只弹一次
+      final result = await DouyinGuestVerifyGate.instance.open(e.webRid);
       if (result == true && guestVerifyReplays < 1) {
         guestVerifyReplays++;
         loadData();

@@ -17,7 +17,7 @@ import 'package:simple_live_app/app/sites.dart';
 import 'package:simple_live_app/app/utils.dart';
 import 'package:simple_live_app/models/db/follow_user.dart';
 import 'package:simple_live_app/models/db/follow_user_tag.dart';
-import 'package:simple_live_app/routes/route_path.dart';
+import 'package:simple_live_app/modules/live_room/douyin_guest_verify/douyin_guest_verify_gate.dart';
 import 'package:simple_live_app/services/db_service.dart';
 import 'package:simple_live_app/services/guard_server_service.dart';
 import 'package:simple_live_core/simple_live_core.dart';
@@ -611,6 +611,11 @@ class FollowService extends GetxService with WidgetsBindingObserver {
   /// 默认弹窗：确认后打开游客验证页，完成滑块由该页提交 trust；
   /// 返回 true 表示验证信息已提交后端
   Future<bool> _defaultVerifyPrompt(String webRid) async {
+    final gate = DouyinGuestVerifyGate.instance;
+    // 进房流程可能已打开验证页：复用同一验证页，不再重复弹确认框
+    if (gate.isOpen) {
+      return (await gate.open(webRid)) == true;
+    }
     final confirmed = await Get.dialog<bool>(
       AlertDialog(
         title: const Text("抖音访问验证"),
@@ -628,9 +633,7 @@ class FollowService extends GetxService with WidgetsBindingObserver {
       ),
     );
     if (confirmed != true) return false;
-    final result =
-        await Get.toNamed(RoutePath.kDouyinGuestVerify, arguments: webRid);
-    return result == true;
+    return (await gate.open(webRid)) == true;
   }
 
   /// 前台检测到游客风控：弹窗引导打开游客验证页，完成后 trust 提交给后端，
