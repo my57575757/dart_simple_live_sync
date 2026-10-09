@@ -1,67 +1,27 @@
 import 'dart:async';
-import 'dart:convert';
-import 'dart:ffi';
-import 'dart:io';
 
-import 'package:ffi/ffi.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:get/get.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:simple_live_app/app/log.dart';
 
-// 仅 Windows：触发原生侧（窗口线程）重建 IME 输入上下文。
+// 仅 Windows：IME 输入上下文的预防性生命周期。
 //
 // Flutter Windows 引擎存在缺陷（flutter/flutter #190042、#191196）：窗口焦点
-// 切换后、以及应用内文本客户端切换（如弹出弹幕输入对话框）后，绑定在引擎
-// 子窗口上的 IMM32↔TSF 会话会陈旧僵死，Windows 不再发送
-// WM_IME_COMPOSITION，表现为英文数字正常、中文无反应。官方修复至今未合入
-// （#191196 无修复 PR），Dart 层唯一可用的缓解手段是在上述时机由窗口线程
-// 重新关联 IMM context。
-//
-// IMM 上下文只能在窗口所属线程操作：外部进程 / Dart 线程调用
-// ImmAssociateContextEx 均失败，且 IACE_DEFAULT 恢复线程默认上下文是
-// no-op。真正的修复在 windows/runner 原生侧：ImmCreateContext 建立全新
-// 上下文并关联。本服务只负责在检测到回焦 / App 内导航时，向顶层窗口
-// PostMessage（WM_APP+0x42），由窗口线程执行重建。
-//
-// 只用 dart:ffi 且在 start() 内打开系统库：本文件在非 Windows 平台也会被
-// 引用，顶层 DynamicLibrary.open 会让 Android/iOS 启动即崩。
+// 切换 / 应用内文本客户端切换（如弹出弹幕输入框）后，引擎子窗口的
+// IMM32↔TSF 会话会陈旧僵死，Windows 不再发送 WM_IME_COMPOSITION，表现为
+// 英文数字正常、中文无反应。实验已证明：会话僵死后再替换 HIMC 无法修复它。
+// 因此改为预防性方案——文本输入开始（非文本→文本焦点）时经 MethodChannel
+// 通知原生侧关联「已打开、中文模式」的自有上下文，文本输入结束时解关联；
+// 窗口失焦的 detach 由原生 WM_ACTIVATE 同步处理。频道 simple_live/ime 在
+// windows/runner 注册，实际动作经 PostMessage 在窗口线程执行。
 
-const _gaRootOwner = 3;
-const _rebuildImeMessage = 0x8042; // WM_APP + 0x42
-const _forceRebuildImeMessage = 0x8044; // WM_APP + 0x44，绕过原生侧节流
 const _textFocusDebounceMs = 500;
-const _maxLogBytes = 256 * 1024;
 
-enum FocusEvent { activated, deactivated }
+const _channel = MethodChannel('simple_live/ime');
 
-/// 消费「本进程是否前台」的轮询序列，只在 true↔false 翻转时产出事件。
-/// 首次 poll 仅建立基线不产出，避免启动时产生假事件。
-class FocusTransitionMachine {
-  bool? _focused;
-
-  FocusEvent? poll(bool focused) {
-    final previous = _focused;
-    _focused = focused;
-    if (previous == null || previous == focused) return null;
-    return focused ? FocusEvent.activated : FocusEvent.deactivated;
-  }
-}
-
-/// 键盘布局（输入法）变化检测：首次仅建立基线
-class KeyboardLayoutTransitionMachine {
-  int? _hkl;
-
-  bool poll(int hkl) {
-    final previous = _hkl;
-    _hkl = hkl;
-    return previous != null && previous != hkl;
-  }
-}
-
-/// 检测任意 EditableText 获得焦点（引擎文本客户端切换）。仅在非文本→文本
-/// 翻转时产出，并对短时间内的反复切换防抖。对应 #191196：组字残留正是在
-/// 文本客户端切换时由引擎未能 AbortComposing 引起，必须在切换瞬间重建。
+/// 检测任意 EditableText 焦点边沿（引擎文本客户端切换）。在非文本↔文本
+/// 任一方向翻转时返回 true，并对「进入文本」的短时间反复切换防抖。
 class TextFocusTransitionMachine {
   bool? _textFocused;
   int? _lastEdgeAt;
@@ -77,126 +37,21 @@ class TextFocusTransitionMachine {
       return false;
     }
     _lastEdgeAt = nowMs;
-    return textFocused;
+    return true;
   }
 }
 
-typedef _GetForegroundNative = IntPtr Function();
-typedef _GetForegroundDart = int Function();
-
-typedef _GetWindowThreadProcessIdNative = Uint32 Function(IntPtr hwnd, Pointer<Uint32> pid);
-typedef _GetWindowThreadProcessIdDart = int Function(int hwnd, Pointer<Uint32> pid);
-
-typedef _GetCurrentProcessIdNative = Uint32 Function();
-typedef _GetCurrentProcessIdDart = int Function();
-
-typedef _GetAncestorNative = IntPtr Function(IntPtr hwnd, Uint32 flags);
-typedef _GetAncestorDart = int Function(int hwnd, int flags);
-
-typedef _GetKeyboardLayoutNative = IntPtr Function(Uint32 thread);
-typedef _GetKeyboardLayoutDart = int Function(int thread);
-
-typedef _PostMessageNative = Int32 Function(
-    IntPtr hwnd, Uint32 msg, IntPtr wparam, IntPtr lparam);
-typedef _PostMessageDart = int Function(
-    int hwnd, int msg, int wparam, int lparam);
-
 class WindowsImeWatchdog extends GetxService {
-  Timer? _timer;
-  final FocusTransitionMachine _machine = FocusTransitionMachine();
-  final KeyboardLayoutTransitionMachine _layoutMachine =
-      KeyboardLayoutTransitionMachine();
   final TextFocusTransitionMachine _textFocusMachine =
       TextFocusTransitionMachine();
-  int? _rootHwnd;
-  File? _logFile;
-  int _logBytes = 0;
-  int _currentPid = 0;
-
-  late final int Function() _getForeground;
-  late final int Function(int, Pointer<Uint32>) _getWindowThreadProcessId;
-  late final int Function(int, int) _getAncestor;
-  late final int Function(int) _getKeyboardLayout;
-  late final int Function(int, int, int, int) _postMessage;
 
   Future<void> start() async {
-    if (!Platform.isWindows || _timer != null) return;
-
-    final user32 = DynamicLibrary.open('user32.dll');
-    final kernel32 = DynamicLibrary.open('kernel32.dll');
-
-    _getForeground = user32
-        .lookupFunction<_GetForegroundNative, _GetForegroundDart>(
-            'GetForegroundWindow');
-    _getWindowThreadProcessId = user32.lookupFunction<
-        _GetWindowThreadProcessIdNative,
-        _GetWindowThreadProcessIdDart>('GetWindowThreadProcessId');
-    _getAncestor = user32.lookupFunction<_GetAncestorNative, _GetAncestorDart>(
-        'GetAncestor');
-    _getKeyboardLayout =
-        user32.lookupFunction<_GetKeyboardLayoutNative,
-            _GetKeyboardLayoutDart>('GetKeyboardLayout');
-    _postMessage = user32.lookupFunction<_PostMessageNative,
-        _PostMessageDart>('PostMessageW');
-    _currentPid = kernel32
-        .lookupFunction<_GetCurrentProcessIdNative, _GetCurrentProcessIdDart>(
-            'GetCurrentProcessId')();
-
-    await _openLog();
-    _timer = Timer.periodic(const Duration(milliseconds: 400), (_) => _poll());
     WidgetsBinding.instance.focusManager.addListener(_onTextFocusChanged);
     // 建立文本焦点基线，否则首次点击输入框因 previous==null 被吞掉
     _textFocusMachine.poll(
       textFocused: _currentFocusIsText(),
       nowMs: DateTime.now().millisecondsSinceEpoch,
     );
-    _writeLog('watchdog started (pid=$_currentPid)');
-  }
-
-  Future<void> _openLog() async {
-    try {
-      final dir = await getApplicationSupportDirectory();
-      final file = File('${dir.path}${Platform.pathSeparator}ime_watchdog.log');
-      _logFile = file;
-      if (await file.exists()) _logBytes = await file.length();
-    } catch (e) {
-      Log.w('WindowsImeWatchdog open log failed: $e');
-    }
-  }
-
-  void _poll() {
-    final foreground = _getForeground();
-    var ours = false;
-    if (foreground != 0) {
-      final pidPtr = calloc<Uint32>();
-      try {
-        _getWindowThreadProcessId(foreground, pidPtr);
-        ours = pidPtr.value == _currentPid;
-      } finally {
-        calloc.free(pidPtr);
-      }
-    }
-
-    if (ours && _rootHwnd == null) {
-      final root = _getAncestor(foreground, _gaRootOwner);
-      if (root != 0) _rootHwnd = root;
-    }
-
-    final event = _machine.poll(ours);
-    if (event != null) _handleTransition(event);
-
-    // 键盘布局属于前台窗口线程，仅本窗口前台时采样，用于诊断
-    if (ours) {
-      final threadId = _getWindowThreadProcessId(foreground, nullptr);
-      if (_layoutMachine.poll(_getKeyboardLayout(threadId))) {
-        _writeLog('keyboard-layout changed');
-      }
-    }
-  }
-
-  /// 供 App 在应用内切换直播间等导航时调用，通知原生侧重建 IME 会话
-  void cycleSession() {
-    _writeLog('app-navigation: ${_postRebuild() ? "posted" : "failed"}');
   }
 
   bool _currentFocusIsText() {
@@ -209,69 +64,32 @@ class WindowsImeWatchdog extends GetxService {
   }
 
   void _onTextFocusChanged() {
-    final shouldRebuild = _textFocusMachine.poll(
-      textFocused: _currentFocusIsText(),
+    final textFocused = _currentFocusIsText();
+    final edge = _textFocusMachine.poll(
+      textFocused: textFocused,
       nowMs: DateTime.now().millisecondsSinceEpoch,
     );
-    if (shouldRebuild) {
-      final ok = _postForceRebuild();
-      _writeLog('text-client switch: ${ok ? "posted" : "failed"}');
-    }
+    if (!edge) return;
+    unawaited(_invoke(textFocused ? 'attach' : 'detach'));
   }
 
-  bool _postForceRebuild() {
-    final root = _rootHwnd;
-    if (root == null) return false;
-    return _postMessage(root, _forceRebuildImeMessage, 0, 0) != 0;
+  /// App 内切换直播间等导航时调用：先解关联，下一次文本焦点会重新 attach。
+  /// 组字进行中时原生侧自动跳过，不丢弃在途输入。
+  void cycleSession() {
+    unawaited(_invoke('detach'));
   }
 
-  void _handleTransition(FocusEvent event) {
-    // deactivate 由原生 WM_ACTIVATE 处理；回焦时补发一次重建作为保险。
-    if (event == FocusEvent.activated) {
-      final root = _rootHwnd;
-      if (root == null) {
-        _writeLog('activated: root window not cached, skip');
-        return;
-      }
-      _writeLog('activated: ${_postRebuild() ? "posted" : "failed"}');
-    } else {
-      _writeLog('deactivated');
-    }
-  }
-
-  bool _postRebuild() {
-    final root = _rootHwnd;
-    if (root == null) return false;
-    return _postMessage(root, _rebuildImeMessage, 0, 0) != 0;
-  }
-
-  void _writeLog(String message) {
-    unawaited(_doWriteLog(message));
-  }
-
-  Future<void> _doWriteLog(String message) async {
-    final file = _logFile;
-    if (file == null) return;
+  Future<void> _invoke(String method) async {
     try {
-      final line = '${DateTime.now().toIso8601String()} $message\n';
-      final bytes = utf8.encode(line).length;
-      if (_logBytes + bytes > _maxLogBytes) {
-        await file.writeAsString(line, flush: true);
-        _logBytes = bytes;
-      } else {
-        await file.writeAsString(line, mode: FileMode.append, flush: true);
-        _logBytes += bytes;
-      }
+      await _channel.invokeMethod<void>(method);
     } catch (e) {
-      Log.w('WindowsImeWatchdog write log failed: $e');
+      Log.w('WindowsImeWatchdog invoke $method failed: $e');
     }
   }
 
   @override
   void onClose() {
     WidgetsBinding.instance.focusManager.removeListener(_onTextFocusChanged);
-    _timer?.cancel();
-    _timer = null;
     super.onClose();
   }
 }

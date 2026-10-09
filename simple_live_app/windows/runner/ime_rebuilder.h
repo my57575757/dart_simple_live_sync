@@ -11,16 +11,13 @@ void DetachImeContext(HWND hwnd);
 
 // Must be called on the thread that owns |hwnd|.
 //
-// Creates a brand-new IMM input context (copying open/conversion/sentence
-// state from the current one) and associates it with |hwnd|, destroying the
-// replaced context if it was self-created. Forces Windows to establish a new
-// IMM32<->TSF session. Works around the stale-session bug described in
-// flutter/flutter #190042, for which IACE_DEFAULT is a no-op.
-//
-// |force| bypasses the rebuild cooldown. Used for text-client switches
-// (flutter/flutter #191196), where a fresh context is required even when the
-// previous rebuild happened within the cooldown window.
-void RebuildImeContext(HWND hwnd, bool force = false);
+// Ensures a self-owned IMM input context that is open and in native (Chinese)
+// conversion mode is associated with |hwnd|. Called up front when a text input
+// client starts (preventive lifecycle), not after the IMM32<->TSF session has
+// gone stale — replacing the HIMC after that point does not recover it
+// (flutter/flutter #190042). Idempotent when the current context is already
+// self-owned.
+void AttachImeContext(HWND hwnd);
 
 // Must be called on the thread that owns |hwnd|, before the window/engine is
 // destroyed. Restores the default context and destroys every self-created

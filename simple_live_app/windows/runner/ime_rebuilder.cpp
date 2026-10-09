@@ -9,23 +9,11 @@ namespace {
 
 constexpr DWORD kGcsCompstr = 0x0008;
 
-// Minimum interval between rebuilds while the current context is already
-// self-created. WM_ACTIVATE and the Dart watchdog can both post on one focus
-// return (within ~1ms), and focus flicker can otherwise trigger a rebuild per
-// second. After a detach the context falls back to the thread default, which
-// is never throttled.
-constexpr DWORD kRebuildCooldownMs = 3000;
-
 // Contexts created by this process via ImmCreateContext; the thread-default
 // context must never be destroyed.
 std::unordered_set<HIMC>& OwnedContexts() {
   static std::unordered_set<HIMC> contexts;
   return contexts;
-}
-
-DWORD& LastRebuildTick() {
-  static DWORD tick = 0;
-  return tick;
 }
 
 // UTF-8 diagnostic log next to the executable.
@@ -83,7 +71,13 @@ void DetachImeContext(HWND hwnd) {
   LogLine(msg);
 }
 
-void RebuildImeContext(HWND hwnd, bool force) {
+// Preventive lifecycle (flutter/flutter #190042, draft PR #190043): attach a
+// self-owned context that is already OPEN and in native (Chinese) conversion
+// mode whenever a text input client starts. Replacing the HIMC only AFTER the
+// IMM32<->TSF session is stale has been proven not to repair it, so this runs
+// up front instead of after the fact. Idempotent: re-attach while the current
+// context is already self-owned only forces it open.
+void AttachImeContext(HWND hwnd) {
   if (!hwnd) {
     return;
   }
@@ -97,41 +91,44 @@ void RebuildImeContext(HWND hwnd, bool force) {
     current_is_owned = OwnedContexts().count(current) > 0;
     open = ImmGetOpenStatus(current);
     ImmGetConversionStatus(current, &conversion, &sentence);
+    if (current_is_owned) {
+      // Keep the existing session; just guarantee open + Chinese mode.
+      ImmSetOpenStatus(current, TRUE);
+      if ((conversion & IME_CMODE_NATIVE) == 0) {
+        ImmSetConversionStatus(current, IME_CMODE_NATIVE, sentence);
+      }
+    }
     ImmReleaseContext(hwnd, current);
   }
 
-  DWORD now = GetTickCount();
-  if (!force && current_is_owned &&
-      now - LastRebuildTick() < kRebuildCooldownMs) {
-    LogLine("rebuild: skipped (throttled)");
+  if (current && current_is_owned) {
+    char msg[160];
+    sprintf_s(msg,
+              "attach: hwnd=%p himc=%p existing-owned open=%ld conv=%lu",
+              hwnd, current, open, conversion);
+    LogLine(msg);
     return;
   }
 
   HIMC created = ImmCreateContext();
   if (!created) {
-    LogLine("rebuild: ImmCreateContext failed");
+    LogLine("attach: ImmCreateContext failed");
     return;
   }
+  // Set open + Chinese BEFORE associating. The old rebuild path left the new
+  // context open=0, which is the defect that reproduced the input failure.
+  ImmSetOpenStatus(created, TRUE);
+  DWORD target_sentence = sentence != 0 ? sentence : 8;
+  ImmSetConversionStatus(created, IME_CMODE_NATIVE, target_sentence);
 
-  if (open) {
-    ImmSetOpenStatus(created, open);
-  }
-  if (conversion != 0 || sentence != 0) {
-    ImmSetConversionStatus(created, conversion, sentence);
-  }
-
+  // |previous| is the thread-default context here; never destroy it.
   HIMC previous = ImmAssociateContext(hwnd, created);
-  auto& owned = OwnedContexts();
-  owned.insert(created);
-  if (previous && owned.erase(previous) > 0) {
-    ImmDestroyContext(previous);
-  }
-  LastRebuildTick() = now;
+  OwnedContexts().insert(created);
 
   char msg[192];
   sprintf_s(msg,
-            "rebuild: hwnd=%p new=%p previous=%p open=%ld conv=%lu sentence=%lu",
-            hwnd, created, previous, open, conversion, sentence);
+            "attach: hwnd=%p new=%p previous=%p open=1 conv=NATIVE sentence=%lu",
+            hwnd, created, previous, target_sentence);
   LogLine(msg);
 }
 

@@ -3,15 +3,15 @@
 #include <optional>
 
 #include "flutter/generated_plugin_registrant.h"
+#include "flutter/standard_method_codec.h"
 #include "ime_rebuilder.h"
 
 namespace {
 
-// Posted to run IME context work on the window thread after focus processing.
-// Dart posts kRebuildImeMessage directly for in-app navigation.
-constexpr UINT kRebuildImeMessage = WM_APP + 0x42;
+// IME context work runs on the window thread. The Dart IME lifecycle client
+// posts these when a text input client starts/stops.
+constexpr UINT kAttachImeMessage = WM_APP + 0x42;
 constexpr UINT kDetachImeMessage = WM_APP + 0x43;
-constexpr UINT kForceRebuildImeMessage = WM_APP + 0x44;
 
 }  // namespace
 
@@ -36,6 +36,21 @@ bool FlutterWindow::OnCreate() {
     return false;
   }
   RegisterPlugins(flutter_controller_->engine());
+
+  ime_channel_ = std::make_unique<flutter::MethodChannel<>>(
+      flutter_controller_->engine()->messenger(), "simple_live/ime",
+      &flutter::StandardMethodCodec::GetInstance());
+  ime_channel_->SetMethodCallHandler(
+      [this](const flutter::MethodCall<>& call,
+             std::unique_ptr<flutter::MethodResult<>> result) {
+        // Hop to the window thread so IME work is serialized with WM_ACTIVATE
+        // and never re-enters inside an engine platform-channel callback.
+        UINT msg = call.method_name() == "attach" ? kAttachImeMessage
+                                                 : kDetachImeMessage;
+        PostMessage(GetHandle(), msg, 0, 0);
+        result->Success();
+      });
+
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
 
   flutter_controller_->engine()->SetNextFrameCallback([&]() {
@@ -80,9 +95,9 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
   }
 
   switch (message) {
-    case kRebuildImeMessage:
+    case kAttachImeMessage:
       if (HWND child = child_content()) {
-        RebuildImeContext(child);
+        AttachImeContext(child);
       }
       return 0;
     case kDetachImeMessage:
@@ -90,18 +105,15 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
         DetachImeContext(child);
       }
       return 0;
-    case kForceRebuildImeMessage:
-      if (HWND child = child_content()) {
-        RebuildImeContext(child, /*force=*/true);
-      }
-      return 0;
     case WM_ACTIVATE:
-      // Runs after focus/DefWindowProc processing: detach on deactivation,
-      // build a fresh context on activation.
-      PostMessage(hwnd,
-                  LOWORD(wparam) == WA_INACTIVE ? kDetachImeMessage
-                                                : kRebuildImeMessage,
-                  0, 0);
+      // Detach synchronously on deactivation so a stale context is never
+      // carried into the next activation. Activation does nothing: the next
+      // text input client start posts its own attach.
+      if (LOWORD(wparam) == WA_INACTIVE) {
+        if (HWND child = child_content()) {
+          DetachImeContext(child);
+        }
+      }
       break;
     case WM_FONTCHANGE:
       flutter_controller_->engine()->ReloadSystemFonts();
