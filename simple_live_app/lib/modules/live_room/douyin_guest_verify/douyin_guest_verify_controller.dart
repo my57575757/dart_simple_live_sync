@@ -10,6 +10,11 @@ import 'package:simple_live_app/app/log.dart';
 import 'package:simple_live_app/services/guard_server_service.dart';
 
 class DouyinGuestVerifyController extends GetxController {
+  // 验证 webview 固定用桌面 UA：移动端默认 UA 会被抖音识别为手机、下发移动版
+  // 验证页；guard 本身是桌面 Chrome，桌面页验证得到的设备令牌也与其一致。
+  static const String desktopUserAgent =
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36";
+
   late final String webRid;
   InAppWebViewController? webController;
 
@@ -68,6 +73,8 @@ class DouyinGuestVerifyController extends GetxController {
   InAppWebViewSettings buildSettings() => InAppWebViewSettings(
         mediaPlaybackRequiresUserGesture: false,
         javaScriptEnabled: true,
+        userAgent: desktopUserAgent,
+        preferredContentMode: UserPreferredContentMode.DESKTOP,
       );
 
   void onWebViewCreated(InAppWebViewController c) {

@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:simple_live_app/modules/live_room/douyin_guest_verify/douyin_guest_verify_controller.dart';
 
@@ -47,5 +48,22 @@ void main() {
 
   test("结果为空：判定未完成", () {
     expect(DouyinGuestVerifyController.parseVerified(null, webRid), isFalse);
+  });
+
+  group("buildSettings 桌面标识", () {
+    final controller = DouyinGuestVerifyController();
+
+    test("UA 固定为 Windows Chrome，避免移动端下发移动验证页", () {
+      final settings = controller.buildSettings();
+      expect(settings.userAgent, isNotNull);
+      expect(settings.userAgent!, contains("Windows NT 10.0"));
+      expect(settings.userAgent!, isNot(contains("Android")));
+      expect(settings.userAgent!, isNot(contains("Mobile")));
+    });
+
+    test("请求桌面版内容模式", () {
+      final settings = controller.buildSettings();
+      expect(settings.preferredContentMode, UserPreferredContentMode.DESKTOP);
+    });
   });
 }
