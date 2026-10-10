@@ -143,20 +143,17 @@ class DouyinSite implements LiveSite {
       header: await getRequestHeaders(),
     );
 
-    var renderData =
-        RegExp(
-          r'\{\\"pathname\\":\\"\/\\",\\"categoryData.*?\]\\n',
-        ).firstMatch(result)?.group(0) ??
-        "";
-    var renderDataJson = json.decode(
-      renderData
-          .trim()
-          .replaceAll('\\"', '"')
-          .replaceAll(r"\\", r"\")
-          .replaceAll(']\\n', ""),
-    );
+    // 抖音把分区数据内嵌在首页 RSC（React Flight）负载的 JS 转义字符串里。
+    // 旧实现以 \]\n 行尾正则截取，但当前负载中该数组结尾是 ]}，正则会越过
+    // 数组边界继续抓到后面的 \]\n，反转义后 JSON 解码报 Extra data，分区为空。
+    // 这里从 categoryData 的 [ 做括号配对取出数组，再解码。
+    var rawArray = _extractCategoryDataArray(result);
+    if (rawArray == null) {
+      throw CoreError("无法获取抖音分区数据");
+    }
+    var categoryList = json.decode(_unescapeJsString(rawArray)) as List;
 
-    for (var item in renderDataJson["categoryData"]) {
+    for (var item in categoryList) {
       List<LiveSubCategory> subs = [];
       var id = '${item["partition"]["id_str"]},${item["partition"]["type"]}';
       for (var subItem in item["sub_partition"]) {
@@ -186,6 +183,84 @@ class DouyinSite implements LiveSite {
       categories.add(category);
     }
     return categories;
+  }
+
+  /// 从首页 RSC 负载原文中括号配对提取 categoryData 数组（仍为 JS 转义态）。
+  /// 以 \" 作为字符串分界跳过字符串内容，避免把标题里的括号误判为结构括号。
+  String? _extractCategoryDataArray(String html) {
+    var markerIndex = html.indexOf("categoryData");
+    if (markerIndex < 0) {
+      return null;
+    }
+    var open = html.indexOf("[", markerIndex);
+    if (open < 0) {
+      return null;
+    }
+    var depth = 0;
+    var inString = false;
+    for (var i = open; i < html.length; i++) {
+      var c = html[i];
+      if (c == r'\' && i + 1 < html.length) {
+        if (html[i + 1] == '"') {
+          inString = !inString;
+        }
+        i++;
+        continue;
+      }
+      if (c == '"') {
+        inString = !inString;
+        continue;
+      }
+      if (inString) {
+        continue;
+      }
+      if (c == '[') {
+        depth++;
+      } else if (c == ']') {
+        depth--;
+        if (depth == 0) {
+          return html.substring(open, i + 1);
+        }
+      }
+    }
+    return null;
+  }
+
+  /// 解码外层 JS 字符串转义（\" \\ \n \t \r \/ 等）
+  String _unescapeJsString(String s) {
+    final buffer = StringBuffer();
+    for (var i = 0; i < s.length; i++) {
+      var c = s[i];
+      if (c == r'\' && i + 1 < s.length) {
+        var next = s[i + 1];
+        switch (next) {
+          case '"':
+            buffer.write('"');
+            break;
+          case r'\':
+            buffer.write(r'\');
+            break;
+          case 'n':
+            buffer.write('\n');
+            break;
+          case 't':
+            buffer.write('\t');
+            break;
+          case 'r':
+            buffer.write('\r');
+            break;
+          case '/':
+            buffer.write('/');
+            break;
+          default:
+            buffer.write(next);
+        }
+        i++;
+      } else {
+        buffer.write(c);
+      }
+    }
+    return buffer.toString();
   }
 
   @override

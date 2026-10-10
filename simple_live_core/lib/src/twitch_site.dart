@@ -50,6 +50,8 @@ class TwitchSite implements LiveSite {
         "Client-ID": kWebClientId,
         "X-Device-Id": _deviceId,
         "Content-Type": "application/json",
+        // 让 game.displayName 等返回简体中文本地化文案
+        "Accept-Language": "zh-CN",
       };
 
   Map<String, String> get _helixHeader => {
@@ -104,7 +106,16 @@ class TwitchSite implements LiveSite {
 
   @override
   Future<List<LiveCategory>> getCategores() async {
-    return useHelix ? _helixCategories() : _gqlCategories();
+    // 只有 GQL 的 game.displayName 提供中文本地化，优先走 GQL；
+    // GQL 被 Twitch 限制（IntegrityCheckFailed）且配置了用户令牌时降级 Helix（英文）
+    try {
+      return await _gqlCategories();
+    } catch (_) {
+      if (!useHelix) {
+        rethrow;
+      }
+      return _helixCategories();
+    }
   }
 
   Future<List<LiveCategory>> _gqlCategories() async {
@@ -112,7 +123,7 @@ class TwitchSite implements LiveSite {
       r"""
       query {
         games(first: 100) {
-          edges { node { id name boxArtURL } }
+          edges { node { id name displayName boxArtURL } }
         }
       }
       """,
@@ -123,9 +134,15 @@ class TwitchSite implements LiveSite {
           .map((e) => e["node"] as Map<String, dynamic>)
           .toList(),
       (g) => g["id"].toString(),
-      (g) => g["name"].toString(),
+      (g) => _localizedGameName(g),
       (g) => imageSize(g["boxArtURL"].toString(), 100, 100),
     )];
+  }
+
+  /// 优先 displayName（本地化名），无翻译时回退 name（英文）
+  String _localizedGameName(Map<String, dynamic> g) {
+    var displayName = g["displayName"]?.toString() ?? "";
+    return displayName.isNotEmpty ? displayName : g["name"].toString();
   }
 
   Future<List<LiveCategory>> _helixCategories() async {
@@ -232,7 +249,7 @@ class TwitchSite implements LiveSite {
           edges {
             cursor
             node {
-              title viewersCount previewImageURL
+              title viewersCount previewImageURL language
               broadcaster { login displayName profileImageURL(width: 150) }
             }
           }
@@ -246,7 +263,12 @@ class TwitchSite implements LiveSite {
     if (edges.isNotEmpty) {
       _recommendCursor = edges.last["cursor"].toString();
     }
-    var items = edges
+    // 游标取排序前的最后一条；排序仅影响本页展示顺序
+    var ordered = _zhFirst(
+      edges.cast<Map<String, dynamic>>(),
+      (e) => (e["node"] as Map)["language"]?.toString() ?? "",
+    );
+    var items = ordered
         .map((e) => _gqlRoomItem(e["node"] as Map<String, dynamic>))
         .toList();
     return LiveCategoryResult(
@@ -270,12 +292,28 @@ class TwitchSite implements LiveSite {
     if (cursor != null) {
       _recommendCursor = cursor;
     }
+    var ordered = _zhFirst(
+      list.cast<Map<String, dynamic>>(),
+      (s) => s["language"]?.toString() ?? "",
+    );
     return LiveCategoryResult(
       hasMore: cursor != null && list.length >= 30,
-      items: list
-          .map((e) => _helixRoomItem(e as Map<String, dynamic>))
-          .toList(),
+      items: ordered.map((e) => _helixRoomItem(e)).toList(),
     );
+  }
+
+  /// 中文直播间（language 为 zh；GQL 用大写码、Helix 用小写码）稳定排到
+  /// 本页最前，其余项保持各自原有相对顺序
+  List<Map<String, dynamic>> _zhFirst(
+    List<Map<String, dynamic>> items,
+    String Function(Map<String, dynamic>) langOf,
+  ) {
+    final zh = <Map<String, dynamic>>[];
+    final others = <Map<String, dynamic>>[];
+    for (final item in items) {
+      (langOf(item).toLowerCase() == "zh" ? zh : others).add(item);
+    }
+    return zh..addAll(others);
   }
 
   LiveCategoryResult _buildStreamResult(

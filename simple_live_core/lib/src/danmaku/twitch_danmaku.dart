@@ -263,6 +263,15 @@ class TwitchDanmaku extends LiveDanmaku {
     }
     var safeMessage = truncateIrcMessage(sanitizeIrcMessage(message));
     _send("PRIVMSG #${danmakuArgs.channel} :$safeMessage");
+    // Twitch IRC 不回显自己的 PRIVMSG（仅返回不含文本的 USERSTATE），
+    // 故发送成功后经 onMessage 本地补显，否则自己看不到已发出的弹幕
+    onMessage?.call(LiveMessage(
+      type: LiveMessageType.chat,
+      userName: danmakuArgs.userLogin,
+      message: safeMessage,
+      color: LiveMessageColor.white,
+      isSelf: true,
+    ));
     return DanmakuSendResult(success: true);
   }
 
