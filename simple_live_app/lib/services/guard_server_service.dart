@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 import 'package:get/get.dart';
 import 'package:simple_live_core/simple_live_core.dart'
     show DouyinGuestVerifyRequired, DouyinLoginRequired, DouyinRiskControl;
@@ -23,6 +24,10 @@ class GuardServerService extends GetxService {
   }
 
   bool get configured => serverUrl.trim().isNotEmpty;
+
+  /// /api/send、/api/action 等待响应上限：冷启动进房正常约 10s，服务端更久无响应即判失败
+  @visibleForTesting
+  Duration requestReceiveTimeout = const Duration(seconds: 60);
 
   Future<void> setConfig(String url, String token) async {
     serverUrl = url.trim();
@@ -138,7 +143,7 @@ class GuardServerService extends GetxService {
     required String content,
     Map<String, dynamic>? extra,
   }) async {
-    final dio = Dio(BaseOptions(baseUrl: serverUrl, connectTimeout: const Duration(seconds: 30)));
+    final dio = Dio(BaseOptions(baseUrl: serverUrl, connectTimeout: const Duration(seconds: 30), receiveTimeout: requestReceiveTimeout));
     final res = await dio.post<dynamic>(
       "/api/send",
       data: {
@@ -160,7 +165,7 @@ class GuardServerService extends GetxService {
     String webRid = "",
     required String action,
   }) async {
-    final dio = Dio(BaseOptions(baseUrl: serverUrl, connectTimeout: const Duration(seconds: 30)));
+    final dio = Dio(BaseOptions(baseUrl: serverUrl, connectTimeout: const Duration(seconds: 30), receiveTimeout: requestReceiveTimeout));
     final res = await dio.post<dynamic>(
       "/api/action",
       data: {
