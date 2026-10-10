@@ -57,17 +57,36 @@ class DouyinGuestVerifyController extends GetxController {
         environment = null;
       }
     }
-    await clearCookies();
+    // 清 cookie 兜底在资源紧张/残留进程时同样可能无限挂起；必须限时，
+    // 超时也继续展示页面，否则 prepared 永不为 true、验证页只剩转圈
+    await clearCookies().timeout(const Duration(seconds: 10), onTimeout: () {
+      Log.logPrint("清 cookie 整体超时，直接展示验证页");
+    });
   }
 
   Future<void> clearCookies() async {
     usedClearFallback = true;
     final cm = CookieManager.instance();
-    savedCookies = await cm.getCookies(url: roomUrl);
-    // host-only cookie：删除指令不带 Domain
-    await cm.deleteCookies(url: roomUrl);
-    // Domain=.douyin.com 的域 cookie
-    await cm.deleteCookies(url: roomUrl, domain: ".douyin.com");
+    try {
+      savedCookies = await cm
+          .getCookies(url: roomUrl)
+          .timeout(const Duration(seconds: 4));
+    } catch (e) {
+      Log.logPrint("读取待清理 cookie 失败/超时：$e");
+      savedCookies = [];
+    }
+    try {
+      // host-only cookie：删除指令不带 Domain
+      await cm
+          .deleteCookies(url: roomUrl)
+          .timeout(const Duration(seconds: 4));
+      // Domain=.douyin.com 的域 cookie
+      await cm
+          .deleteCookies(url: roomUrl, domain: ".douyin.com")
+          .timeout(const Duration(seconds: 4));
+    } catch (e) {
+      Log.logPrint("删除 cookie 失败/超时：$e");
+    }
   }
 
   InAppWebViewSettings buildSettings() => InAppWebViewSettings(
