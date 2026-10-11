@@ -126,18 +126,17 @@ class DouyinGuestVerifyController extends GetxController {
   }
 
   /// 页面探针：只报原始字段，判定全部在 Dart 侧（便于单测）。
-  /// 白屏文档特征是 readyState 未完成或正文极短；不能依赖开播房间专属节点
-  /// （RENDER_DATA/room_id 等），否则未开播房间（无这些节点）会被误判成白屏。
+  /// 只采集通用信号：readyState、title、path、验证码控件。不能采集「正文
+  /// 长度」判白屏——抖音滑动验证码是 canvas 渲染，innerText 极短是验证页的
+  /// 正常形态，正文长短无法与真白屏区分，会误伤验证页。
   static const String probeScript = r'''
 (function(){
   try {
     var body = document.body;
-    var text = (body && body.innerText || '').replace(/\s+/g,'');
     return JSON.stringify({
       ready: document.readyState,
       title: document.title,
       path: location.pathname,
-      bodyLen: text.length,
       hasCaptcha: !!document.querySelector(".secsdk-captcha-drag-icon,[class*=captcha],[id*=captcha]") ||
         /请完成验证|滑动验证|点击按钮完成验证/.test((body && body.innerText) || "")
     });
@@ -172,25 +171,22 @@ class DouyinGuestVerifyController extends GetxController {
     }
   }
 
-  /// 白屏判定：文档未加载完，或加载完却几乎没有正文（空壳文档）。
-  /// 开播/未开播房间渲染后都有足量正文，验证码中间页也有文案，只有白屏文档
-  /// 正文极短。不依赖任何房间专属 DOM 节点（开播与未开播页面节点不同）。
+  /// 白屏判定：仅看文档是否真的加载完（readyState=complete）。不再用正文长度——
+  /// canvas 验证码页正文极短是正常形态，正文长短区分不了验证页与白屏。
   @visibleForTesting
   static bool isBlankPage(Map<String, dynamic> info) {
-    if (info["ready"] != "complete") return true;
-    final bodyLen = (info["bodyLen"] as num?)?.toInt() ?? 0;
-    return bodyLen < 20;
+    return info["ready"] != "complete";
   }
 
   /// 验证完成判据：路径落在目标房间、不是验证码中间页、验证码控件消失、
-  /// 且文档确实渲染出内容（非白屏：readyState=complete 且正文非空）。
-  /// 只认通用信号，不要求 video 或房间节点——未开播房间两者都可能没有。
+  /// 且文档加载完成。只认通用信号，不要求 video / 房间节点 / 正文长度——
+  /// 未开播房间与 canvas 验证码页都会因这些附加条件被误判。
   @visibleForTesting
   static bool isVerified(Map<String, dynamic> info, String webRid) {
     return info["path"] == "/$webRid" &&
         info["title"] != "验证码中间页" &&
         info["hasCaptcha"] != true &&
-        !isBlankPage(info);
+        info["ready"] == "complete";
   }
 
   static bool parseVerified(String? result, String webRid) {

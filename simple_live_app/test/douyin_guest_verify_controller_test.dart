@@ -8,14 +8,12 @@ String pageInfo({
   String ready = "complete",
   String title = "主播的直播间",
   String path = "/30000000000",
-  int bodyLen = 100,
   bool hasCaptcha = false,
 }) {
   return jsonEncode({
     "ready": ready,
     "title": title,
     "path": path,
-    "bodyLen": bodyLen,
     "hasCaptcha": hasCaptcha,
   });
 }
@@ -23,13 +21,13 @@ String pageInfo({
 void main() {
   const webRid = "30000000000";
 
-  test("开播房间：文档加载完、正文充足、无验证码，判定完成", () {
+  test("开播房间：文档加载完、无验证码，判定完成", () {
     final result = pageInfo();
     expect(DouyinGuestVerifyController.parseVerified(result, webRid), isTrue);
   });
 
-  test("未开播房间：无视频/房间节点但有未开播提示文案，仍判定完成", () {
-    final result = pageInfo(bodyLen: 30);
+  test("未开播房间：无视频/房间节点，文档加载完即判定完成", () {
+    final result = pageInfo();
     expect(DouyinGuestVerifyController.parseVerified(result, webRid), isTrue);
   });
 
@@ -53,24 +51,8 @@ void main() {
   });
 
   test("白屏：document 仍在加载（readyState 非 complete），判定未完成", () {
-    final result = pageInfo(ready: "interactive", bodyLen: 0);
+    final result = pageInfo(ready: "interactive");
     expect(DouyinGuestVerifyController.parseVerified(result, webRid), isFalse);
-  });
-
-  test("白屏：加载结束但正文为空壳，判定未完成", () {
-    final result = pageInfo(ready: "complete", bodyLen: 0);
-    expect(DouyinGuestVerifyController.parseVerified(result, webRid), isFalse);
-  });
-
-  test("正文长度边界：低于阈值判白屏，达到阈值判完成", () {
-    expect(
-      DouyinGuestVerifyController.parseVerified(pageInfo(bodyLen: 19), webRid),
-      isFalse,
-    );
-    expect(
-      DouyinGuestVerifyController.parseVerified(pageInfo(bodyLen: 20), webRid),
-      isTrue,
-    );
   });
 
   test("损坏 JSON：判定未完成而非抛异常", () {
@@ -81,9 +63,8 @@ void main() {
   });
 
   group("isBlankPage", () {
-    Map<String, dynamic> infoOf({String ready = "complete", int bodyLen = 100}) {
-      return jsonDecode(pageInfo(ready: ready, bodyLen: bodyLen))
-          as Map<String, dynamic>;
+    Map<String, dynamic> infoOf({String ready = "complete"}) {
+      return jsonDecode(pageInfo(ready: ready)) as Map<String, dynamic>;
     }
 
     test("readyState 非 complete 视为空白", () {
@@ -93,17 +74,10 @@ void main() {
       );
     });
 
-    test("complete 且正文达到阈值即非空白（不依赖房间 DOM 节点）", () {
+    test("readyState complete 即非空白（正文长短不参与判定）", () {
       expect(
-        DouyinGuestVerifyController.isBlankPage(infoOf(bodyLen: 20)),
+        DouyinGuestVerifyController.isBlankPage(infoOf(ready: "complete")),
         isFalse,
-      );
-    });
-
-    test("complete 但正文过短视为空白", () {
-      expect(
-        DouyinGuestVerifyController.isBlankPage(infoOf(bodyLen: 5)),
-        isTrue,
       );
     });
   });
@@ -112,25 +86,18 @@ void main() {
     Map<String, dynamic> infoOf({
       String title = "主播的直播间",
       String path = "/30000000000",
-      int bodyLen = 0,
       bool hasCaptcha = false,
     }) {
       return jsonDecode(pageInfo(
         title: title,
         path: path,
-        bodyLen: bodyLen,
         hasCaptcha: hasCaptcha,
       )) as Map<String, dynamic>;
     }
 
-    test("开播/未开播甚至空正文都放行：用户主动点击，交由服务端实测", () {
+    test("开播/未开播都放行：用户主动点击，交由服务端实测", () {
       expect(
         DouyinGuestVerifyController.canManualSubmit(infoOf(), webRid),
-        isTrue,
-      );
-      expect(
-        DouyinGuestVerifyController.canManualSubmit(
-            infoOf(bodyLen: 0), webRid),
         isTrue,
       );
     });
@@ -163,7 +130,6 @@ void main() {
   test("probeScript 读取完成判据所需的全部字段", () {
     const script = DouyinGuestVerifyController.probeScript;
     expect(script, contains("readyState"));
-    expect(script, contains("bodyLen"));
     expect(script, contains("hasCaptcha"));
   });
 
