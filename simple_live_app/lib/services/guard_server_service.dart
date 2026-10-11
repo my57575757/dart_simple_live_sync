@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
@@ -420,6 +421,139 @@ class GuardServerService extends GetxService {
     }
   }
 
+  // ===== 远程滑块验证会话（用户在 guard 自己的浏览器里滑，App 看截图回传轨迹）=====
+
+  Future<DouyinVerifySession> startVerifySession(String webRid) async {
+    final dio = Dio(BaseOptions(
+      baseUrl: serverUrl,
+      connectTimeout: const Duration(seconds: 10),
+      // 真导航 + 等 DCL，guard 浏览器冷启动时给足
+      receiveTimeout: const Duration(seconds: 60),
+    ));
+    final res = await dio.post<dynamic>(
+      "/api/verify/session",
+      data: {"webRid": webRid},
+      options: _options,
+    );
+    final data = _unwrapVerifyEnvelope(res.data);
+    return DouyinVerifySession.fromJson(data);
+  }
+
+  Future<DouyinVerifyStatus> verifySessionStatus(String sessionId) async {
+    final dio = Dio(BaseOptions(
+      baseUrl: serverUrl,
+      connectTimeout: const Duration(seconds: 8),
+      receiveTimeout: const Duration(seconds: 15),
+    ));
+    final res = await dio.get<dynamic>(
+      "/api/verify/session/${Uri.encodeComponent(sessionId)}/status",
+      options: _options,
+    );
+    return DouyinVerifyStatus.fromJson(_unwrapVerifyEnvelope(res.data));
+  }
+
+  /// 拉一帧 JPEG。410=会话已结束（看 message/reason），503=画面暂不可用（可继续重试）
+  Future<VerifyFrame> verifySessionFrame(String sessionId) async {
+    final dio = Dio(BaseOptions(
+      baseUrl: serverUrl,
+      connectTimeout: const Duration(seconds: 8),
+      receiveTimeout: const Duration(seconds: 20),
+      responseType: ResponseType.bytes,
+    ));
+    try {
+      final res = await dio.get<List<int>>(
+        "/api/verify/session/${Uri.encodeComponent(sessionId)}/frame",
+        options: _options,
+      );
+      final headers = res.headers.map.map(
+        (k, v) => MapEntry(k.toLowerCase(), v),
+      );
+      String firstHeader(String name) =>
+          (headers[name]?.isNotEmpty ?? false) ? headers[name]!.first : "";
+      return VerifyFrame(
+        bytes: Uint8List.fromList(res.data ?? const <int>[]),
+        seq: int.tryParse(firstHeader("x-frame-seq")) ?? 0,
+        state: firstHeader("x-session-state"),
+      );
+    } on DioException catch (e) {
+      throw VerifySessionHttpException(
+        status: e.response?.statusCode ?? 0,
+        message: _verifyErrorMessage(e.response?.data) ?? "画面获取失败",
+      );
+    }
+  }
+
+  Future<int> sendVerifyEvents(
+    String sessionId,
+    List<VerifyPointerEvent> events,
+  ) async {
+    if (events.isEmpty) return 0;
+    final dio = Dio(BaseOptions(
+      baseUrl: serverUrl,
+      connectTimeout: const Duration(seconds: 8),
+      receiveTimeout: const Duration(seconds: 15),
+    ));
+    final res = await dio.post<dynamic>(
+      "/api/verify/session/${Uri.encodeComponent(sessionId)}/events",
+      data: {
+        "events": events.map((e) => e.toJson()).toList(),
+      },
+      options: _options,
+    );
+    final data = _unwrapVerifyEnvelope(res.data);
+    return (data["applied"] as num?)?.toInt() ?? 0;
+  }
+
+  Future<void> reloadVerifySession(String sessionId) =>
+      _verifyPost(sessionId, "reload");
+
+  Future<void> cancelVerifySession(String sessionId) =>
+      _verifyPost(sessionId, "cancel");
+
+  Future<void> _verifyPost(String sessionId, String action) async {
+    final dio = Dio(BaseOptions(
+      baseUrl: serverUrl,
+      connectTimeout: const Duration(seconds: 8),
+      receiveTimeout: const Duration(seconds: 20),
+    ));
+    try {
+      final res = await dio.post<dynamic>(
+        "/api/verify/session/${Uri.encodeComponent(sessionId)}/$action",
+        options: _options,
+      );
+      _unwrapVerifyEnvelope(res.data);
+    } on DioException catch (e) {
+      // 410（会话已结束）对 cancel 无意义，对 reload 向上抛给 UI 提示
+      throw Exception(_verifyErrorMessage(e.response?.data) ?? "操作失败");
+    }
+  }
+
+  Map<String, dynamic> _unwrapVerifyEnvelope(dynamic body) {
+    final map = body is Map
+        ? Map<String, dynamic>.from(body)
+        : const <String, dynamic>{};
+    if (map["code"] != 0) {
+      throw Exception(map["message"]?.toString() ?? "验证服务异常");
+    }
+    return Map<String, dynamic>.from(map["data"] as Map? ?? const {});
+  }
+
+  /// 二进制响应失败时，body 是 JSON 信封字节（也可能已被解码成字符串/Map）
+  String? _verifyErrorMessage(dynamic body) {
+    try {
+      dynamic decoded = body;
+      if (body is List<int>) {
+        decoded = json.decode(utf8.decode(body));
+      } else if (body is String) {
+        decoded = json.decode(body);
+      }
+      if (decoded is Map && decoded["message"] != null) {
+        return decoded["message"].toString();
+      }
+    } catch (_) {}
+    return null;
+  }
+
   Future<Map<String, dynamic>> heartbeat({    required String accountId,
     required String roomId,
     String webRid = "",
@@ -465,4 +599,137 @@ class GuardServerService extends GetxService {
       options: _options,
     );
   }
+}
+
+/// POST /api/verify/session 返回：会话 id 与画面/节流参数
+class DouyinVerifySession {
+  final String sessionId;
+  final String webRid;
+  final bool adopted;
+  final int ttlMs;
+  final int viewWidth;
+  final int viewHeight;
+  final int minFrameMs;
+
+  const DouyinVerifySession({
+    required this.sessionId,
+    required this.webRid,
+    required this.adopted,
+    required this.ttlMs,
+    required this.viewWidth,
+    required this.viewHeight,
+    required this.minFrameMs,
+  });
+
+  factory DouyinVerifySession.fromJson(Map<String, dynamic> json) {
+    final viewport = json["viewport"] is Map
+        ? Map<String, dynamic>.from(json["viewport"] as Map)
+        : const <String, dynamic>{};
+    return DouyinVerifySession(
+      sessionId: json["sessionId"]?.toString() ?? "",
+      webRid: json["webRid"]?.toString() ?? "",
+      adopted: json["adopted"] == true,
+      ttlMs: (json["ttlMs"] as num?)?.toInt() ?? 300000,
+      viewWidth: (viewport["width"] as num?)?.toInt() ?? 1280,
+      viewHeight: (viewport["height"] as num?)?.toInt() ?? 800,
+      minFrameMs: (json["minFrameMs"] as num?)?.toInt() ?? 150,
+    );
+  }
+}
+
+class DouyinVerifyStatus {
+  /// starting / active / verifying / verified / closed
+  final String state;
+
+  /// loading / captcha / interactive
+  final String phase;
+  final String webRid;
+  final String url;
+  final String title;
+  final int remainingMs;
+
+  /// canceled / expired / browser_disconnected / page_crashed /
+  /// load_failed / verify_rejected / self_check_busy
+  final String reason;
+
+  const DouyinVerifyStatus({
+    required this.state,
+    required this.phase,
+    required this.webRid,
+    required this.url,
+    required this.title,
+    required this.remainingMs,
+    required this.reason,
+  });
+
+  bool get isVerified => state == "verified";
+  bool get isClosed => state == "closed";
+  bool get isVerifying => state == "verifying";
+
+  factory DouyinVerifyStatus.fromJson(Map<String, dynamic> json) {
+    return DouyinVerifyStatus(
+      state: json["state"]?.toString() ?? "active",
+      phase: json["phase"]?.toString() ?? "loading",
+      webRid: json["webRid"]?.toString() ?? "",
+      url: json["url"]?.toString() ?? "",
+      title: json["title"]?.toString() ?? "",
+      remainingMs: (json["remainingMs"] as num?)?.toInt() ?? 0,
+      reason: json["reason"]?.toString() ?? "",
+    );
+  }
+}
+
+class VerifyFrame {
+  final Uint8List bytes;
+  final int seq;
+  final String state;
+
+  const VerifyFrame({
+    required this.bytes,
+    required this.seq,
+    required this.state,
+  });
+
+  bool get isEmpty => bytes.isEmpty;
+}
+
+/// 帧请求失败：410 会话终态、503 画面暂不可用、0 网络错误
+class VerifySessionHttpException implements Exception {
+  final int status;
+  final String message;
+
+  VerifySessionHttpException({required this.status, required this.message});
+
+  bool get isClosed => status == 410;
+  bool get isBusy => status == 503;
+
+  @override
+  String toString() => message;
+}
+
+/// 转发给 guard 浏览器的单个指针事件。坐标系为 guard 视口像素
+/// （1280x800），由控制器从本地显示坐标线性换算后填入。
+class VerifyPointerEvent {
+  /// down / up / move / wheel
+  final String type;
+  final double x;
+  final double y;
+  final double dx;
+  final double dy;
+
+  const VerifyPointerEvent(
+    this.type, {
+    required this.x,
+    required this.y,
+    this.dx = 0,
+    this.dy = 0,
+  });
+
+  Map<String, dynamic> toJson() => {
+        "type": type,
+        "x": x,
+        "y": y,
+        if (type == "wheel") "dx": dx,
+        if (type == "wheel") "dy": dy,
+      };
 }

@@ -1,396 +1,405 @@
 import 'dart:async';
-import 'dart:convert';
-import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
-import 'package:flutter_inappwebview/flutter_inappwebview.dart';
-import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:get/get.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:simple_live_app/app/log.dart';
 import 'package:simple_live_app/services/guard_server_service.dart';
 
+/// 远程滑块验证：guard 在它自己的 anonymous Chrome（与取房同一持久 profile、
+/// 同一 cookie jar、同一 IP）里打开真实房间页，本页只显示 JPEG 截图并把指针
+/// 轨迹回传。滑块通过后 trust 天然落在取房浏览器内，由 guard 自验取房成功
+/// 才置 verified——不再有「本地浏览器滑、guard 换指纹重放 cookie」的错配。
 class DouyinGuestVerifyController extends GetxController {
-  // 验证 webview 固定用桌面 UA：移动端默认 UA 会被抖音识别为手机、下发移动版
-  // 验证页；guard 本身是桌面 Chrome，桌面页验证得到的设备令牌也与其一致。
-  static const String desktopUserAgent =
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36";
+  DouyinGuestVerifyController({GuardServerService? guard})
+      : _guard = guard ?? GuardServerService.instance;
+
+  final GuardServerService _guard;
 
   late final String webRid;
-  InAppWebViewController? webController;
 
-  final ready = false.obs;
-  final submitting = false.obs;
-  // 页面空白（WebView2 渲染层白屏 / 文档未加载完）：驱动自动重载与覆盖层出口
-  final blank = false.obs;
+  String _sessionId = "";
+  int _viewWidth = 1280;
+  int _viewHeight = 800;
 
-  WebViewEnvironment? environment;
-  List<Cookie> savedCookies = [];
-  bool usedClearFallback = false;
-  bool finished = false;
-  bool canceled = false;
+  final Rx<Uint8List?> frame = Rx<Uint8List?>(null);
+  final RxString state = "starting".obs;
+  final RxString phase = "loading".obs;
+  final RxString reason = "".obs;
+  final RxInt remainingMs = 0.obs;
 
-  int _reloadCount = 0;
-  Timer? _watchdog;
-  Timer? _pollTimer;
-  bool _pollInFlight = false;
+  /// 启动会话/首帧前的加载态
+  final RxBool starting = true.obs;
+  /// 会话打开失败 / expired / 浏览器断连等终态，展示「重新开始 / 取消」
+  final RxString fatalMessage = "".obs;
+  /// 连续拉帧失败：画面中断但会话可能仍在，展示重试入口
+  final RxBool frameBroken = false.obs;
+  /// 拖动时本地跟手圆点（缓解 ~300ms 画面延迟）
+  final Rx<OffsetLite?> finger = Rx<OffsetLite?>(null);
 
-  static const int _maxAutoReloads = 2;
-  // 滑块成功若是页内（SPA）跳转，WebView2 不一定再触发 onLoadStop；
-  // 用有界周期探测兜底，滑完即自动提交，不依赖用户再点「完成验证」。
-  static const Duration _pollInterval = Duration(milliseconds: 1500);
+  Timer? _frameTimer;
+  Timer? _statusTimer;
+  Timer? _moveFlushTimer;
+  bool _frameInFlight = false;
+  bool _statusInFlight = false;
+  bool _closed = false;
+  bool _succeeded = false;
+  int _lastSeq = 0;
+  int _frameFailures = 0;
+  int _sessionEpoch = 0;
 
-  WebUri get roomUrl => WebUri("https://live.douyin.com/$webRid");
+  static const Duration _frameInterval = Duration(milliseconds: 160);
+  static const Duration _statusInterval = Duration(seconds: 1);
+  static const Duration _moveFlushInterval = Duration(milliseconds: 66);
+  static const int _maxFrameFailures = 8;
+  static const int _moveCap = 40;
+  static const int _serverEventCap = 60;
+
+  final List<VerifyPointerEvent> _moves = [];
+  Future<void> _sendChain = Future.value();
+
+  String get sessionId => _sessionId;
+  int get viewWidth => _viewWidth;
+  int get viewHeight => _viewHeight;
+  bool get isVerifying => state.value == "verifying";
+  bool get hasFrame => frame.value != null && frame.value!.isNotEmpty;
 
   @override
   void onInit() {
     super.onInit();
     webRid = Get.arguments.toString();
+    startSession();
   }
 
-  Future<void> setupIsolation() async {
-    if (Platform.isWindows) {
-      try {
-        final support = await getApplicationSupportDirectory();
-        final folder =
-            "${support.path}${Platform.pathSeparator}guest_verify_env";
-        // Windows 平台线程上 create 偶发无限挂起（残留进程/资源压力时），
-        // 必须有超时：否则验证页永久转圈且无任何出口
-        environment = await WebViewEnvironment.create(
-          settings: WebViewEnvironmentSettings(userDataFolder: folder),
-        ).timeout(const Duration(seconds: 10));
-        if (canceled) {
-          await environment?.dispose().catchError((_) {});
-          environment = null;
-          return;
-        }
-        return;
-      } catch (e) {
-        Log.logPrint("Windows 独立环境创建失败/超时，改走清 cookie：$e");
-        environment = null;
+  Future<void> startSession() async {
+    final epoch = ++_sessionEpoch;
+    starting.value = true;
+    fatalMessage.value = "";
+    frameBroken.value = false;
+    frame.value = null;
+    state.value = "starting";
+    phase.value = "loading";
+    reason.value = "";
+    _lastSeq = 0;
+    _frameFailures = 0;
+    _moves.clear();
+    _stopLoops();
+
+    DouyinVerifySession session;
+    try {
+      session = await _guard.startVerifySession(webRid);
+    } catch (e) {
+      if (epoch != _sessionEpoch || _closed) return;
+      Log.logPrint("打开远程验证会话失败：$e");
+      state.value = "closed";
+      reason.value = "load_failed";
+      fatalMessage.value = _friendlyError(e);
+      starting.value = false;
+      return;
+    }
+    if (epoch != _sessionEpoch || _closed) return;
+
+    _sessionId = session.sessionId;
+    _viewWidth = session.viewWidth;
+    _viewHeight = session.viewHeight;
+    state.value = "active";
+    starting.value = false;
+
+    _frameTimer = Timer.periodic(_frameInterval, (_) => _pullFrame(epoch));
+    _statusTimer = Timer.periodic(_statusInterval, (_) => _pullStatus(epoch));
+    _moveFlushTimer = Timer.periodic(_moveFlushInterval, (_) => _flushMoves());
+    // 立刻拉首帧，不必等第一个周期
+    unawaited(_pullFrame(epoch));
+    unawaited(_pullStatus(epoch));
+  }
+
+  Future<void> _pullFrame(int epoch) async {
+    if (_frameInFlight || _closed || _sessionId.isEmpty) return;
+    _frameInFlight = true;
+    try {
+      final f = await _guard.verifySessionFrame(_sessionId);
+      if (epoch != _sessionEpoch || _closed) return;
+      if (!f.isEmpty && f.seq != _lastSeq) {
+        _lastSeq = f.seq;
+        frame.value = f.bytes;
       }
-    }
-    // 清 cookie 兜底在资源紧张/残留进程时同样可能无限挂起；必须限时，
-    // 超时也继续展示页面，否则 prepared 永不为 true、验证页只剩转圈
-    await clearCookies().timeout(const Duration(seconds: 10), onTimeout: () {
-      Log.logPrint("清 cookie 整体超时，直接展示验证页");
-    });
-  }
-
-  Future<void> clearCookies() async {
-    usedClearFallback = true;
-    final cm = CookieManager.instance();
-    try {
-      savedCookies = await cm
-          .getCookies(url: roomUrl)
-          .timeout(const Duration(seconds: 4));
+      _frameFailures = 0;
+      frameBroken.value = false;
+      if (f.state.isNotEmpty && f.state != state.value) {
+        state.value = f.state;
+      }
     } catch (e) {
-      Log.logPrint("读取待清理 cookie 失败/超时：$e");
-      savedCookies = [];
-    }
-    try {
-      // host-only cookie：删除指令不带 Domain
-      await cm
-          .deleteCookies(url: roomUrl)
-          .timeout(const Duration(seconds: 4));
-      // Domain=.douyin.com 的域 cookie
-      await cm
-          .deleteCookies(url: roomUrl, domain: ".douyin.com")
-          .timeout(const Duration(seconds: 4));
-    } catch (e) {
-      Log.logPrint("删除 cookie 失败/超时：$e");
-    }
-  }
-
-  InAppWebViewSettings buildSettings() => InAppWebViewSettings(
-        mediaPlaybackRequiresUserGesture: false,
-        javaScriptEnabled: true,
-        userAgent: desktopUserAgent,
-        preferredContentMode: UserPreferredContentMode.DESKTOP,
-      );
-
-  void onWebViewCreated(InAppWebViewController c) {
-    webController = c;
-    _armWatchdog();
-    _startVerifiedPoll();
-  }
-
-  /// 有界探测滑块完成：onLoadStop 在 SPA 页内跳转时可能不再触发。
-  /// 仅做「已验证」识别，空白/重载仍交给 onLoadStop + 看门狗，避免两套逻辑打架。
-  void _startVerifiedPoll() {
-    _pollTimer?.cancel();
-    _pollTimer = Timer.periodic(_pollInterval, (_) async {
-      if (finished ||
-          canceled ||
-          ready.value ||
-          submitting.value ||
-          _pollInFlight) {
+      if (epoch != _sessionEpoch || _closed) return;
+      if (e is VerifySessionHttpException && e.isClosed) {
+        // 终态交给 status 循环收口，帧循环静默
         return;
       }
-      _pollInFlight = true;
-      try {
-        final info = await probePageInfo();
-        if (info == null ||
-            finished ||
-            canceled ||
-            ready.value ||
-            submitting.value) {
-          return;
-        }
-        if (isVerified(info, webRid)) {
-          blank.value = false;
-          ready.value = true;
-          _watchdog?.cancel();
-          await submit();
-        }
-      } finally {
-        _pollInFlight = false;
+      _frameFailures++;
+      if (_frameFailures >= _maxFrameFailures) {
+        frameBroken.value = true;
       }
-    });
+    } finally {
+      _frameInFlight = false;
+    }
   }
 
-  /// onLoadStop 永不触发（WebView2 永久转圈/白屏）时的兜底出口
-  void _armWatchdog() {
-    _watchdog?.cancel();
-    _watchdog = Timer(const Duration(seconds: 15), () {
-      if (finished || canceled || ready.value) return;
-      Log.logPrint("游客验证页加载看门狗超时，展示重载出口");
-      blank.value = true;
-    });
+  Future<void> _pullStatus(int epoch) async {
+    if (_statusInFlight || _closed || _sessionId.isEmpty) return;
+    _statusInFlight = true;
+    try {
+      final s = await _guard.verifySessionStatus(_sessionId);
+      if (epoch != _sessionEpoch || _closed) return;
+      phase.value = s.phase;
+      remainingMs.value = s.remainingMs;
+      if (s.reason.isNotEmpty) reason.value = s.reason;
+      state.value = s.state;
+      switch (reduceStatus(s)) {
+        case VerifyUiAction.succeed:
+          _finishSuccess();
+          break;
+        case VerifyUiAction.closeCanceled:
+          _finishCanceled();
+          break;
+        case VerifyUiAction.showRetry:
+          _enterFatal(_terminalReasonText(s.reason));
+          break;
+        case VerifyUiAction.stay:
+          break;
+      }
+    } catch (_) {
+      // 状态轮询偶发失败不致命：帧通道仍在就继续，连续失败由帧侧兜底
+    } finally {
+      _statusInFlight = false;
+    }
+  }
+
+  void _enterFatal(String message) {
+    fatalMessage.value = message;
+    _stopLoops();
+  }
+
+  void _finishSuccess() {
+    if (_succeeded || _closed) return;
+    _succeeded = true;
+    _closed = true;
+    _stopLoops();
+    Get.back(result: true);
+  }
+
+  void _finishCanceled() {
+    if (_closed) return;
+    _closed = true;
+    _stopLoops();
+    Get.back(result: false);
+  }
+
+  Future<void> cancel() async {
+    if (_closed) return;
+    _closed = true;
+    _stopLoops();
+    if (_sessionId.isNotEmpty) {
+      try {
+        await _guard.cancelVerifySession(_sessionId);
+      } catch (_) {
+        // 退出不依赖服务端确认
+      }
+    }
+    if (!_succeeded) Get.back(result: false);
+  }
+
+  /// expired / 浏览器断连 / 页面崩溃后由用户点「重新开始」开新会话
+  Future<void> retry() => startSession();
+
+  Future<void> reload() async {
+    if (_sessionId.isEmpty) return;
+    try {
+      await _guard.reloadVerifySession(_sessionId);
+      frame.value = null;
+      _frameFailures = 0;
+      frameBroken.value = false;
+      unawaited(_pullFrame(_sessionEpoch));
+    } catch (e) {
+      Log.logPrint("重新加载验证页失败：$e");
+    }
+  }
+
+  void _stopLoops() {
+    _frameTimer?.cancel();
+    _statusTimer?.cancel();
+    _moveFlushTimer?.cancel();
+    _frameTimer = null;
+    _statusTimer = null;
+    _moveFlushTimer = null;
   }
 
   @override
   void onClose() {
-    _watchdog?.cancel();
-    _pollTimer?.cancel();
+    _stopLoops();
+    // 路由被系统返回等路径关掉而非 success/cancel：best-effort 通知服务端
+    if (!_succeeded && !_closed && _sessionId.isNotEmpty) {
+      _guard.cancelVerifySession(_sessionId).catchError((_) {});
+    }
     super.onClose();
   }
 
-  /// 页面探针：只报原始字段，判定全部在 Dart 侧（便于单测）。
-  /// 只采集通用信号：readyState、title、path、验证码控件。不能采集「正文
-  /// 长度」判白屏——抖音滑动验证码是 canvas 渲染，innerText 极短是验证页的
-  /// 正常形态，正文长短无法与真白屏区分，会误伤验证页。
-  static const String probeScript = r'''
-(function(){
-  try {
-    var body = document.body;
-    return JSON.stringify({
-      ready: document.readyState,
-      title: document.title,
-      path: location.pathname,
-      hasCaptcha: !!document.querySelector(".secsdk-captcha-drag-icon,[class*=captcha],[id*=captcha]") ||
-        /请完成验证|滑动验证|点击按钮完成验证/.test((body && body.innerText) || "")
+  // ===== 指针轨迹 =====
+
+  void onPointerDown(OffsetLite local, SizeLite box) {
+    if (!_inputOpen) return;
+    finger.value = local;
+    _chainSend([
+      mapPoint("down", local, box, _viewWidth, _viewHeight),
+    ]);
+  }
+
+  void onPointerMove(OffsetLite local, SizeLite box, {required bool down}) {
+    if (!_inputOpen) return;
+    if (!down) return; // 鼠标悬停轨迹不转发
+    finger.value = local;
+    _moves.add(mapPoint("move", local, box, _viewWidth, _viewHeight));
+    if (_moves.length > _moveCap) {
+      final compressed = compressEvents(_moves, _moveCap);
+      _moves
+        ..clear()
+        ..addAll(compressed);
+    }
+  }
+
+  void onPointerUp(OffsetLite local, SizeLite box) {
+    if (!_inputOpen) return;
+    finger.value = null;
+    final batch = _drainMoves();
+    batch.add(mapPoint("up", local, box, _viewWidth, _viewHeight));
+    _chainSend(batch);
+  }
+
+  void onPointerScroll(
+    OffsetLite local,
+    SizeLite box, {
+    required double dx,
+    required double dy,
+  }) {
+    if (!_inputOpen) return;
+    final ev = mapPoint(
+      "wheel",
+      local,
+      box,
+      _viewWidth,
+      _viewHeight,
+      dx: dx,
+      dy: dy,
+    );
+    _chainSend([ev]);
+  }
+
+  bool get _inputOpen =>
+      !_closed && state.value == "active" && _sessionId.isNotEmpty;
+
+  List<VerifyPointerEvent> _drainMoves() {
+    final out = List<VerifyPointerEvent>.from(_moves);
+    _moves.clear();
+    return out;
+  }
+
+  void _flushMoves() {
+    if (_closed || _moves.isEmpty) return;
+    // 单批硬上限 60：网络堆积时只发最新一批
+    final batch = compressEvents(_drainMoves(), _serverEventCap);
+    _chainSend(batch);
+  }
+
+  void _chainSend(List<VerifyPointerEvent> events) {
+    if (events.isEmpty || _sessionId.isEmpty) return;
+    final id = _sessionId;
+    // 串行链：down/moves/up 严格按产生顺序到达，不互相超车
+    _sendChain = _sendChain.then((_) async {
+      try {
+        await _guard.sendVerifyEvents(id, events);
+      } catch (e) {
+        Log.logPrint("验证指针事件发送失败：$e");
+      }
     });
-  } catch (e) { return null; }
-})()
-''';
+  }
 
-  Future<Map<String, dynamic>?> probePageInfo() async {
-    try {
-      final c = webController;
-      if (c == null) return null;
-      // 必须限时：WebView2 异常时 evaluateJavascript 可能永不返回，
-      // 不加超时「完成验证」按钮会表现为彻底无响应
-      final result = await c
-          .evaluateJavascript(source: probeScript)
-          .timeout(const Duration(seconds: 5));
-      return decodeProbe(result?.toString());
-    } catch (e) {
-      Log.logPrint("验证完成检测失败：$e");
-      return null;
-    }
+  /// 本地显示坐标 → guard 视口像素的线性换算并截断到视口内
+  @visibleForTesting
+  static VerifyPointerEvent mapPoint(
+    String type,
+    OffsetLite local,
+    SizeLite box,
+    int viewWidth,
+    int viewHeight, {
+    double dx = 0,
+    double dy = 0,
+  }) {
+    final sx = box.width <= 0 ? 0.0 : local.x / box.width;
+    final sy = box.height <= 0 ? 0.0 : local.y / box.height;
+    final x = clampDouble(sx * viewWidth, 0, viewWidth.toDouble());
+    final y = clampDouble(sy * viewHeight, 0, viewHeight.toDouble());
+    return VerifyPointerEvent(type, x: x, y: y, dx: dx, dy: dy);
+  }
+
+  /// 轨迹压缩：超 max 时保留最早的 1/4（轨迹起点对滑块识别关键）+ 最新的 3/4
+  @visibleForTesting
+  static List<VerifyPointerEvent> compressEvents(
+    List<VerifyPointerEvent> events,
+    int max,
+  ) {
+    if (events.length <= max) return events;
+    final head = math.max(1, max ~/ 4);
+    final tail = max - head;
+    return <VerifyPointerEvent>[
+      ...events.take(head),
+      ...events.skip(events.length - tail),
+    ];
   }
 
   @visibleForTesting
-  static Map<String, dynamic>? decodeProbe(String? result) {
-    if (result == null) return null;
-    try {
-      final decoded = json.decode(result);
-      return decoded is Map<String, dynamic> ? decoded : null;
-    } catch (_) {
-      return null;
+  static VerifyUiAction reduceStatus(DouyinVerifyStatus s) {
+    if (s.isVerified) return VerifyUiAction.succeed;
+    if (s.isClosed) {
+      if (s.reason == "canceled") return VerifyUiAction.closeCanceled;
+      return VerifyUiAction.showRetry;
+    }
+    return VerifyUiAction.stay;
+  }
+
+  static String _terminalReasonText(String reason) {
+    switch (reason) {
+      case "expired":
+        return "验证超时（5 分钟），请重新开始";
+      case "browser_disconnected":
+        return "guard 浏览器连接中断，请重新开始";
+      case "page_crashed":
+        return "验证页崩溃，请重新开始";
+      case "load_failed":
+        return "验证页打开失败，请检查 guard 服务后重试";
+      default:
+        return "验证已结束，请重新开始";
     }
   }
 
-  /// 验证完成判据：路径落在目标房间、不是验证码中间页、验证码控件消失、
-  /// 且文档至少可交互（interactive）。不要求 readyState=complete——直播间是
-  /// 长连接 SPA（弹幕 websocket/流/追踪请求常驻），WebView2 下 readyState 常停在
-  /// interactive 永不 complete，强求 complete 会把验证成功后的房间误判为未完成。
-  @visibleForTesting
-  static bool isVerified(Map<String, dynamic> info, String webRid) {
-    return info["path"] == "/$webRid" &&
-        info["title"] != "验证码中间页" &&
-        info["hasCaptcha"] != true &&
-        (info["ready"] == "complete" || info["ready"] == "interactive");
+  static String _friendlyError(Object e) {
+    final raw = e.toString();
+    final msg = raw.startsWith("Exception: ") ? raw.substring(11) : raw;
+    return msg.isEmpty ? "验证页打开失败" : msg;
   }
 
-  static bool parseVerified(String? result, String webRid) {
-    final info = decodeProbe(result);
-    return info != null && isVerified(info, webRid);
-  }
+  static double clampDouble(double v, double min, double max) =>
+      v < min ? min : (v > max ? max : v);
+}
 
-  /// 是否仍处在验证中间页（标题命中或验证码控件还在）
-  static bool _hasVerifySignal(Map<String, dynamic> info) {
-    return info["title"] == "验证码中间页" || info["hasCaptcha"] == true;
-  }
+enum VerifyUiAction { succeed, closeCanceled, showRetry, stay }
 
-  /// 白屏判定：只在「验证中间页 / 尚未落到目标房间」且文档没加载完时成立。
-  /// 已落到目标房间路径且无验证信号时绝不当白屏——此时页面是验证成功后的直播
-  /// SPA，readyState 停在 interactive 是常态；若按非 complete 判空白并自动
-  /// reload，会把刚滑过验证的房间页冲掉、陷入“滑完→空白→重载”的死循环。
-  @visibleForTesting
-  static bool isBlankPage(Map<String, dynamic> info, String webRid) {
-    if (info["path"] == "/$webRid" && !_hasVerifySignal(info)) return false;
-    return info["ready"] != "complete";
-  }
+/// 不依赖 dart:ui 的轻量几何类型，便于纯单测
+class OffsetLite {
+  final double x;
+  final double y;
+  const OffsetLite(this.x, this.y);
+}
 
-  /// 手动点「完成验证」的放行判据：只排除仍明确停在验证码中间页的情况。
-  /// 开播/未开播/极简空页等渲染形态差异不在客户端猜测——用户主动点击意图
-  /// 明确，放行后由服务端落库前实测判定（不通过返回明确原因），保证按钮
-  /// 始终有响应而不是被客户端判据静默挡住。
-  @visibleForTesting
-  static bool canManualSubmit(Map<String, dynamic> info, String webRid) {
-    return info["path"] == "/$webRid" &&
-        info["title"] != "验证码中间页" &&
-        info["hasCaptcha"] != true;
-  }
-
-  void onLoadStop(InAppWebViewController c, Uri? uri) async {
-    _armWatchdog();
-    final info = await probePageInfo();
-    if (info == null || finished || canceled) return;
-    if (isVerified(info, webRid)) {
-      if (ready.value) return;
-      blank.value = false;
-      ready.value = true;
-      await Future.delayed(const Duration(seconds: 1));
-      if (ready.value && !submitting.value && !finished) {
-        await submit();
-      }
-      return;
-    }
-    // 白屏：先自动重载（WebView2 渲染层白屏 reload 通常即恢复），
-    // 次数用尽后保留覆盖层，由用户手动重载
-    if (isBlankPage(info, webRid)) {
-      if (_reloadCount < _maxAutoReloads) {
-        _reloadCount++;
-        blank.value = true;
-        Log.logPrint(
-            "游客验证页空白，自动重载 $_reloadCount/$_maxAutoReloads");
-        await Future.delayed(const Duration(milliseconds: 1500));
-        if (canceled || finished) return;
-        await webController?.reload();
-        return;
-      }
-      blank.value = true;
-    } else {
-      blank.value = false;
-    }
-  }
-
-  /// 覆盖层/右上角按钮的手动重载：重置自动重载计数再给两轮机会
-  Future<void> manualReload() async {
-    _reloadCount = 0;
-    blank.value = false;
-    _armWatchdog();
-    await webController?.reload();
-  }
-
-  Future<void> manualSubmit() async {
-    if (submitting.value) return;
-    final info = await probePageInfo();
-    if (info != null && !canManualSubmit(info, webRid)) {
-      SmartDialog.showToast("请先完成页面验证");
-      return;
-    }
-    await submit();
-  }
-
-  static bool isAccountCookieName(String name) => [
-        "sessionid",
-        "sid_",
-        "ssid_",
-        "uid_",
-        "passport_",
-        "sso_",
-        "toutiao_sso",
-      ].any(name.startsWith);
-
-  Future<void> submit() async {
-    final c = webController;
-    if (c == null || submitting.value) return;
-    submitting.value = true;
-    _pollTimer?.cancel();
-    try {
-      final cm = CookieManager.instance(webViewEnvironment: environment);
-      final cookies = await cm.getCookies(url: roomUrl);
-      final cookieStr = cookies
-          .where((item) => !isAccountCookieName(item.name))
-          .map((item) => "${item.name}=${item.value}")
-          .join("; ");
-      // Windows 插件未实现静态 getDefaultUserAgent；直接取当前 webview 的
-      // UA，保证与所提交 cookie 的隔离环境一致
-      final uaRaw = await c.evaluateJavascript(
-        source: "JSON.stringify(navigator.userAgent)",
-      );
-      final ua = uaRaw == null ? "" : json.decode(uaRaw.toString());
-      await GuardServerService.instance.saveRoomTrust(
-        webRid: webRid,
-        cookies: cookieStr,
-        ua: ua,
-      );
-      _watchdog?.cancel();
-      if (canceled) {
-        Log.logPrint("验证信息已保存但页面已取消，不再退窗");
-        return;
-      }
-      finished = true;
-      await restore();
-      Get.back(result: true);
-    } catch (e) {
-      submitting.value = false;
-      Log.logPrint("提交游客验证失败：$e");
-      final raw = e.toString();
-      final msg =
-          raw.startsWith("Exception: ") ? raw.substring(11) : raw;
-      // 服务端实测拒绝（cookie 残缺/撞验证页）时直接展示其原因，
-      // 其余异常回退通用提示
-      SmartDialog.showToast(
-        msg.contains("验证") ? msg : "提交失败，请点「完成验证」重试",
-      );
-    }
-  }
-
-  Future<void> cancel() async {
-    canceled = true;
-    finished = true;
-    _watchdog?.cancel();
-    _pollTimer?.cancel();
-    await restore();
-    Get.back(result: false);
-  }
-
-  Future<void> restore() async {
-    if (environment != null) {
-      await environment!.dispose().catchError((_) {});
-      environment = null;
-      return;
-    }
-    if (usedClearFallback) {
-      final cm = CookieManager.instance();
-      for (final item in savedCookies) {
-        try {
-          await cm.setCookie(
-            url: roomUrl,
-            name: item.name,
-            value: item.value,
-            path: item.path ?? "/",
-            domain: item.domain,
-          );
-        } catch (e) {
-          Log.logPrint("恢复 cookie 失败(${item.name})：$e");
-        }
-      }
-    }
-  }
+class SizeLite {
+  final double width;
+  final double height;
+  const SizeLite(this.width, this.height);
 }
