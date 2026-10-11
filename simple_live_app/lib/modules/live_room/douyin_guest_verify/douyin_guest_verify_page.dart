@@ -26,12 +26,45 @@ class _DouyinGuestVerifyPageState extends State<DouyinGuestVerifyPage> {
     });
   }
 
-  Widget buildWebView() => InAppWebView(
-        initialUrlRequest: URLRequest(url: controller.roomUrl),
-        initialSettings: controller.buildSettings(),
-        webViewEnvironment: controller.environment,
-        onWebViewCreated: controller.onWebViewCreated,
-        onLoadStop: controller.onLoadStop,
+  Widget buildBlankOverlay() {
+    return Obx(() {
+      if (!controller.blank.value) return const SizedBox.shrink();
+      return Positioned.fill(
+        child: ColoredBox(
+          color: Colors.white,
+          child: Center(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text(
+                  "页面加载失败或显示空白",
+                  style: TextStyle(fontSize: 14),
+                ),
+                const SizedBox(height: 12),
+                FilledButton.icon(
+                  onPressed: controller.manualReload,
+                  icon: const Icon(Icons.refresh, size: 18),
+                  label: const Text("重新加载"),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    });
+  }
+
+  Widget buildWebView() => Stack(
+        children: [
+          InAppWebView(
+            initialUrlRequest: URLRequest(url: controller.roomUrl),
+            initialSettings: controller.buildSettings(),
+            webViewEnvironment: controller.environment,
+            onWebViewCreated: controller.onWebViewCreated,
+            onLoadStop: controller.onLoadStop,
+          ),
+          buildBlankOverlay(),
+        ],
       );
 
   Widget buildPanel() {

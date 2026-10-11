@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -20,12 +21,19 @@ class DouyinGuestVerifyController extends GetxController {
 
   final ready = false.obs;
   final submitting = false.obs;
+  // 页面空白（WebView2 渲染层白屏 / 文档未加载完）：驱动自动重载与覆盖层出口
+  final blank = false.obs;
 
   WebViewEnvironment? environment;
   List<Cookie> savedCookies = [];
   bool usedClearFallback = false;
   bool finished = false;
   bool canceled = false;
+
+  int _reloadCount = 0;
+  Timer? _watchdog;
+
+  static const int _maxAutoReloads = 2;
 
   WebUri get roomUrl => WebUri("https://live.douyin.com/$webRid");
 
@@ -98,43 +106,141 @@ class DouyinGuestVerifyController extends GetxController {
 
   void onWebViewCreated(InAppWebViewController c) {
     webController = c;
+    _armWatchdog();
   }
 
-  Future<bool> checkVerified() async {
+  /// onLoadStop 永不触发（WebView2 永久转圈/白屏）时的兜底出口
+  void _armWatchdog() {
+    _watchdog?.cancel();
+    _watchdog = Timer(const Duration(seconds: 15), () {
+      if (finished || canceled || ready.value) return;
+      Log.logPrint("游客验证页加载看门狗超时，展示重载出口");
+      blank.value = true;
+    });
+  }
+
+  @override
+  void onClose() {
+    _watchdog?.cancel();
+    super.onClose();
+  }
+
+  /// 页面探针：只报原始字段，判定全部在 Dart 侧（便于单测）。
+  /// 房间页以 SSR 注入的 RENDER_DATA / 房间节点为正向标记；白屏文档
+  /// readyState 未完成或正文极短且无任何房间标记。
+  static const String probeScript = r'''
+(function(){
+  try {
+    var body = document.body;
+    var text = (body && body.innerText || '').replace(/\s+/g,'');
+    var hasRoom = !!(document.getElementById('RENDER_DATA') ||
+      document.querySelector('#room_id,[data-e2e="live-room-nickname"],x-live-room'));
+    return JSON.stringify({
+      ready: document.readyState,
+      title: document.title,
+      path: location.pathname,
+      hasRoom: hasRoom,
+      bodyLen: text.length,
+      hasCaptcha: !!document.querySelector(".secsdk-captcha-drag-icon,[class*=captcha],[id*=captcha]") ||
+        /请完成验证|滑动验证|点击按钮完成验证/.test((body && body.innerText) || "")
+    });
+  } catch (e) { return null; }
+})()
+''';
+
+  Future<Map<String, dynamic>?> probePageInfo() async {
     try {
       final c = webController;
-      if (c == null) return false;
-      final result = await c.evaluateJavascript(
-        source:
-            'JSON.stringify({title: document.title, path: location.pathname, hasVideo: !!document.querySelector("video"), hasCaptcha: !!document.querySelector(".secsdk-captcha-drag-icon, [class*=captcha], [id*=captcha]") || /请完成验证|滑动验证|点击按钮完成验证/.test(document.body.innerText || "")})',
-      );
-      return parseVerified(result?.toString(), webRid);
+      if (c == null) return null;
+      final result = await c.evaluateJavascript(source: probeScript);
+      return decodeProbe(result?.toString());
     } catch (e) {
       Log.logPrint("验证完成检测失败：$e");
-      return false;
+      return null;
     }
   }
 
-  /// 验证完成判据：不在验证码中间页、路径正确且无验证码控件。
+  Future<bool> checkVerified() async {
+    final info = await probePageInfo();
+    return info != null && isVerified(info, webRid);
+  }
+
+  @visibleForTesting
+  static Map<String, dynamic>? decodeProbe(String? result) {
+    if (result == null) return null;
+    try {
+      final decoded = json.decode(result);
+      return decoded is Map<String, dynamic> ? decoded : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// 白屏判定：文档未加载完，或加载完却没有任何房间页标记且正文过短。
+  @visibleForTesting
+  static bool isBlankPage(Map<String, dynamic> info) {
+    if (info["ready"] != "complete") return true;
+    if (info["hasRoom"] == true) return false;
+    final bodyLen = (info["bodyLen"] as num?)?.toInt() ?? 0;
+    return bodyLen < 20;
+  }
+
+  /// 验证完成判据：路径落在目标房间、不是验证码中间页、验证码控件消失、
+  /// 且房间内容正向标记已渲染（只认 RENDER_DATA/房间节点，不靠正文长度
+  /// 排除法——白屏文档也可能带杂散脚本文本）。
   /// 不能要求有 video——未开播房间验证通过后本就没有视频。
   @visibleForTesting
+  static bool isVerified(Map<String, dynamic> info, String webRid) {
+    return info["path"] == "/$webRid" &&
+        info["title"] != "验证码中间页" &&
+        info["hasCaptcha"] != true &&
+        info["hasRoom"] == true;
+  }
+
   static bool parseVerified(String? result, String webRid) {
-    if (result == null) return false;
-    final info = json.decode(result) as Map<String, dynamic>;
-    return info["title"] != "验证码中间页" &&
-        info["path"] == "/$webRid" &&
-        info["hasCaptcha"] != true;
+    final info = decodeProbe(result);
+    return info != null && isVerified(info, webRid);
   }
 
   void onLoadStop(InAppWebViewController c, Uri? uri) async {
-    final verified = await checkVerified();
-    if (verified && !ready.value) {
+    _armWatchdog();
+    final info = await probePageInfo();
+    if (info == null || finished || canceled) return;
+    if (isVerified(info, webRid)) {
+      if (ready.value) return;
+      blank.value = false;
       ready.value = true;
       await Future.delayed(const Duration(seconds: 1));
       if (ready.value && !submitting.value && !finished) {
         await submit();
       }
+      return;
     }
+    // 白屏：先自动重载（WebView2 渲染层白屏 reload 通常即恢复），
+    // 次数用尽后保留覆盖层，由用户手动重载
+    if (isBlankPage(info)) {
+      if (_reloadCount < _maxAutoReloads) {
+        _reloadCount++;
+        blank.value = true;
+        Log.logPrint(
+            "游客验证页空白，自动重载 $_reloadCount/$_maxAutoReloads");
+        await Future.delayed(const Duration(milliseconds: 1500));
+        if (canceled || finished) return;
+        await webController?.reload();
+        return;
+      }
+      blank.value = true;
+    } else {
+      blank.value = false;
+    }
+  }
+
+  /// 覆盖层/右上角按钮的手动重载：重置自动重载计数再给两轮机会
+  Future<void> manualReload() async {
+    _reloadCount = 0;
+    blank.value = false;
+    _armWatchdog();
+    await webController?.reload();
   }
 
   Future<void> manualSubmit() async {
@@ -179,6 +285,7 @@ class DouyinGuestVerifyController extends GetxController {
         cookies: cookieStr,
         ua: ua,
       );
+      _watchdog?.cancel();
       if (canceled) {
         Log.logPrint("验证信息已保存但页面已取消，不再退窗");
         return;
@@ -189,13 +296,21 @@ class DouyinGuestVerifyController extends GetxController {
     } catch (e) {
       submitting.value = false;
       Log.logPrint("提交游客验证失败：$e");
-      SmartDialog.showToast("提交失败，请点「完成验证」重试");
+      final raw = e.toString();
+      final msg =
+          raw.startsWith("Exception: ") ? raw.substring(11) : raw;
+      // 服务端实测拒绝（cookie 残缺/撞验证页）时直接展示其原因，
+      // 其余异常回退通用提示
+      SmartDialog.showToast(
+        msg.contains("验证") ? msg : "提交失败，请点「完成验证」重试",
+      );
     }
   }
 
   Future<void> cancel() async {
     canceled = true;
     finished = true;
+    _watchdog?.cancel();
     await restore();
     Get.back(result: false);
   }

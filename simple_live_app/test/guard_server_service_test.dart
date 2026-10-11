@@ -57,4 +57,34 @@ void main() {
       await server.close(force: true);
     });
   }
+
+  test("saveRoomTrust 收到 400 实测拒绝：异常文本透传服务端原因", () async {
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    server.listen((request) async {
+      request.response.statusCode = 400;
+      request.response.headers.contentType = ContentType.json;
+      request.response
+          .write('{"code":400,"message":"验证未通过，请重新完成滑块验证"}');
+      await request.response.close();
+    });
+
+    final service = GuardServerService();
+    service.serverUrl = "http://127.0.0.1:${server.port}";
+    service.token = "t";
+
+    Object? error;
+    try {
+      await service.saveRoomTrust(
+        webRid: "100",
+        cookies: "ttwid=bad",
+        ua: "UA",
+      );
+    } catch (e) {
+      error = e;
+    }
+    expect(error, isNotNull);
+    expect(error.toString(), contains("验证未通过，请重新完成滑块验证"));
+
+    await server.close(force: true);
+  });
 }

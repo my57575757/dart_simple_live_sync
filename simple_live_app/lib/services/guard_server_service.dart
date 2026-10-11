@@ -399,14 +399,24 @@ class GuardServerService extends GetxService {
       connectTimeout: const Duration(seconds: 10),
       receiveTimeout: const Duration(seconds: 20),
     ));
-    final res = await dio.post<dynamic>(
-      "/api/room/trust",
-      data: {"webRid": webRid, "cookies": cookies, "ua": ua},
-      options: _options,
-    );
-    final body = Map<String, dynamic>.from(res.data as Map);
-    if (body["code"] != 0) {
-      throw Exception(body["message"]?.toString() ?? "保存验证信息失败");
+    try {
+      final res = await dio.post<dynamic>(
+        "/api/room/trust",
+        data: {"webRid": webRid, "cookies": cookies, "ua": ua},
+        options: _options,
+      );
+      final body = Map<String, dynamic>.from(res.data as Map);
+      if (body["code"] != 0) {
+        throw Exception(body["message"]?.toString() ?? "保存验证信息失败");
+      }
+    } on DioException catch (e) {
+      // 服务端落库前实测失败（400：cookie 残缺/仍撞验证页）：透传其原因，
+      // 供验证页 toast 引导用户重新滑滑块
+      final data = e.response?.data;
+      final msg = data is Map ? data["message"]?.toString() : null;
+      throw Exception(
+        msg != null && msg.isNotEmpty ? msg : "保存验证信息失败",
+      );
     }
   }
 
