@@ -32,8 +32,13 @@ class DouyinGuestVerifyController extends GetxController {
 
   int _reloadCount = 0;
   Timer? _watchdog;
+  Timer? _pollTimer;
+  bool _pollInFlight = false;
 
   static const int _maxAutoReloads = 2;
+  // 滑块成功若是页内（SPA）跳转，WebView2 不一定再触发 onLoadStop；
+  // 用有界周期探测兜底，滑完即自动提交，不依赖用户再点「完成验证」。
+  static const Duration _pollInterval = Duration(milliseconds: 1500);
 
   WebUri get roomUrl => WebUri("https://live.douyin.com/$webRid");
 
@@ -107,6 +112,41 @@ class DouyinGuestVerifyController extends GetxController {
   void onWebViewCreated(InAppWebViewController c) {
     webController = c;
     _armWatchdog();
+    _startVerifiedPoll();
+  }
+
+  /// 有界探测滑块完成：onLoadStop 在 SPA 页内跳转时可能不再触发。
+  /// 仅做「已验证」识别，空白/重载仍交给 onLoadStop + 看门狗，避免两套逻辑打架。
+  void _startVerifiedPoll() {
+    _pollTimer?.cancel();
+    _pollTimer = Timer.periodic(_pollInterval, (_) async {
+      if (finished ||
+          canceled ||
+          ready.value ||
+          submitting.value ||
+          _pollInFlight) {
+        return;
+      }
+      _pollInFlight = true;
+      try {
+        final info = await probePageInfo();
+        if (info == null ||
+            finished ||
+            canceled ||
+            ready.value ||
+            submitting.value) {
+          return;
+        }
+        if (isVerified(info, webRid)) {
+          blank.value = false;
+          ready.value = true;
+          _watchdog?.cancel();
+          await submit();
+        }
+      } finally {
+        _pollInFlight = false;
+      }
+    });
   }
 
   /// onLoadStop 永不触发（WebView2 永久转圈/白屏）时的兜底出口
@@ -122,6 +162,7 @@ class DouyinGuestVerifyController extends GetxController {
   @override
   void onClose() {
     _watchdog?.cancel();
+    _pollTimer?.cancel();
     super.onClose();
   }
 
@@ -171,27 +212,36 @@ class DouyinGuestVerifyController extends GetxController {
     }
   }
 
-  /// 白屏判定：仅看文档是否真的加载完（readyState=complete）。不再用正文长度——
-  /// canvas 验证码页正文极短是正常形态，正文长短区分不了验证页与白屏。
-  @visibleForTesting
-  static bool isBlankPage(Map<String, dynamic> info) {
-    return info["ready"] != "complete";
-  }
-
   /// 验证完成判据：路径落在目标房间、不是验证码中间页、验证码控件消失、
-  /// 且文档加载完成。只认通用信号，不要求 video / 房间节点 / 正文长度——
-  /// 未开播房间与 canvas 验证码页都会因这些附加条件被误判。
+  /// 且文档至少可交互（interactive）。不要求 readyState=complete——直播间是
+  /// 长连接 SPA（弹幕 websocket/流/追踪请求常驻），WebView2 下 readyState 常停在
+  /// interactive 永不 complete，强求 complete 会把验证成功后的房间误判为未完成。
   @visibleForTesting
   static bool isVerified(Map<String, dynamic> info, String webRid) {
     return info["path"] == "/$webRid" &&
         info["title"] != "验证码中间页" &&
         info["hasCaptcha"] != true &&
-        info["ready"] == "complete";
+        (info["ready"] == "complete" || info["ready"] == "interactive");
   }
 
   static bool parseVerified(String? result, String webRid) {
     final info = decodeProbe(result);
     return info != null && isVerified(info, webRid);
+  }
+
+  /// 是否仍处在验证中间页（标题命中或验证码控件还在）
+  static bool _hasVerifySignal(Map<String, dynamic> info) {
+    return info["title"] == "验证码中间页" || info["hasCaptcha"] == true;
+  }
+
+  /// 白屏判定：只在「验证中间页 / 尚未落到目标房间」且文档没加载完时成立。
+  /// 已落到目标房间路径且无验证信号时绝不当白屏——此时页面是验证成功后的直播
+  /// SPA，readyState 停在 interactive 是常态；若按非 complete 判空白并自动
+  /// reload，会把刚滑过验证的房间页冲掉、陷入“滑完→空白→重载”的死循环。
+  @visibleForTesting
+  static bool isBlankPage(Map<String, dynamic> info, String webRid) {
+    if (info["path"] == "/$webRid" && !_hasVerifySignal(info)) return false;
+    return info["ready"] != "complete";
   }
 
   /// 手动点「完成验证」的放行判据：只排除仍明确停在验证码中间页的情况。
@@ -221,7 +271,7 @@ class DouyinGuestVerifyController extends GetxController {
     }
     // 白屏：先自动重载（WebView2 渲染层白屏 reload 通常即恢复），
     // 次数用尽后保留覆盖层，由用户手动重载
-    if (isBlankPage(info)) {
+    if (isBlankPage(info, webRid)) {
       if (_reloadCount < _maxAutoReloads) {
         _reloadCount++;
         blank.value = true;
@@ -270,6 +320,7 @@ class DouyinGuestVerifyController extends GetxController {
     final c = webController;
     if (c == null || submitting.value) return;
     submitting.value = true;
+    _pollTimer?.cancel();
     try {
       final cm = CookieManager.instance(webViewEnvironment: environment);
       final cookies = await cm.getCookies(url: roomUrl);
@@ -314,6 +365,7 @@ class DouyinGuestVerifyController extends GetxController {
     canceled = true;
     finished = true;
     _watchdog?.cancel();
+    _pollTimer?.cancel();
     await restore();
     Get.back(result: false);
   }

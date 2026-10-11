@@ -50,8 +50,13 @@ void main() {
     expect(DouyinGuestVerifyController.parseVerified(null, webRid), isFalse);
   });
 
-  test("白屏：document 仍在加载（readyState 非 complete），判定未完成", () {
+  test("直播 SPA readyState 停在 interactive：已落到目标房间且无验证信号，判定完成", () {
     final result = pageInfo(ready: "interactive");
+    expect(DouyinGuestVerifyController.parseVerified(result, webRid), isTrue);
+  });
+
+  test("interactive 但验证码控件仍在：判定未完成", () {
+    final result = pageInfo(ready: "interactive", hasCaptcha: true);
     expect(DouyinGuestVerifyController.parseVerified(result, webRid), isFalse);
   });
 
@@ -63,21 +68,62 @@ void main() {
   });
 
   group("isBlankPage", () {
-    Map<String, dynamic> infoOf({String ready = "complete"}) {
-      return jsonDecode(pageInfo(ready: ready)) as Map<String, dynamic>;
+    Map<String, dynamic> infoOf({
+      String ready = "complete",
+      String title = "主播的直播间",
+      String path = "/30000000000",
+      bool hasCaptcha = false,
+    }) {
+      return jsonDecode(pageInfo(
+        ready: ready,
+        title: title,
+        path: path,
+        hasCaptcha: hasCaptcha,
+      )) as Map<String, dynamic>;
     }
 
-    test("readyState 非 complete 视为空白", () {
+    test("已到目标房间且无验证信号、readyState=interactive：非空白（直播 SPA 常态）", () {
       expect(
-        DouyinGuestVerifyController.isBlankPage(infoOf(ready: "loading")),
+        DouyinGuestVerifyController.isBlankPage(infoOf(ready: "interactive"), webRid),
+        isFalse,
+      );
+    });
+
+    test("已到目标房间、readyState=loading（初始文档）：仍非空白，不误重载", () {
+      expect(
+        DouyinGuestVerifyController.isBlankPage(infoOf(ready: "loading"), webRid),
+        isFalse,
+      );
+    });
+
+    test("readyState complete：非空白", () {
+      expect(
+        DouyinGuestVerifyController.isBlankPage(infoOf(ready: "complete"), webRid),
+        isFalse,
+      );
+    });
+
+    test("验证中间页未加载完（loading + captcha）：视为空白可重载", () {
+      expect(
+        DouyinGuestVerifyController.isBlankPage(
+          infoOf(
+            ready: "loading",
+            title: "验证码中间页",
+            hasCaptcha: true,
+          ),
+          webRid,
+        ),
         isTrue,
       );
     });
 
-    test("readyState complete 即非空白（正文长短不参与判定）", () {
+    test("尚未落到目标房间且未加载完：视为空白可重载", () {
       expect(
-        DouyinGuestVerifyController.isBlankPage(infoOf(ready: "complete")),
-        isFalse,
+        DouyinGuestVerifyController.isBlankPage(
+          infoOf(ready: "loading", path: "/", title: "抖音直播"),
+          webRid,
+        ),
+        isTrue,
       );
     });
   });
