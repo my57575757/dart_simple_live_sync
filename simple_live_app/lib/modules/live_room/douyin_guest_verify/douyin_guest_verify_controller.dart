@@ -126,20 +126,17 @@ class DouyinGuestVerifyController extends GetxController {
   }
 
   /// 页面探针：只报原始字段，判定全部在 Dart 侧（便于单测）。
-  /// 房间页以 SSR 注入的 RENDER_DATA / 房间节点为正向标记；白屏文档
-  /// readyState 未完成或正文极短且无任何房间标记。
+  /// 白屏文档特征是 readyState 未完成或正文极短；不能依赖开播房间专属节点
+  /// （RENDER_DATA/room_id 等），否则未开播房间（无这些节点）会被误判成白屏。
   static const String probeScript = r'''
 (function(){
   try {
     var body = document.body;
     var text = (body && body.innerText || '').replace(/\s+/g,'');
-    var hasRoom = !!(document.getElementById('RENDER_DATA') ||
-      document.querySelector('#room_id,[data-e2e="live-room-nickname"],x-live-room'));
     return JSON.stringify({
       ready: document.readyState,
       title: document.title,
       path: location.pathname,
-      hasRoom: hasRoom,
       bodyLen: text.length,
       hasCaptcha: !!document.querySelector(".secsdk-captcha-drag-icon,[class*=captcha],[id*=captcha]") ||
         /请完成验证|滑动验证|点击按钮完成验证/.test((body && body.innerText) || "")
@@ -152,17 +149,16 @@ class DouyinGuestVerifyController extends GetxController {
     try {
       final c = webController;
       if (c == null) return null;
-      final result = await c.evaluateJavascript(source: probeScript);
+      // 必须限时：WebView2 异常时 evaluateJavascript 可能永不返回，
+      // 不加超时「完成验证」按钮会表现为彻底无响应
+      final result = await c
+          .evaluateJavascript(source: probeScript)
+          .timeout(const Duration(seconds: 5));
       return decodeProbe(result?.toString());
     } catch (e) {
       Log.logPrint("验证完成检测失败：$e");
       return null;
     }
-  }
-
-  Future<bool> checkVerified() async {
-    final info = await probePageInfo();
-    return info != null && isVerified(info, webRid);
   }
 
   @visibleForTesting
@@ -176,30 +172,41 @@ class DouyinGuestVerifyController extends GetxController {
     }
   }
 
-  /// 白屏判定：文档未加载完，或加载完却没有任何房间页标记且正文过短。
+  /// 白屏判定：文档未加载完，或加载完却几乎没有正文（空壳文档）。
+  /// 开播/未开播房间渲染后都有足量正文，验证码中间页也有文案，只有白屏文档
+  /// 正文极短。不依赖任何房间专属 DOM 节点（开播与未开播页面节点不同）。
   @visibleForTesting
   static bool isBlankPage(Map<String, dynamic> info) {
     if (info["ready"] != "complete") return true;
-    if (info["hasRoom"] == true) return false;
     final bodyLen = (info["bodyLen"] as num?)?.toInt() ?? 0;
     return bodyLen < 20;
   }
 
   /// 验证完成判据：路径落在目标房间、不是验证码中间页、验证码控件消失、
-  /// 且房间内容正向标记已渲染（只认 RENDER_DATA/房间节点，不靠正文长度
-  /// 排除法——白屏文档也可能带杂散脚本文本）。
-  /// 不能要求有 video——未开播房间验证通过后本就没有视频。
+  /// 且文档确实渲染出内容（非白屏：readyState=complete 且正文非空）。
+  /// 只认通用信号，不要求 video 或房间节点——未开播房间两者都可能没有。
   @visibleForTesting
   static bool isVerified(Map<String, dynamic> info, String webRid) {
     return info["path"] == "/$webRid" &&
         info["title"] != "验证码中间页" &&
         info["hasCaptcha"] != true &&
-        info["hasRoom"] == true;
+        !isBlankPage(info);
   }
 
   static bool parseVerified(String? result, String webRid) {
     final info = decodeProbe(result);
     return info != null && isVerified(info, webRid);
+  }
+
+  /// 手动点「完成验证」的放行判据：只排除仍明确停在验证码中间页的情况。
+  /// 开播/未开播/极简空页等渲染形态差异不在客户端猜测——用户主动点击意图
+  /// 明确，放行后由服务端落库前实测判定（不通过返回明确原因），保证按钮
+  /// 始终有响应而不是被客户端判据静默挡住。
+  @visibleForTesting
+  static bool canManualSubmit(Map<String, dynamic> info, String webRid) {
+    return info["path"] == "/$webRid" &&
+        info["title"] != "验证码中间页" &&
+        info["hasCaptcha"] != true;
   }
 
   void onLoadStop(InAppWebViewController c, Uri? uri) async {
@@ -245,8 +252,8 @@ class DouyinGuestVerifyController extends GetxController {
 
   Future<void> manualSubmit() async {
     if (submitting.value) return;
-    final verified = await checkVerified();
-    if (!verified && !ready.value) {
+    final info = await probePageInfo();
+    if (info != null && !canManualSubmit(info, webRid)) {
       SmartDialog.showToast("请先完成页面验证");
       return;
     }
