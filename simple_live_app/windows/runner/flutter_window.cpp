@@ -1,8 +1,9 @@
-#include "flutter_window.h"
+﻿#include "flutter_window.h"
 
 #include <optional>
 
 #include "flutter/generated_plugin_registrant.h"
+#include "native_edit_host.h"
 
 FlutterWindow::FlutterWindow(const flutter::DartProject& project)
     : project_(project) {}
@@ -28,6 +29,10 @@ bool FlutterWindow::OnCreate() {
 
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
 
+  native_edit_host_ = std::make_unique<NativeEditHost>(
+      GetHandle(), child_content(),
+      flutter_controller_->engine()->messenger());
+
   flutter_controller_->engine()->SetNextFrameCallback([&]() {
     this->Show();
   });
@@ -41,6 +46,9 @@ bool FlutterWindow::OnCreate() {
 }
 
 void FlutterWindow::OnDestroy() {
+  // host 的通道持有 engine messenger，必须先于 controller 释放。
+  native_edit_host_.reset();
+
   if (flutter_controller_) {
     flutter_controller_ = nullptr;
   }
@@ -63,6 +71,26 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
   }
 
   switch (message) {
+    case WM_ACTIVATE:
+      // EDIT 可见时拦截基类 WM_ACTIVATE 里把焦点强制还给引擎窗口的行为；
+      // 引擎已在上面的 HandleTopLevelWindowProc 先收到过本条消息。
+      if (native_edit_host_ && native_edit_host_->visible() &&
+          LOWORD(wparam) != WA_INACTIVE) {
+        native_edit_host_->Refocus();
+        return 0;
+      }
+      break;
+
+    case WM_CTLCOLOREDIT:
+      if (native_edit_host_) {
+        HBRUSH brush = native_edit_host_->HandleCtlColor(
+            reinterpret_cast<HDC>(wparam), reinterpret_cast<HWND>(lparam));
+        if (brush) {
+          return reinterpret_cast<LRESULT>(brush);
+        }
+      }
+      break;
+
     case WM_FONTCHANGE:
       flutter_controller_->engine()->ReloadSystemFonts();
       break;
