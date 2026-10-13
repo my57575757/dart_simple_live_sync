@@ -34,7 +34,6 @@ import 'package:simple_live_app/services/douyu_account_service.dart';
 import 'package:simple_live_app/services/huya_account_service.dart';
 import 'package:simple_live_app/services/douyin_account_service.dart';
 import 'package:simple_live_app/services/twitch_account_service.dart';
-import 'package:simple_live_app/services/windows_ime_watchdog.dart';
 import 'package:simple_live_app/widgets/desktop_refresh_button.dart';
 import 'package:simple_live_app/widgets/follow_user_item.dart';
 import 'package:simple_live_core/simple_live_core.dart';
@@ -2168,11 +2167,6 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
 
     // 停止播放
     await player.stop();
-
-    // 切房间后焦点窗口重建，预防性重置 IME 会话，避免中文输入偶发僵死
-    if (Platform.isWindows && Get.isRegistered<WindowsImeWatchdog>()) {
-      Get.find<WindowsImeWatchdog>().cycleSession();
-    }
 
     // 刷新信息
     guestVerifyReplays = 0;

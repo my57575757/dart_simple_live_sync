@@ -37,7 +37,6 @@ import 'package:simple_live_app/services/local_storage_service.dart';
 import 'package:simple_live_app/services/sync_service.dart';
 import 'package:simple_live_app/services/twitch_account_service.dart';
 import 'package:simple_live_app/services/update_service.dart';
-import 'package:simple_live_app/services/windows_ime_watchdog.dart';
 import 'package:simple_live_app/widgets/status/app_loadding_widget.dart';
 import 'package:simple_live_core/simple_live_core.dart';
 import 'package:window_manager/window_manager.dart';
@@ -148,8 +147,6 @@ Future initServices() async {
   bindDouyinHtmlFetcher();
 
   bindDouyinSearchFetcher();
-
-  if (Platform.isWindows) unawaited(Get.put(WindowsImeWatchdog()).start());
 
   Get.put(TwitchAccountService());
 
