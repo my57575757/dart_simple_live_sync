@@ -5,6 +5,8 @@ import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:get/get.dart';
 
+import 'web_load_watchdog.dart';
+
 class WebLoginArgs {
   static const String desktopUserAgent =
       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36";
@@ -62,6 +64,62 @@ class WebLoginController extends GetxController {
   /// 用户手动点击常落在禁用窗口；轮询在启用窗口自动点击一次
   Timer? _pollTimer;
 
+  /// WebView2 环境一次性创建失败时插件不发任何事件，只能靠看门狗发现白屏
+  late final WebLoadWatchdog _loadWatchdog = WebLoadWatchdog(
+    readyOnFirstStart: args.redirectMatch != null,
+  );
+  Timer? _watchdogTimer;
+  final RxBool loadFailed = false.obs;
+  final RxBool loadRetryExhausted = false.obs;
+  final RxInt webViewAttempt = 0.obs;
+
+  @override
+  void onInit() {
+    super.onInit();
+    _loadWatchdog.start(DateTime.now().millisecondsSinceEpoch);
+    _watchdogTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (_loadWatchdog.poll(DateTime.now().millisecondsSinceEpoch)) {
+        _onWatchdogFailed();
+      }
+    });
+  }
+
+  void _onWatchdogFailed() {
+    if (_loadWatchdog.shouldAutoRetry) {
+      SmartDialog.showToast("页面启动失败，正在自动重试");
+      _rebuildWebView();
+      return;
+    }
+    loadFailed.value = true;
+    loadRetryExhausted.value = !_loadWatchdog.canRetry;
+  }
+
+  void _rebuildWebView() {
+    _loadWatchdog.retry(DateTime.now().millisecondsSinceEpoch);
+    loadFailed.value = false;
+    webViewAttempt.value++;
+  }
+
+  void retryManual() {
+    if (!_loadWatchdog.canRetry) return;
+    _rebuildWebView();
+  }
+
+  void onWebViewCreated(InAppWebViewController controller) {
+    _loadWatchdog.markCreated(DateTime.now().millisecondsSinceEpoch);
+  }
+
+  void onReceivedError(
+    InAppWebViewController controller,
+    WebResourceRequest request,
+    WebResourceError error,
+  ) {
+    // Windows 端该事件只可能来自主框架且字段可能为 null（null 视为主框架）
+    if (request.isForMainFrame ?? true) {
+      _loadWatchdog.markFatal();
+    }
+  }
+
   void _startPolling(InAppWebViewController controller) {
     _pollTimer?.cancel();
     _pollTimer = Timer.periodic(const Duration(seconds: 2), (_) async {
@@ -73,6 +131,7 @@ class WebLoginController extends GetxController {
   }
 
   void onLoadStop(InAppWebViewController controller, Uri? uri) async {
+    _loadWatchdog.markLoadStop();
     // 重定向提取模式：轮询处理授权按钮
     if (args.redirectMatch != null) {
       if (_finished) return;
@@ -162,6 +221,7 @@ class WebLoginController extends GetxController {
   /// onLoadStart 兜底拦截：部分机型 302 到 localhost 时
   /// shouldOverrideUrlLoading 不触发
   void onLoadStart(InAppWebViewController controller, Uri? uri) {
+    _loadWatchdog.markLoadStart(DateTime.now().millisecondsSinceEpoch);
     if (args.redirectMatch != null && !_finished) {
       // onLoadStop 在部分页面不触发，提前启动轮询
       _startPolling(controller);
@@ -180,6 +240,7 @@ class WebLoginController extends GetxController {
   @override
   void onClose() {
     _pollTimer?.cancel();
+    _watchdogTimer?.cancel();
     super.onClose();
   }
 }
@@ -194,20 +255,26 @@ class WebLoginPage extends GetView<WebLoginController> {
     // shouldOverrideUrlLoading（POST→302 到 localhost 时会静默挂起），
     // 改依赖 WebView2 NavigationStarting 触发的 onLoadStart，最可靠
     var redirectMode = args.redirectMatch != null;
-    var webView = InAppWebView(
-      initialUrlRequest: URLRequest(url: WebUri(args.startUrl)),
-      initialSettings: InAppWebViewSettings(
-        useShouldOverrideUrlLoading: !redirectMode,
-        userAgent: args.userAgent,
+    var webView = Obx(
+      () => InAppWebView(
+        key: ValueKey(
+            'login-webview-${controller.webViewAttempt.value}'),
+        initialUrlRequest: URLRequest(url: WebUri(args.startUrl)),
+        initialSettings: InAppWebViewSettings(
+          useShouldOverrideUrlLoading: !redirectMode,
+          userAgent: args.userAgent,
+        ),
+        onWebViewCreated: controller.onWebViewCreated,
+        onLoadStop: controller.onLoadStop,
+        onLoadStart: controller.onLoadStart,
+        onReceivedError: controller.onReceivedError,
+        // 不提供该回调时首个文档导航会被插件中止（白屏），必须显式放行
+        shouldOverrideUrlLoading: redirectMode
+            ? null
+            : (controller, action) async {
+                return NavigationActionPolicy.ALLOW;
+              },
       ),
-      onLoadStop: controller.onLoadStop,
-      onLoadStart: controller.onLoadStart,
-      // 不提供该回调时首个文档导航会被插件中止（白屏），必须显式放行
-      shouldOverrideUrlLoading: redirectMode
-          ? null
-          : (controller, action) async {
-              return NavigationActionPolicy.ALLOW;
-            },
     );
     return Scaffold(
       appBar: AppBar(title: Text(args.title)),
@@ -226,7 +293,48 @@ class WebLoginPage extends GetView<WebLoginController> {
                 ),
               ),
             ),
-          Expanded(child: webView),
+          Expanded(
+            child: Stack(
+              children: [
+                webView,
+                Obx(() => controller.loadFailed.value
+                    ? _buildLoadFailureMask(context)
+                    : const SizedBox.shrink()),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildLoadFailureMask(BuildContext context) {
+    final exhausted = controller.loadRetryExhausted.value;
+    final colorScheme = Theme.of(context).colorScheme;
+    return Container(
+      color: colorScheme.surface,
+      alignment: Alignment.center,
+      padding: const EdgeInsets.symmetric(horizontal: 32),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.error_outline, size: 48, color: colorScheme.outline),
+          const SizedBox(height: 12),
+          Text(
+            exhausted ? "网页环境多次启动失败，请重启 App 后再试" : "页面启动失败",
+            style: const TextStyle(fontSize: 15),
+          ),
+          const SizedBox(height: 16),
+          if (exhausted)
+            TextButton(
+              onPressed: Get.back,
+              child: const Text("关闭页面"),
+            )
+          else
+            FilledButton(
+              onPressed: controller.retryManual,
+              child: const Text("重试"),
+            ),
         ],
       ),
     );
