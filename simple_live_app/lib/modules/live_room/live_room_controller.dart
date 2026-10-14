@@ -1249,6 +1249,11 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       addSysMsg("正在读取直播间信息");
       hydrateShareUrlFromFollow();
       final liveSite = site.liveSite;
+      // 斗鱼登录态（JWT）过期时先用云端最新 cookie 续命，保证后续房间详情/弹幕带新登录态
+      if (site.id == Constant.kDouyu &&
+          DouyuAccountService.instance.logined.value) {
+        await DouyuAccountService.instance.cloudRefreshDouyuIfExpired();
+      }
       if (liveSite is DouyinSite) {
         // 默认游客身份读取：不带 sessionid，不受房间黑名单影响
         detail.value = await liveSite.getRoomDetail(

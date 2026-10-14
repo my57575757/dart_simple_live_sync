@@ -56,6 +56,11 @@ class WebLoginArgs {
   /// 非空时在 WebView 顶部显示账号密码记忆条，并自动填充网页登录表单
   final LoginCredential? credential;
 
+  /// 是否启用 shouldOverrideUrlLoading。Windows 端该能力基于 CDP Fetch 拦截，
+  /// 表单登录的 POST→302 顶层跳转命中其缺陷（插件 DLL 访问违例闪退），
+  /// 此类登录流程（斗鱼）必须传 false，登录成功改由 onLoadStop 查 cookie 判定
+  final bool useShouldOverrideUrlLoading;
+
   WebLoginArgs({
     required this.title,
     required this.startUrl,
@@ -66,6 +71,7 @@ class WebLoginArgs {
     this.fragmentKey,
     this.userAgent,
     this.credential,
+    this.useShouldOverrideUrlLoading = true,
   });
 }
 
@@ -401,15 +407,19 @@ class WebLoginPage extends GetView<WebLoginController> {
     var args = controller.args;
     // 重定向提取模式（Twitch）：不用 CDP Fetch 实现的
     // shouldOverrideUrlLoading（POST→302 到 localhost 时会静默挂起），
-    // 改依赖 WebView2 NavigationStarting 触发的 onLoadStart，最可靠
+    // 改依赖 WebView2 NavigationStarting 触发的 onLoadStart，最可靠。
+    // 斗鱼同理：passport 表单登录 POST→302 跨域顶层跳转会让 CDP Fetch
+    // 拦截路径在插件 DLL 内访问违例闪退，通过 useShouldOverrideUrlLoading=false 关闭
     var redirectMode = args.redirectMatch != null;
+    var useOverride =
+        !redirectMode && args.useShouldOverrideUrlLoading;
     var webView = Obx(
       () => InAppWebView(
         key: ValueKey(
             'login-webview-${controller.webViewAttempt.value}'),
         initialUrlRequest: URLRequest(url: WebUri(args.startUrl)),
         initialSettings: InAppWebViewSettings(
-          useShouldOverrideUrlLoading: !redirectMode,
+          useShouldOverrideUrlLoading: useOverride,
           userAgent: args.userAgent,
         ),
         onWebViewCreated: controller.onWebViewCreated,
@@ -417,7 +427,7 @@ class WebLoginPage extends GetView<WebLoginController> {
         onLoadStart: controller.onLoadStart,
         onReceivedError: controller.onReceivedError,
         // 不提供该回调时首个文档导航会被插件中止（白屏），必须显式放行
-        shouldOverrideUrlLoading: redirectMode
+        shouldOverrideUrlLoading: !useOverride
             ? null
             : (controller, action) async {
                 return NavigationActionPolicy.ALLOW;

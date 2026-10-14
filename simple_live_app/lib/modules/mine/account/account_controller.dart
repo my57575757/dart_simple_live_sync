@@ -94,6 +94,87 @@ class AccountController extends GetxController {
     }
   }
 
+  /// 编辑斗鱼登录页自动填充用的账号密码（无需打开网页登录）
+  void douyuEditCredential() {
+    final service = DouyuAccountService.instance;
+    final accountController =
+        TextEditingController(text: service.loginAccount);
+    final passwordController =
+        TextEditingController(text: service.loginPassword);
+    bool obscure = true;
+    Get.dialog(
+      StatefulBuilder(
+        builder: (context, setState) => AlertDialog(
+          title: const Text("斗鱼登录账号密码"),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                "保存在本机并用于登录页自动填充，仍需手动点登录完成验证。",
+                style: TextStyle(fontSize: 12, color: Colors.grey),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: accountController,
+                decoration: const InputDecoration(
+                  hintText: "手机号 / 昵称",
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: passwordController,
+                obscureText: obscure,
+                decoration: InputDecoration(
+                  hintText: "密码",
+                  border: const OutlineInputBorder(),
+                  suffixIcon: IconButton(
+                    icon: Icon(obscure
+                        ? Icons.visibility_off_outlined
+                        : Icons.visibility_outlined),
+                    onPressed: () => setState(() => obscure = !obscure),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            if (service.loginAccount.isNotEmpty ||
+                service.loginPassword.isNotEmpty)
+              TextButton(
+                onPressed: () {
+                  service.clearCredential();
+                  Get.back();
+                  SmartDialog.showToast("已清除保存的账号密码");
+                },
+                child: const Text("清除"),
+              ),
+            TextButton(
+              onPressed: () => Get.back(),
+              child: const Text("取消"),
+            ),
+            TextButton(
+              onPressed: () {
+                final account = accountController.text.trim();
+                final password = passwordController.text;
+                Get.back();
+                if (account.isEmpty && password.isEmpty) {
+                  service.clearCredential();
+                  SmartDialog.showToast("已清除保存的账号密码");
+                } else {
+                  service.saveCredential(account, password);
+                  SmartDialog.showToast("账号密码已保存");
+                }
+              },
+              child: const Text("保存"),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   void huyaTap() async {
     if (HuyaAccountService.instance.logined.value) {
       var result = await Utils.showAlertDialog("确定要退出虎牙账号吗？", title: "退出登录");

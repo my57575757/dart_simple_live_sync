@@ -50,9 +50,20 @@ class AccountPage extends GetView<AccountController> {
               ),
               title: const Text("斗鱼直播"),
               subtitle: Text(DouyuAccountService.instance.name.value),
-              trailing: DouyuAccountService.instance.logined.value
-                  ? const Icon(Icons.logout)
-                  : const Icon(Icons.chevron_right),
+              trailing: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  IconButton(
+                    tooltip: "编辑登录账号密码",
+                    visualDensity: VisualDensity.compact,
+                    icon: const Icon(Icons.edit_outlined, size: 20),
+                    onPressed: controller.douyuEditCredential,
+                  ),
+                  Icon(DouyuAccountService.instance.logined.value
+                      ? Icons.logout
+                      : Icons.chevron_right),
+                ],
+              ),
               onTap: controller.douyuTap,
             ),
           ),

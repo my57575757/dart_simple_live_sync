@@ -232,6 +232,37 @@ class SyncClientRequest {
     }
   }
 
+  /// 仅同步斗鱼登录信息（cookie/账号/密码），登录成功后自动上传
+  Future<bool> updateDouyu(String parmsStr, String syncUrl) async {
+    var url = syncUrl + "/simpleLive/updateDouyu";
+    var data = await HttpClient.instance.postJson(
+      url,
+      data: parmsStr,
+    );
+    if (data["action"] == 'done') {
+      return true;
+    } else {
+      throw data["message"];
+    }
+  }
+
+  /// 仅拉取斗鱼登录信息，本地登录态过期时自动续命
+  Future<Map<String, dynamic>> getDouyuData(
+      String userName, String syncUrl) async {
+    var url = syncUrl + "/simpleLive/getDouyu";
+    var data = await HttpClient.instance.postJson(
+      url,
+      data: {
+        "userName": userName,
+      },
+    );
+    if (data != null) {
+      return data;
+    } else {
+      return {};
+    }
+  }
+
   Future<void> addUserData(String parmsStr, String syncUrl) async{
     var url = syncUrl+"/simpleLive/addUserData";
     await HttpClient.instance.postJson(
