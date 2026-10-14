@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:simple_live_app/app/sites.dart';
 import 'package:simple_live_app/modules/search/search_list_controller.dart';
+import 'package:simple_live_app/widgets/native_edit_field.dart';
 
 class AppSearchController extends GetxController
     with GetSingleTickerProviderStateMixin {
@@ -41,6 +42,10 @@ class AppSearchController extends GetxController
   StreamSubscription<dynamic>? streamSubscription;
 
   TextEditingController searchController = TextEditingController();
+
+  // 包裹同一个 TextEditingController：Windows 走原生输入框，doSearch 仍读它。
+  late final NativeEditFieldController searchField =
+      NativeEditFieldController(controller: searchController);
 
   @override
   void onInit() {

@@ -9,7 +9,14 @@
 
 #include <string>
 
-// 承载一个盖在 Flutter 视图上的无框单行 EDIT 子窗口。
+// 承载一个盖在 Flutter 视图上的无框单行输入框。
+//
+// 结构：WS_POPUP 顶层容器（owner 为 app 主窗口）+ 其中铺满的 EDIT 子窗口。
+// 之所以不用 WS_CHILD 直接嵌进主窗口：Flutter 引擎视图走 DirectComposition
+// 合成，经典 Win32 兄弟窗口的 z-order 对它无效，GDI 子窗口会被引擎的下一帧
+// 盖掉（实测 EDIT 表面已正确绘制但屏幕上只闪一下）。被主窗口拥有的顶层
+// popup 位于所有子窗口（含 DComp 层）之上，才能稳定可见。
+//
 // EDIT 持有 ImmCreateContext 自建的专属 HIMC，与引擎窗口的 IMM32<->TSF
 // 会话隔离：引擎侧桥僵死（flutter/flutter #190042）后此窗口仍可正常组字。
 // 所有方法只在顶层窗口线程调用。
@@ -21,12 +28,19 @@ class NativeEditHost {
 
   bool visible() const { return shown_; }
 
-  // 顶层窗口 WA_ACTIVE/WA_CLICKACTIVE 且 EDIT 可见时调用，夺回焦点，
+  // 顶层窗口 WA_ACTIVE/WA_CLICKACTIVE 且输入框可见时调用，夺回焦点，
   // 阻止基类把焦点还给引擎子窗口。
   void Refocus();
 
-  // 转发父窗口收到的 WM_CTLCOLOREDIT；非本 EDIT 返回 nullptr。
+  // 主窗口移动/缩放后调用：把 popup 重新贴到目标矩形的屏幕坐标。
+  void OnOwnerMoved();
+
+  // 转发 popup 容器收到的 WM_CTLCOLOREDIT；非本 EDIT 返回 nullptr。
   HBRUSH HandleCtlColor(HDC dc, HWND child);
+
+  // popup 容器窗口过程（注册窗口类需要外部可见）。
+  static LRESULT CALLBACK PopupWndProc(HWND hwnd, UINT message,
+                                       WPARAM wparam, LPARAM lparam);
 
  private:
   void HandleMethodCall(
@@ -38,17 +52,29 @@ class NativeEditHost {
   void SetText(const std::string& utf8);
   std::string GetText() const;
   void Submit();
+  void LayoutPopup(int x, int y, int w, int h);
   void ApplyRegion(int width, int height);
+  // 单行 EDIT 忽略 EM_SETRECT 的纵向分量、文字恒顶对齐。故不让 EDIT 铺满
+  // popup，而是把 EDIT 高度收为约一行行高、在 popup 内垂直居中放置。
+  void LayoutEdit(int popup_h);
   static LRESULT CALLBACK EditWndProc(HWND hwnd, UINT message,
                                       WPARAM wparam, LPARAM lparam);
 
   HWND parent_;
   HWND engine_window_;
+  HWND popup_ = nullptr;
   HWND edit_ = nullptr;
   WNDPROC original_edit_proc_ = nullptr;
   HIMC himc_ = nullptr;
 
   bool shown_ = false;
+  bool has_focus_ = false;
+  // popup 目标矩形（主窗口客户区物理像素坐标），供 OnOwnerMoved 重定位。
+  int rect_x_ = 0;
+  int rect_y_ = 0;
+  int rect_w_ = 0;
+  int rect_h_ = 0;
+  int edit_h_ = 0;  // EDIT 单行高度（≈字体行高），用于垂直居中
   int radius_px_ = 0;
   int pad_x_px_ = 0;
   COLORREF bg_color_ = RGB(255, 255, 255);

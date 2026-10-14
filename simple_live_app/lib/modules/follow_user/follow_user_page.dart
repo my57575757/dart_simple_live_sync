@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:remixicon/remixicon.dart';
@@ -12,6 +14,7 @@ import 'package:simple_live_app/services/db_service.dart';
 import 'package:simple_live_app/services/follow_service.dart';
 import 'package:simple_live_app/widgets/filter_button.dart';
 import 'package:simple_live_app/widgets/follow_user_item.dart';
+import 'package:simple_live_app/widgets/native_edit_field.dart';
 import 'package:simple_live_app/widgets/page_grid_view.dart';
 
 class FollowUserPage extends GetView<FollowUserController> {
@@ -23,24 +26,41 @@ class FollowUserPage extends GetView<FollowUserController> {
     if (count < 1) count = 1;
     return Scaffold(
       appBar: AppBar(
-        title: TextField(
-          controller: controller.searchController,
-          autofocus: false,
-          decoration: InputDecoration(
-            hintText: "关注用户",
-            border: OutlineInputBorder(
-              borderRadius: AppStyle.radius24,
-            ),
-            contentPadding: AppStyle.edgeInsetsH12,
-            suffixIcon: IconButton(
-              onPressed: controller.doCancel,
-              icon: const Icon(Icons.cancel),
-            ),
-          ),
-          onSubmitted: (e) {
-            controller.doSearch();
-          },
-        ),
+        title: Platform.isWindows
+            ? Row(
+                children: [
+                  Expanded(
+                    child: NativeEditField(
+                      controller: controller.searchField,
+                      hintText: '关注用户',
+                      radius: 24,
+                      onSubmitted: (_) => controller.doSearch(),
+                    ),
+                  ),
+                  IconButton(
+                    onPressed: controller.doCancel,
+                    icon: const Icon(Icons.cancel),
+                  ),
+                ],
+              )
+            : TextField(
+                controller: controller.searchController,
+                autofocus: false,
+                decoration: InputDecoration(
+                  hintText: "关注用户",
+                  border: OutlineInputBorder(
+                    borderRadius: AppStyle.radius24,
+                  ),
+                  contentPadding: AppStyle.edgeInsetsH12,
+                  suffixIcon: IconButton(
+                    onPressed: controller.doCancel,
+                    icon: const Icon(Icons.cancel),
+                  ),
+                ),
+                onSubmitted: (e) {
+                  controller.doSearch();
+                },
+              ),
         actions: [
           PopupMenuButton(
             itemBuilder: (context) {
@@ -215,6 +235,8 @@ class FollowUserPage extends GetView<FollowUserController> {
     final TextEditingController renameController = TextEditingController(
       text: item.userName,
     );
+    final renameField =
+        NativeEditFieldController(controller: renameController);
     Get.dialog(
       AlertDialog(
         contentPadding: const EdgeInsets.all(16.0),
@@ -245,27 +267,53 @@ class FollowUserPage extends GetView<FollowUserController> {
                 ),
               ],
             ),
-            TextField(
-              controller: renameController,
-              decoration: InputDecoration(
-                hintText: '重命名',
-                isDense: true,
-                border: OutlineInputBorder(),
-                suffixIcon: IconButton(
-                  onPressed: () {
-                    controller.setItemUserName(
-                        item, renameController.text.trim());
-                    Get.back();
-                  },
-                  icon: const Icon(Icons.check),
+            if (Platform.isWindows)
+              Row(
+                children: [
+                  Expanded(
+                    child: NativeEditField(
+                      controller: renameField,
+                      hintText: '重命名',
+                      radius: 4,
+                      onSubmitted: (v) {
+                        controller.setItemUserName(item, v.trim());
+                        Get.back();
+                      },
+                    ),
+                  ),
+                  IconButton(
+                    // popup 里未提交文本先同步回 controller。
+                    onPressed: () async {
+                      final text = (await renameField.commit()).trim();
+                      controller.setItemUserName(item, text);
+                      Get.back();
+                    },
+                    icon: const Icon(Icons.check),
+                  ),
+                ],
+              )
+            else
+              TextField(
+                controller: renameController,
+                decoration: InputDecoration(
+                  hintText: '重命名',
+                  isDense: true,
+                  border: OutlineInputBorder(),
+                  suffixIcon: IconButton(
+                    onPressed: () {
+                      controller.setItemUserName(
+                          item, renameController.text.trim());
+                      Get.back();
+                    },
+                    icon: const Icon(Icons.check),
+                  ),
                 ),
+                textInputAction: TextInputAction.done,
+                onSubmitted: (_) {
+                  controller.setItemUserName(item, renameController.text.trim());
+                  Get.back();
+                },
               ),
-              textInputAction: TextInputAction.done,
-              onSubmitted: (_) {
-                controller.setItemUserName(item, renameController.text.trim());
-                Get.back();
-              },
-            ),
             const Divider(),
             Obx(
               () {
@@ -313,7 +361,9 @@ class FollowUserPage extends GetView<FollowUserController> {
           ],
         ),
       ),
-    );
+    ).whenComplete(() {
+      renameField.dispose();
+    });
   }
 
   void showTagsManager() {
@@ -371,6 +421,7 @@ class FollowUserPage extends GetView<FollowUserController> {
   void editTagDialog(String title, {FollowUserTag? followUserTag}) {
     final TextEditingController tagEditController =
         TextEditingController(text: followUserTag?.tag);
+    final tagField = NativeEditFieldController(controller: tagEditController);
     bool upMode = title == "添加标签" ? true : false;
     Get.dialog(
       AlertDialog(
@@ -390,27 +441,39 @@ class FollowUserPage extends GetView<FollowUserController> {
                   fontSize: 18,
                 ),
               ),
-              TextField(
-                controller: tagEditController,
-                minLines: 1,
-                maxLines: 1,
-                decoration: InputDecoration(
-                  border: const OutlineInputBorder(),
-                  contentPadding: AppStyle.edgeInsetsA12,
-                  enabledBorder: OutlineInputBorder(
-                    borderSide: BorderSide(
-                      color: Colors.grey.withAlpha(51),
+              if (Platform.isWindows)
+                NativeEditField(
+                  controller: tagField,
+                  radius: 4,
+                  onSubmitted: (tag) {
+                    upMode
+                        ? controller.addTag(tag)
+                        : controller.updateTagName(followUserTag!, tag);
+                    Get.back();
+                  },
+                )
+              else
+                TextField(
+                  controller: tagEditController,
+                  minLines: 1,
+                  maxLines: 1,
+                  decoration: InputDecoration(
+                    border: const OutlineInputBorder(),
+                    contentPadding: AppStyle.edgeInsetsA12,
+                    enabledBorder: OutlineInputBorder(
+                      borderSide: BorderSide(
+                        color: Colors.grey.withAlpha(51),
+                      ),
                     ),
                   ),
+                  onSubmitted: (tag) {
+                    upMode
+                        ? controller.addTag(tagEditController.text)
+                        : controller.updateTagName(
+                            followUserTag!, tagEditController.text);
+                    Get.back();
+                  },
                 ),
-                onSubmitted: (tag) {
-                  upMode
-                      ? controller.addTag(tagEditController.text)
-                      : controller.updateTagName(
-                          followUserTag!, tagEditController.text);
-                  Get.back();
-                },
-              ),
               Container(
                 margin: AppStyle.edgeInsetsB4,
                 width: double.infinity,
@@ -424,11 +487,13 @@ class FollowUserPage extends GetView<FollowUserController> {
                       child: const Text('否'),
                     ),
                     TextButton(
-                      onPressed: () {
+                      onPressed: () async {
+                        final text = Platform.isWindows
+                            ? await tagField.commit()
+                            : tagEditController.text;
                         upMode
-                            ? controller.addTag(tagEditController.text)
-                            : controller.updateTagName(
-                                followUserTag!, tagEditController.text);
+                            ? controller.addTag(text)
+                            : controller.updateTagName(followUserTag!, text);
                         Get.back();
                       },
                       child: const Text('是'),
@@ -440,6 +505,8 @@ class FollowUserPage extends GetView<FollowUserController> {
           ),
         ),
       ),
-    );
+    ).whenComplete(() {
+      tagField.dispose();
+    });
   }
 }

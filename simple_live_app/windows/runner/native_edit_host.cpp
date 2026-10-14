@@ -14,8 +14,9 @@ namespace {
 
 constexpr int kMaxChars = 200;
 constexpr wchar_t kFontFace[] = L"Microsoft YaHei UI";
+constexpr wchar_t kPopupClass[] = L"SimpleLiveNativeEditPopup";
 
-// 进程只有一个顶层窗口、一个 NativeEditHost；EDIT 子类过程靠它找回对象。
+// 进程只有一个顶层窗口、一个 NativeEditHost；窗口过程靠它找回对象。
 NativeEditHost* g_instance = nullptr;
 
 std::wstring Utf8ToWide(const std::string& utf8) {
@@ -44,11 +45,6 @@ std::string WideToUtf8(const std::wstring& wide) {
   return out;
 }
 
-COLORREF RgbFromArgb(int32_t value) {
-  const auto v = static_cast<uint32_t>(value);
-  return RGB(v & 0xFF, (v >> 8) & 0xFF, (v >> 16) & 0xFF);
-}
-
 double AsDouble(const flutter::EncodableValue& value) {
   if (const auto* d = std::get_if<double>(&value)) {
     return *d;
@@ -64,6 +60,33 @@ double AsDouble(const flutter::EncodableValue& value) {
 
 int AsInt(const flutter::EncodableValue& value) {
   return static_cast<int>(AsDouble(value));
+}
+
+// 颜色（0xAARRGGBB）恒大于 INT32_MAX，绝不能像几何值那样经 double->int32
+// 强转（MSVC 溢出折叠为 0x80000000，RGB 通道全 0 变黑）。直接按位取 uint32。
+uint32_t AsUInt32(const flutter::EncodableValue& value) {
+  if (const auto* i = std::get_if<int32_t>(&value)) {
+    return static_cast<uint32_t>(*i);
+  }
+  if (const auto* i64 = std::get_if<int64_t>(&value)) {
+    return static_cast<uint32_t>(*i64);
+  }
+  if (const auto* d = std::get_if<double>(&value)) {
+    return static_cast<uint32_t>(*d);
+  }
+  return 0;
+}
+
+COLORREF RgbFromArgb(uint32_t v) {
+  return RGB(v & 0xFF, (v >> 8) & 0xFF, (v >> 16) & 0xFF);
+}
+
+void RegisterPopupClass() {
+  WNDCLASSW wc{};
+  wc.lpfnWndProc = &NativeEditHost::PopupWndProc;
+  wc.hInstance = GetModuleHandleW(nullptr);
+  wc.lpszClassName = kPopupClass;
+  RegisterClassW(&wc);  // 重复注册返回 0/ERROR_CLASS_ALREADY_EXISTS，忽略
 }
 
 }  // namespace
@@ -88,20 +111,19 @@ NativeEditHost::~NativeEditHost() {
     SetWindowLongPtrW(edit_, GWLP_WNDPROC,
                       reinterpret_cast<LONG_PTR>(original_edit_proc_));
     ImmAssociateContext(edit_, nullptr);
-    DestroyWindow(edit_);
-    edit_ = nullptr;
+  }
+  if (popup_) {
+    // 连带销毁其中的 EDIT。
+    DestroyWindow(popup_);
   }
   if (himc_) {
     ImmDestroyContext(himc_);
-    himc_ = nullptr;
   }
   if (bg_brush_) {
     DeleteObject(bg_brush_);
-    bg_brush_ = nullptr;
   }
   if (font_) {
     DeleteObject(font_);
-    font_ = nullptr;
   }
   if (g_instance == this) {
     g_instance = nullptr;
@@ -109,13 +131,25 @@ NativeEditHost::~NativeEditHost() {
 }
 
 bool NativeEditHost::EnsureCreated() {
-  if (edit_) {
+  if (popup_) {
     return true;
   }
-  edit_ = CreateWindowExW(0, L"EDIT", L"", WS_CHILD | ES_AUTOHSCROLL, 0, 0,
-                          10, 10, parent_, nullptr, GetModuleHandleW(nullptr),
+  RegisterPopupClass();
+  // WS_EX_NOACTIVATE：点击/显示不抢占主窗口激活态；WS_EX_TOOLWINDOW：
+  // 不进任务栏与 Alt-Tab。owner 为主窗口，popup 恒在其所有子窗口之上。
+  popup_ = CreateWindowExW(WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW, kPopupClass,
+                           L"", WS_POPUP | WS_CLIPCHILDREN, 0, 0, 10, 10,
+                           parent_, nullptr, GetModuleHandleW(nullptr),
+                           nullptr);
+  if (!popup_) {
+    return false;
+  }
+  edit_ = CreateWindowExW(0, L"EDIT", L"", WS_CHILD | ES_AUTOHSCROLL, 0, 0, 10,
+                          10, popup_, nullptr, GetModuleHandleW(nullptr),
                           nullptr);
   if (!edit_) {
+    DestroyWindow(popup_);
+    popup_ = nullptr;
     return false;
   }
   original_edit_proc_ = reinterpret_cast<WNDPROC>(SetWindowLongPtrW(
@@ -129,6 +163,43 @@ bool NativeEditHost::EnsureCreated() {
     ImmSetOpenStatus(himc_, TRUE);
   }
   return true;
+}
+
+void NativeEditHost::LayoutPopup(int x, int y, int w, int h) {
+  rect_x_ = x;
+  rect_y_ = y;
+  rect_w_ = w;
+  rect_h_ = h;
+  POINT origin{x, y};
+  ClientToScreen(parent_, &origin);
+  MoveWindow(popup_, origin.x, origin.y, w, h, FALSE);
+  ApplyRegion(w, h);
+  LayoutEdit(h);
+}
+
+void NativeEditHost::LayoutEdit(int popup_h) {
+  if (!edit_ || !font_ || popup_h <= 0) {
+    return;
+  }
+  HDC dc = ::GetDC(edit_);
+  if (!dc) {
+    return;
+  }
+  HFONT old = static_cast<HFONT>(::SelectObject(dc, font_));
+  TEXTMETRICW tm{};
+  GetTextMetricsW(dc, &tm);
+  ::SelectObject(dc, old);
+  ::ReleaseDC(edit_, dc);
+  // EDIT 高度取整行高（含 descent），垂直居中放进 popup；上下边带由
+  // popup 的 WM_ERASEBKGND 用底色填充。
+  edit_h_ = static_cast<int>(tm.tmHeight) + 2;
+  if (edit_h_ > popup_h) {
+    edit_h_ = popup_h;
+  }
+  const int ey = (popup_h - edit_h_) / 2;
+  RECT rc;
+  GetClientRect(popup_, &rc);
+  MoveWindow(edit_, 0, ey, rc.right - rc.left, edit_h_, FALSE);
 }
 
 void NativeEditHost::Show(const flutter::EncodableMap& args) {
@@ -155,11 +226,12 @@ void NativeEditHost::Show(const flutter::EncodableMap& args) {
   const int pad_x = at("padX") ? AsInt(*at("padX")) : 0;
   const double font_px = at("fontSize") ? AsDouble(*at("fontSize")) : 16.0;
   const COLORREF new_bg =
-      at("bg") ? RgbFromArgb(AsInt(*at("bg"))) : RGB(255, 255, 255);
+      at("bg") ? RgbFromArgb(AsUInt32(*at("bg"))) : RGB(255, 255, 255);
   const COLORREF new_text =
-      at("textColor") ? RgbFromArgb(AsInt(*at("textColor"))) : RGB(0, 0, 0);
+      at("textColor") ? RgbFromArgb(AsUInt32(*at("textColor")))
+                      : RGB(0, 0, 0);
   const COLORREF new_hint =
-      at("hintColor") ? RgbFromArgb(AsInt(*at("hintColor")))
+      at("hintColor") ? RgbFromArgb(AsUInt32(*at("hintColor")))
                       : RGB(128, 128, 128);
   hint_ = Utf8ToWide(str_at("hint"));
 
@@ -188,26 +260,34 @@ void NativeEditHost::Show(const flutter::EncodableMap& args) {
     SendMessageW(edit_, WM_SETFONT, reinterpret_cast<WPARAM>(font_), TRUE);
   }
 
-  MoveWindow(edit_, x, y, w, h, FALSE);
   SendMessageW(edit_, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN,
                MAKELPARAM(pad_x_px_, pad_x_px_));
-  ApplyRegion(w, h);
-  SetWindowTextW(edit_, Utf8ToWide(str_at("text")).c_str());
+  LayoutPopup(x, y, w, h);
+  // 文本只在「从隐藏态打开」时同步一次；relayout 会带着 shown_==true 重入，
+  // 那时 SetWindowText 会清空用户正在输入的内容。发送后清空走 setText 通道。
+  if (!shown_) {
+    SetWindowTextW(edit_, Utf8ToWide(str_at("text")).c_str());
+  }
 
+  ShowWindow(popup_, SW_SHOWNOACTIVATE);
+  // EDIT 是 WS_CHILD，创建后默认隐藏，必须随 popup 一起显示，否则容器是空壳。
   ShowWindow(edit_, SW_SHOWNOACTIVATE);
+  // owned 窗口理论上恒在 owner 之上，显式再提一次以防被 DComp 表面压住。
+  SetWindowPos(popup_, HWND_TOP, 0, 0, 0, 0,
+               SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
   shown_ = true;
   SetFocus(edit_);
 }
 
 void NativeEditHost::ApplyRegion(int width, int height) {
   if (radius_px_ <= 0) {
-    SetWindowRgn(edit_, nullptr, TRUE);
+    SetWindowRgn(popup_, nullptr, TRUE);
     return;
   }
   // CreateRoundRectRgn 的角椭圆参数是半径的两倍；SetWindowRgn 后区域归系统。
   HRGN region = CreateRoundRectRgn(0, 0, width + 1, height + 1,
                                    radius_px_ * 2, radius_px_ * 2);
-  SetWindowRgn(edit_, region, TRUE);
+  SetWindowRgn(popup_, region, TRUE);
 }
 
 void NativeEditHost::Hide(bool notify_dart) {
@@ -215,8 +295,8 @@ void NativeEditHost::Hide(bool notify_dart) {
     return;
   }
   shown_ = false;
-  if (edit_) {
-    ShowWindow(edit_, SW_HIDE);
+  if (popup_) {
+    ShowWindow(popup_, SW_HIDE);
   }
   if (engine_window_) {
     SetFocus(engine_window_);
@@ -247,14 +327,26 @@ std::string NativeEditHost::GetText() const {
 }
 
 void NativeEditHost::Submit() {
-  channel_->InvokeMethod("submit",
-                         std::make_unique<flutter::EncodableValue>(GetText()));
+  const std::string text = GetText();
+  channel_->InvokeMethod(
+      "submit", std::make_unique<flutter::EncodableValue>(text));
 }
 
 void NativeEditHost::Refocus() {
-  if (shown_ && edit_) {
+  if (shown_ && popup_ && edit_) {
+    ShowWindow(popup_, SW_SHOWNOACTIVATE);
     SetFocus(edit_);
   }
+}
+
+void NativeEditHost::OnOwnerMoved() {
+  if (!shown_ || !popup_) {
+    return;
+  }
+  POINT origin{rect_x_, rect_y_};
+  ClientToScreen(parent_, &origin);
+  SetWindowPos(popup_, nullptr, origin.x, origin.y, 0, 0,
+               SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
 }
 
 HBRUSH NativeEditHost::HandleCtlColor(HDC dc, HWND child) {
@@ -277,10 +369,10 @@ void NativeEditHost::HandleMethodCall(
       return;
     }
     Show(*args);
-    if (edit_) {
+    if (popup_) {
       result->Success();
     } else {
-      result->Error("create_failed", "CreateWindowExW(EDIT) failed");
+      result->Error("create_failed", "native popup create failed");
     }
   } else if (name == "hide") {
     Hide(false);
@@ -297,6 +389,42 @@ void NativeEditHost::HandleMethodCall(
   }
 }
 
+LRESULT CALLBACK NativeEditHost::PopupWndProc(HWND hwnd, UINT message,
+                                              WPARAM wparam, LPARAM lparam) {
+  NativeEditHost* self = g_instance;
+  switch (message) {
+    case WM_ERASEBKGND:
+      // 圆角区域内 EDIT 铺满，四角露出的 popup 自身用底色填充，避免黑角。
+      if (self && self->bg_brush_) {
+        RECT rc;
+        GetClientRect(hwnd, &rc);
+        FillRect(reinterpret_cast<HDC>(wparam), &rc, self->bg_brush_);
+        return 1;
+      }
+      break;
+
+    case WM_CTLCOLOREDIT:
+      if (self) {
+        HBRUSH brush = self->HandleCtlColor(
+            reinterpret_cast<HDC>(wparam), reinterpret_cast<HWND>(lparam));
+        if (brush) {
+          return reinterpret_cast<LRESULT>(brush);
+        }
+      }
+      break;
+
+    case WM_SIZE:
+      if (self && self->edit_ && self->edit_h_ > 0) {
+        const int pw = static_cast<int>(LOWORD(lparam));
+        const int ph = static_cast<int>(HIWORD(lparam));
+        MoveWindow(self->edit_, 0, (ph - self->edit_h_) / 2, pw,
+                   self->edit_h_, TRUE);
+      }
+      return 0;
+  }
+  return DefWindowProcW(hwnd, message, wparam, lparam);
+}
+
 LRESULT CALLBACK NativeEditHost::EditWndProc(HWND hwnd, UINT message,
                                              WPARAM wparam, LPARAM lparam) {
   NativeEditHost* self = g_instance;
@@ -304,6 +432,20 @@ LRESULT CALLBACK NativeEditHost::EditWndProc(HWND hwnd, UINT message,
   switch (message) {
     case WM_GETDLGCODE:
       return DLGC_WANTALLKEYS;
+
+    case WM_SETFOCUS:
+      if (self) {
+        self->has_focus_ = true;
+        InvalidateRect(hwnd, nullptr, TRUE);
+      }
+      break;
+
+    case WM_KILLFOCUS:
+      if (self) {
+        self->has_focus_ = false;
+        InvalidateRect(hwnd, nullptr, TRUE);
+      }
+      break;
 
     case WM_KEYDOWN:
       if (self) {
@@ -329,8 +471,12 @@ LRESULT CALLBACK NativeEditHost::EditWndProc(HWND hwnd, UINT message,
       const LRESULT painted =
           CallWindowProcW(self ? self->original_edit_proc_ : nullptr, hwnd,
                           message, wparam, lparam);
-      // 默认绘制已 EndPaint、更新区被清空；GetDCEx 取窗口可见区做裁剪补绘。
-      if (self && GetWindowTextLengthW(hwnd) == 0 && !self->hint_.empty()) {
+      // 占位只在「无焦点且空文本」时补绘：组字期间 EDIT 必有焦点，hint 绝不
+      // 可能盖住 IME composition；默认绘制已 EndPaint，故用 GetDCEx 取可见区。
+      const bool draw_hint = self && !self->has_focus_ &&
+                             GetWindowTextLengthW(hwnd) == 0 &&
+                             !self->hint_.empty();
+      if (draw_hint) {
         HDC dc = GetDCEx(hwnd, nullptr, DCX_CACHE);
         if (dc) {
           SetBkMode(dc, TRANSPARENT);
@@ -347,7 +493,7 @@ LRESULT CALLBACK NativeEditHost::EditWndProc(HWND hwnd, UINT message,
           if (old_font) {
             SelectObject(dc, old_font);
           }
-          ReleaseDC(hwnd, dc);
+          ::ReleaseDC(hwnd, dc);
         }
       }
       return painted;

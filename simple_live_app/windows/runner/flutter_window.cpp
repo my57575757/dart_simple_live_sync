@@ -72,7 +72,7 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
 
   switch (message) {
     case WM_ACTIVATE:
-      // EDIT 可见时拦截基类 WM_ACTIVATE 里把焦点强制还给引擎窗口的行为；
+      // popup 可见时拦截基类 WM_ACTIVATE 里把焦点强制还给引擎窗口的行为；
       // 引擎已在上面的 HandleTopLevelWindowProc 先收到过本条消息。
       if (native_edit_host_ && native_edit_host_->visible() &&
           LOWORD(wparam) != WA_INACTIVE) {
@@ -81,13 +81,12 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
       }
       break;
 
-    case WM_CTLCOLOREDIT:
+    case WM_MOVE:
+    case WM_SIZE:
+      // popup 是屏幕坐标的顶层窗口，主窗口移动/缩放时让它跟随原客户区锚点。
+      // 缩放的精确位置另由 Dart didChangeMetrics 重发 show 修正。
       if (native_edit_host_) {
-        HBRUSH brush = native_edit_host_->HandleCtlColor(
-            reinterpret_cast<HDC>(wparam), reinterpret_cast<HWND>(lparam));
-        if (brush) {
-          return reinterpret_cast<LRESULT>(brush);
-        }
+        native_edit_host_->OnOwnerMoved();
       }
       break;
 

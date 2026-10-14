@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:io';
 
 import 'package:floating/floating.dart';
@@ -17,7 +16,7 @@ import 'package:simple_live_app/app/utils.dart';
 import 'package:simple_live_app/modules/live_room/live_room_controller.dart';
 import 'package:simple_live_app/modules/live_room/player/player_controls.dart';
 import 'package:simple_live_app/services/follow_service.dart';
-import 'package:simple_live_app/services/windows_native_edit.dart';
+import 'package:simple_live_app/widgets/native_edit_field.dart';
 import 'package:simple_live_app/widgets/desktop_refresh_button.dart';
 import 'package:simple_live_app/widgets/follow_user_item.dart';
 import 'package:simple_live_app/widgets/keep_alive_wrapper.dart';
@@ -1044,26 +1043,20 @@ class SendDanmakuBar extends StatefulWidget {
   State<SendDanmakuBar> createState() => _SendDanmakuBarState();
 }
 
-class _SendDanmakuBarState extends State<SendDanmakuBar>
-    with WidgetsBindingObserver {
+class _SendDanmakuBarState extends State<SendDanmakuBar> {
   // 只创建一次：避免父级重建时换新 controller 导致输入框重配、打断 IME（搜狗偶发不生效）
   final inputController = TextEditingController();
   final inputFocusNode = FocusNode();
   bool inputFocused = false;
-  bool _nativeEditActive = false;
-  String _nativeDraft = '';
-  // 存为字段：dispose 时按身份解绑，避免误删另一个弹幕条实例刚绑的回调。
-  late final void Function(String) _submitCallback = _handleNativeSubmit;
-  late final void Function() _closedCallback = _onNativeClosed;
+  // 包裹同一个 TextEditingController：Windows 走原生 popup，其他平台走 TextField。
+  late final NativeEditFieldController _edit =
+      NativeEditFieldController(controller: inputController);
   LiveRoomController get roomController => widget.roomController;
 
   @override
   void initState() {
     super.initState();
     inputFocusNode.addListener(onFocusChanged);
-    if (Platform.isWindows) {
-      WidgetsBinding.instance.addObserver(this);
-    }
   }
 
   void onFocusChanged() {
@@ -1074,17 +1067,6 @@ class _SendDanmakuBarState extends State<SendDanmakuBar>
 
   @override
   void dispose() {
-    if (Platform.isWindows) {
-      WidgetsBinding.instance.removeObserver(this);
-      final svc = WindowsNativeEdit.instance;
-      if (svc.onSubmit == _submitCallback) {
-        svc.onSubmit = null;
-      }
-      if (svc.onClosed == _closedCallback) {
-        svc.onClosed = null;
-      }
-      unawaited(svc.hide());
-    }
     inputFocusNode.removeListener(onFocusChanged);
     inputController.dispose();
     inputFocusNode.dispose();
@@ -1092,116 +1074,25 @@ class _SendDanmakuBarState extends State<SendDanmakuBar>
   }
 
   Future<void> submit(String v) async {
-    if (!roomController.danmakuLogined) {
-      roomController.showDanmakuLoginDialog();
-      return;
-    }
-    await roomController.sendDanmaku(v);
-    inputController.clear();
-  }
-
-  @override
-  void didChangeMetrics() => _scheduleNativeRelayout();
-
-  @override
-  void didChangeTextScaleFactor() => _scheduleNativeRelayout();
-
-  void _scheduleNativeRelayout() {
-    if (!_nativeEditActive) {
-      return;
-    }
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_nativeEditActive && mounted) {
-        _openNativeEdit();
-      }
-    });
-  }
-
-  Future<void> _handleNativeSubmit(String raw) async {
-    final text = raw.trim();
+    final text = v.trim();
     if (!roomController.danmakuLogined) {
       roomController.showDanmakuLoginDialog();
       return;
     }
     if (text.isEmpty) {
-      WindowsNativeEdit.instance.setText('');
+      inputController.clear();
       return;
     }
     await roomController.sendDanmaku(text);
-    // sendDanmaku 内部吞掉全部错误并正常返回，与现有 TextField 路径一致总是清空。
-    _nativeDraft = '';
-    WindowsNativeEdit.instance.setText('');
-  }
-
-  Future<void> _onNativeClosed() async {
-    _nativeDraft = await WindowsNativeEdit.instance.commit();
-    if (mounted) {
-      setState(() => _nativeEditActive = false);
-    }
-  }
-
-  Future<void> _openNativeEdit() async {
-    final box = context.findRenderObject();
-    if (box is! RenderBox || !box.hasSize) {
-      return;
-    }
-    final dpr = MediaQuery.devicePixelRatioOf(context);
-    final origin = box.localToGlobal(Offset.zero);
-    // 内缩 1 物理像素，避免 EDIT 底色盖住 Flutter 绘制的圆角描边。
-    final rect = nativeEditPhysicalRect(
-      globalLogicalOrigin: origin,
-      logicalSize: box.size,
-      devicePixelRatio: dpr,
-    ).deflate(1.0);
-
-    final theme = Theme.of(context);
-    final style = DefaultTextStyle.of(context).style;
-    final svc = WindowsNativeEdit.instance;
-    svc.onSubmit = _submitCallback;
-    svc.onClosed = _closedCallback;
-    await svc.show(
-      rect: rect,
-      fontSizePx:
-          MediaQuery.textScalerOf(context).scale(style.fontSize ?? 16.0) *
-              dpr,
-      bgColor: theme.cardColor.toARGB32(),
-      textColor: (style.color ?? const Color(0xFF000000)).toARGB32(),
-      hintColor: theme.hintColor.toARGB32(),
-      radiusPx: (20.0 * dpr).round(),
-      padXPx: (12.0 * dpr).round(),
-      hintText: '说点什么…',
-      text: _nativeDraft,
-    );
-    _nativeEditActive = true;
+    // sendDanmaku 内部吞掉全部错误并正常返回，与原 TextField 路径一致总是清空。
+    inputController.clear();
   }
 
   Future<void> _pressNativeSend() async {
     if (roomController.sendingDanmaku.value) {
       return;
     }
-    final text = await WindowsNativeEdit.instance.commit();
-    await _handleNativeSubmit(text);
-  }
-
-  Widget _buildNativeField(BuildContext context) {
-    final style = DefaultTextStyle.of(context).style;
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: _openNativeEdit,
-      child: InputDecorator(
-        isEmpty: true,
-        decoration: const InputDecoration(
-          hintText: '说点什么…',
-          counterText: '',
-          isDense: true,
-          contentPadding: AppStyle.edgeInsetsA12,
-          border: OutlineInputBorder(
-            borderRadius: BorderRadius.all(Radius.circular(20)),
-          ),
-        ),
-        child: Text('', style: style),
-      ),
-    );
+    await submit(await _edit.commit());
   }
 
   @override
@@ -1221,7 +1112,12 @@ class _SendDanmakuBarState extends State<SendDanmakuBar>
           children: [
             Expanded(
               child: Platform.isWindows
-                  ? _buildNativeField(context)
+                  ? NativeEditField(
+                      controller: _edit,
+                      hintText: '说点什么…',
+                      radius: 20,
+                      onSubmitted: submit,
+                    )
                   : TextField(
                       focusNode: inputFocusNode,
                       controller: inputController,

@@ -15,11 +15,17 @@ import 'package:simple_live_app/services/follow_service.dart';
 import 'package:simple_live_app/services/follow_service.dart';
 
 import 'package:simple_live_app/modules//sync/local_sync/local_sync_controller.dart';
+import 'package:simple_live_app/widgets/native_edit_field.dart';
 
 class FollowUserController extends BasePageController<FollowUser> {
   StreamSubscription<dynamic>? onUpdatedIndexedStream;
   StreamSubscription<dynamic>? onUpdatedListStream;
   TextEditingController searchController = TextEditingController();
+
+  // 包裹同一个 TextEditingController：Windows 走原生输入框，doSearch 仍读它。
+  late final NativeEditFieldController searchField =
+      NativeEditFieldController(controller: searchController);
+
   final FocusNode _searchFocusNode = FocusNode();
   final syncController = LocalSyncController("localhost");
   /// 0:全部 1:直播中 2:未直播

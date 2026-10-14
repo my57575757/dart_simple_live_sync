@@ -36,6 +36,7 @@ import 'package:simple_live_app/services/douyin_account_service.dart';
 import 'package:simple_live_app/services/twitch_account_service.dart';
 import 'package:simple_live_app/widgets/desktop_refresh_button.dart';
 import 'package:simple_live_app/widgets/follow_user_item.dart';
+import 'package:simple_live_app/widgets/native_edit_field.dart';
 import 'package:simple_live_core/simple_live_core.dart';
 import 'package:url_launcher/url_launcher_string.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
@@ -1020,14 +1021,15 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
 
   /// 底部弹幕输入框：宽度略窄于画面，回车发送、Esc 取消
   Future<String?> _showBottomDanmakuInput() {
-    final textController = TextEditingController();
+    final fieldController = NativeEditFieldController();
     final keyFocusNode = FocusNode();
     return Get.dialog<String>(
       barrierColor: Colors.black26,
       KeyboardListener(
         focusNode: keyFocusNode,
         onKeyEvent: (event) {
-          if (event is KeyDownEvent &&
+          if (!Platform.isWindows &&
+              event is KeyDownEvent &&
               event.logicalKey == LogicalKeyboardKey.escape) {
             Get.back();
           }
@@ -1038,38 +1040,32 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
             widthFactor: 0.86,
             child: Padding(
               padding: const EdgeInsets.only(bottom: 36),
-              child: Material(
-                color: Colors.transparent,
-                child: Container(
-                  decoration: BoxDecoration(
-                    color: const Color(0xCC000000),
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: Colors.white24),
-                  ),
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                  child: TextField(
-                    autofocus: true,
-                    controller: textController,
-                    maxLength: 200,
-                    style: const TextStyle(color: Colors.white),
-                    textInputAction: TextInputAction.send,
-                    onSubmitted: (v) => Get.back(result: v),
-                    decoration: const InputDecoration(
-                      isCollapsed: true,
-                      counterText: "",
-                      border: InputBorder.none,
-                      contentPadding: EdgeInsets.symmetric(vertical: 14),
-                      hintText: "发个弹幕呗…",
-                      hintStyle: TextStyle(color: Colors.white38),
-                    ),
-                  ),
-                ),
+              child: NativeEditField(
+                controller: fieldController,
+                autofocus: true,
+                hintText: '发个弹幕呗…',
+                background: const Color(0xCC000000),
+                textColor: Colors.white,
+                hintColor: Colors.white38,
+                borderColor: Colors.white24,
+                radius: 8,
+                horizontalPadding: 16,
+                onSubmitted: (v) => Get.back(result: v),
+                // Windows 下 Esc 由原生 popup 转成 closed：关闭弹框（不发送）。
+                onClosed: () {
+                  if (Get.isDialogOpen ?? false) {
+                    Get.back();
+                  }
+                },
               ),
             ),
           ),
         ),
       ),
-    );
+    ).whenComplete(() {
+      keyFocusNode.dispose();
+      fieldController.dispose();
+    });
   }
 
   /// 当前平台账号是否已登录；竖屏底部栏与全屏弹框入口同源
