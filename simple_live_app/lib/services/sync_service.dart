@@ -425,8 +425,20 @@ class SyncService extends GetxService {
       var body = await request.readAsString();
       Log.d('_syncDouyuAccountRequest: $body');
       var jsonBody = json.decode(body);
-      var cookie = jsonBody['cookie'];
-      DouyuAccountService.instance.setSyncedCookie(cookie);
+      var cookie = (jsonBody['cookie'] ?? "").toString();
+      // 空 cookie 表示对端未登录，不清空本机已有登录态
+      if (cookie.isNotEmpty) {
+        DouyuAccountService.instance.setSyncedCookie(cookie);
+      }
+      // 账号密码字段缺失(null)不覆盖；空串表示对端已取消记住，需清空
+      var account = jsonBody['account'];
+      var password = jsonBody['password'];
+      if (account != null || password != null) {
+        DouyuAccountService.instance.setSyncedCredential(
+          account?.toString(),
+          password?.toString(),
+        );
+      }
       SmartDialog.showToast('已同步斗鱼账号');
       return toJsonResponse({
         'status': true,

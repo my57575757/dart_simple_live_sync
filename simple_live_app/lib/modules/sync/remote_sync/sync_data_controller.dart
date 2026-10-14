@@ -41,6 +41,8 @@ class SyncDataController extends BaseController {
         'bilibiliData': bilibili,
         'ttwid': ttwid,
         'douyuData': douyu,
+        'douyuAccount': DouyuAccountService.instance.loginAccount,
+        'douyuPassword': DouyuAccountService.instance.loginPassword,
         'huyaData': huya,
         'douyinData': douyin,
         'twitchData': twitch,

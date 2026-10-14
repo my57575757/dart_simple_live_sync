@@ -142,6 +142,12 @@ class LocalStorageService extends GetxService {
   /// 斗鱼cookie
   static const String kDouyuCookie = "DouyuCookie";
 
+  /// 斗鱼登录账号（登录页自动填充用）
+  static const String kDouyuLoginAccount = "DouyuLoginAccount";
+
+  /// 斗鱼登录密码（登录页自动填充用，明文存储）
+  static const String kDouyuLoginPassword = "DouyuLoginPassword";
+
   /// 虎牙cookie
   static const String kHuyaCookie = "HuyaCookie";
 

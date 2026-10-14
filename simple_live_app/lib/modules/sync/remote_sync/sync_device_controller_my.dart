@@ -153,13 +153,20 @@ class SyncDeviceControllerMy extends BaseController {
   void syncDouyuAccount({
     String dataStr = "",
     bool isOverlay = true,
+    String? account,
+    String? password,
   }) async {
     try {
       if(isOverlay) {
         SmartDialog.showLoading(msg: "同步中...");
       }
       var douyu = ""==dataStr?DouyuAccountService.instance.cookie:dataStr;
-      await request.syncDouyuAccount(client, douyu);
+      await request.syncDouyuAccount(
+        client,
+        douyu,
+        account: account,
+        password: password,
+      );
       if(isOverlay) {
         SmartDialog.showToast("已同步斗鱼账号");
       }

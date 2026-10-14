@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
@@ -6,6 +7,33 @@ import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:get/get.dart';
 
 import 'web_load_watchdog.dart';
+
+/// 登录页凭据记忆配置：WebView 顶部显示原生账号密码条，
+/// 页面加载后用 JS 自动填入网页登录表单（不自动提交，登录/验证仍由用户完成）。
+/// 当前填充逻辑对应斗鱼 passport.douyu.com 登录页。
+class LoginCredential {
+  final String account;
+  final String password;
+  final String accountHint;
+
+  /// 桌面 UA 下页面默认停在验证码登录，自动填充前需点击该文本的 tab
+  final String passwordTabText;
+
+  /// 仅在该主机名下的页面执行填充 JS
+  final String injectHost;
+  final void Function(String account, String password) onSave;
+  final void Function() onClear;
+
+  const LoginCredential({
+    required this.account,
+    required this.password,
+    required this.onSave,
+    required this.onClear,
+    this.accountHint = "手机号 / 昵称",
+    this.passwordTabText = "密码登录",
+    this.injectHost = "passport.douyu.com",
+  });
+}
 
 class WebLoginArgs {
   static const String desktopUserAgent =
@@ -25,6 +53,9 @@ class WebLoginArgs {
   /// 非空时用该 UA 覆盖 WebView 默认 UA（如虎牙需强制桌面页登录）
   final String? userAgent;
 
+  /// 非空时在 WebView 顶部显示账号密码记忆条，并自动填充网页登录表单
+  final LoginCredential? credential;
+
   WebLoginArgs({
     required this.title,
     required this.startUrl,
@@ -34,6 +65,7 @@ class WebLoginArgs {
     this.redirectMatch,
     this.fragmentKey,
     this.userAgent,
+    this.credential,
   });
 }
 
@@ -73,15 +105,65 @@ class WebLoginController extends GetxController {
   final RxBool loadRetryExhausted = false.obs;
   final RxInt webViewAttempt = 0.obs;
 
+  /// 凭据记忆条控件（args.credential 非空时才创建）
+  InAppWebViewController? _webViewController;
+  TextEditingController? accountController;
+  TextEditingController? passwordController;
+  final RxBool obscurePassword = true.obs;
+  RxBool? rememberCredential;
+  Timer? _autofillTimer;
+  int _autofillAttempts = 0;
+  static const int _autofillMaxAttempts = 12;
+
+  bool get _credentialEnabled => args.credential != null;
+
   @override
   void onInit() {
     super.onInit();
+    if (_credentialEnabled) {
+      final cred = args.credential!;
+      accountController = TextEditingController(text: cred.account);
+      passwordController = TextEditingController(text: cred.password);
+      rememberCredential =
+          (cred.account.isNotEmpty || cred.password.isNotEmpty).obs;
+      accountController!.addListener(_onCredentialChanged);
+      passwordController!.addListener(_onCredentialChanged);
+    }
     _loadWatchdog.start(DateTime.now().millisecondsSinceEpoch);
     _watchdogTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (_loadWatchdog.poll(DateTime.now().millisecondsSinceEpoch)) {
         _onWatchdogFailed();
       }
     });
+  }
+
+  void _onCredentialChanged() {
+    if (rememberCredential?.value ?? false) {
+      args.credential!
+          .onSave(accountController!.text.trim(), passwordController!.text);
+    }
+  }
+
+  void toggleRememberCredential(bool value) {
+    rememberCredential!.value = value;
+    final cred = args.credential!;
+    if (value) {
+      cred.onSave(accountController!.text.trim(), passwordController!.text);
+    } else {
+      cred.onClear();
+    }
+  }
+
+  /// 手动点「填入网页」：重新轮询注入
+  void fillCredentialNow() {
+    final webViewController = _webViewController;
+    if (webViewController == null) return;
+    if (accountController!.text.trim().isEmpty &&
+        passwordController!.text.isEmpty) {
+      SmartDialog.showToast("请先在上方填写账号密码");
+      return;
+    }
+    startCredentialAutofill(webViewController);
   }
 
   void _onWatchdogFailed() {
@@ -106,7 +188,63 @@ class WebLoginController extends GetxController {
   }
 
   void onWebViewCreated(InAppWebViewController controller) {
+    _webViewController = controller;
     _loadWatchdog.markCreated(DateTime.now().millisecondsSinceEpoch);
+  }
+
+  /// 轮询等待登录表单渲染完成后注入账号密码（返回 true 表示已填入）
+  void startCredentialAutofill(InAppWebViewController controller) {
+    _autofillTimer?.cancel();
+    final account = accountController?.text.trim() ?? "";
+    final password = passwordController?.text ?? "";
+    if (account.isEmpty || password.isEmpty) return;
+    _autofillAttempts = 0;
+    _autofillTimer = Timer.periodic(const Duration(milliseconds: 500),
+        (timer) async {
+      _autofillAttempts++;
+      bool done = false;
+      try {
+        done = await controller.evaluateJavascript(
+          source: _buildAutofillScript(account, password),
+        ) as bool;
+      } catch (_) {}
+      if (done || _autofillAttempts >= _autofillMaxAttempts) {
+        timer.cancel();
+      }
+    });
+  }
+
+  /// 斗鱼 passport 登录页填充脚本：账号/密码经 jsonEncode 转义后嵌入
+  String _buildAutofillScript(String account, String password) {
+    final tabText = jsonEncode(args.credential!.passwordTabText);
+    final accountJson = jsonEncode(account);
+    final passwordJson = jsonEncode(password);
+    return '''
+(function(){
+  var acc = document.querySelector('input[name="nicknameOrPhone"]');
+  var pwd = document.querySelector('input[type=password][name="password"]');
+  if(!acc || !pwd || !acc.offsetParent || !pwd.offsetParent){
+    var divs = document.getElementsByTagName('div');
+    for(var i=0;i<divs.length;i++){
+      var d = divs[i];
+      if(d.children.length===0 && (d.innerText||'').trim()===$tabText && d.offsetParent){
+        d.click();
+        break;
+      }
+    }
+    return false;
+  }
+  if(acc.value===$accountJson && pwd.value===$passwordJson) return true;
+  var setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set;
+  setter.call(acc, $accountJson);
+  acc.dispatchEvent(new Event('input',{bubbles:true}));
+  acc.dispatchEvent(new Event('change',{bubbles:true}));
+  setter.call(pwd, $passwordJson);
+  pwd.dispatchEvent(new Event('input',{bubbles:true}));
+  pwd.dispatchEvent(new Event('change',{bubbles:true}));
+  return true;
+})()
+''';
   }
 
   void onReceivedError(
@@ -137,6 +275,12 @@ class WebLoginController extends GetxController {
       if (_finished) return;
       _startPolling(controller);
       return;
+    }
+    // 凭据自动填充：仅在登录页主机名下执行
+    if (_credentialEnabled &&
+        uri != null &&
+        uri.host == args.credential!.injectHost) {
+      startCredentialAutofill(controller);
     }
     // 空 cookieUrl 时不能检查（requiredCookies 为空时 every 会空真误判成功）
     if (args.cookieUrl.isEmpty || _finished || _checking) {
@@ -240,7 +384,11 @@ class WebLoginController extends GetxController {
   @override
   void onClose() {
     _pollTimer?.cancel();
+    _autofillTimer?.cancel();
     _watchdogTimer?.cancel();
+    accountController?.removeListener(_onCredentialChanged);
+    accountController?.dispose();
+    passwordController?.dispose();
     super.onClose();
   }
 }
@@ -293,6 +441,8 @@ class WebLoginPage extends GetView<WebLoginController> {
                 ),
               ),
             ),
+          if (controller.args.credential != null)
+            _buildCredentialBar(context),
           Expanded(
             child: Stack(
               children: [
@@ -302,6 +452,91 @@ class WebLoginPage extends GetView<WebLoginController> {
                     : const SizedBox.shrink()),
               ],
             ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCredentialBar(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final credential = controller.args.credential!;
+    final inputBorder = OutlineInputBorder(
+      borderSide: BorderSide(color: colorScheme.outlineVariant),
+    );
+    return Container(
+      color: colorScheme.surfaceContainerHighest,
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: controller.accountController,
+                  style: const TextStyle(fontSize: 14),
+                  decoration: InputDecoration(
+                    isDense: true,
+                    hintText: credential.accountHint,
+                    border: inputBorder,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Obx(
+                  () => TextField(
+                    controller: controller.passwordController,
+                    style: const TextStyle(fontSize: 14),
+                    obscureText: controller.obscurePassword.value,
+                    decoration: InputDecoration(
+                      isDense: true,
+                      hintText: "密码",
+                      border: inputBorder,
+                      suffixIcon: IconButton(
+                        iconSize: 18,
+                        padding: EdgeInsets.zero,
+                        icon: Icon(controller.obscurePassword.value
+                            ? Icons.visibility_off_outlined
+                            : Icons.visibility_outlined),
+                        onPressed: () => controller.obscurePassword.value =
+                            !controller.obscurePassword.value,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          Row(
+            children: [
+              Obx(
+                () => Checkbox(
+                  value: controller.rememberCredential!.value,
+                  visualDensity: VisualDensity.compact,
+                  onChanged: (v) =>
+                      controller.toggleRememberCredential(v ?? false),
+                ),
+              ),
+              GestureDetector(
+                onTap: () => controller.toggleRememberCredential(
+                    !controller.rememberCredential!.value),
+                child: const Text("记住账号密码", style: TextStyle(fontSize: 13)),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  "自动填入网页，仍需手动点登录",
+                  style: TextStyle(fontSize: 11, color: colorScheme.outline),
+                ),
+              ),
+              TextButton.icon(
+                onPressed: controller.fillCredentialNow,
+                icon: const Icon(Icons.input, size: 18),
+                label: const Text("填入网页"),
+              ),
+            ],
           ),
         ],
       ),

@@ -104,14 +104,21 @@ class SyncDeviceController extends BaseController {
 
   void syncDouyuAccount() async {
     try {
-      if (!DouyuAccountService.instance.logined.value) {
+      var service = DouyuAccountService.instance;
+      if (!service.logined.value &&
+          service.loginAccount.isEmpty &&
+          service.loginPassword.isEmpty) {
         SmartDialog.showToast("未登录斗鱼");
         return;
       }
       SmartDialog.showLoading(msg: "同步中...");
 
       await request.syncDouyuAccount(
-          client, DouyuAccountService.instance.cookie);
+        client,
+        service.cookie,
+        account: service.loginAccount,
+        password: service.loginPassword,
+      );
       SmartDialog.showToast("已同步斗鱼账号");
     } catch (e) {
       SmartDialog.showToast("同步失败:$e");
