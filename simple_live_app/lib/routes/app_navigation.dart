@@ -5,6 +5,8 @@ import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:get/get.dart';
 import 'package:simple_live_app/app/constant.dart';
 import 'package:simple_live_app/app/controller/app_settings_controller.dart';
+import 'package:simple_live_app/app/multiwindow/shell/tab_open_request.dart';
+import 'package:simple_live_app/app/multiwindow/shell/tab_store.dart';
 import 'package:simple_live_app/app/sites.dart';
 import 'package:simple_live_app/app/utils.dart';
 import 'package:simple_live_app/models/sync_client_info_model.dart';
@@ -48,6 +50,13 @@ class AppNavigator {
           SmartDialog.showToast("未完成登录");
         }
       }
+    }
+
+    if (Platform.isWindows) {
+      Get.find<TabStore>().open(
+        TabOpenRequest(siteId: site.id, roomId: roomId, shareUrl: shareUrl),
+      );
+      return;
     }
 
     Get.toNamed(RoutePath.kLiveRoomDetail, arguments: site, parameters: {

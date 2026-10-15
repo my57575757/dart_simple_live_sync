@@ -15,6 +15,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:simple_live_app/app/app_style.dart';
 import 'package:simple_live_app/app/controller/app_settings_controller.dart';
 import 'package:simple_live_app/app/log.dart';
+import 'package:simple_live_app/app/multiwindow/shell/tab_store.dart';
 import 'package:simple_live_app/app/utils.dart';
 import 'package:simple_live_app/app/utils/listen_fourth_button.dart';
 import 'package:simple_live_app/models/db/follow_user.dart';
@@ -286,6 +287,20 @@ class MyApp extends StatelessWidget {
                               await windowManager.setFullScreen(false);
                               return;
                             }
+                          }
+                          if (Platform.isWindows &&
+                              Get.isRegistered<TabStore>()) {
+                            final navigator = Get.key.currentState;
+                            if (navigator != null && navigator.canPop()) {
+                              Get.back();
+                              return;
+                            }
+                            final active =
+                                Get.find<TabStore>().activeTabId.value;
+                            if (active != null) {
+                              Get.find<TabStore>().close(active);
+                            }
+                            return;
                           }
                           Get.back();
                         };
