@@ -29,7 +29,11 @@ import 'package:simple_live_app/widgets/superchat_card.dart';
 import 'package:simple_live_core/simple_live_core.dart';
 
 class LiveRoomPage extends GetView<LiveRoomController> {
-  const LiveRoomPage({Key? key}) : super(key: key);
+  const LiveRoomPage({this.tag, Key? key}) : super(key: key);
+
+  // GetX 官方推荐以字段覆盖方式提供 tag（见 GetView 文档示例）
+  @override
+  final String? tag; // ignore: overridden_fields
 
   @override
   Widget build(BuildContext context) {
