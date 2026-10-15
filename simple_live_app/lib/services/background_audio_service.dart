@@ -2,6 +2,8 @@ import 'dart:async';
 
 import 'package:flutter/services.dart';
 
+import 'stop_handler_registry.dart';
+
 class BackgroundAudioService {
   BackgroundAudioService._();
   static final BackgroundAudioService instance = BackgroundAudioService._();
@@ -44,10 +46,16 @@ class BackgroundAudioService {
     await _channel.invokeMethod('requestNotificationPermission');
   }
 
-  void setStopRequestedHandler(FutureOr<void> Function()? handler) {
+  final _stopHandlers = StopHandlerRegistry();
+
+  void setStopRequestedHandler(
+    String key,
+    FutureOr<void> Function()? handler,
+  ) {
+    _stopHandlers.set(key, handler);
     _channel.setMethodCallHandler((call) async {
       if (call.method == 'stopRequested') {
-        await handler?.call();
+        await _stopHandlers.invokeAll();
       }
     });
   }

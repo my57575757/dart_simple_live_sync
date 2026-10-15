@@ -52,10 +52,12 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   final String pRoomId;
   final String pShareUrl;
   late LiveDanmaku liveDanmaku;
+  final String? tabId;
   LiveRoomController({
     required this.pSite,
     required this.pRoomId,
     required this.pShareUrl,
+    this.tabId,
   }) {
     rxSite = pSite.obs;
     rxRoomId = pRoomId.obs;
@@ -193,7 +195,8 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     double volume = volumeVal!.toDouble();
     player.setVolume(volume);
 
-    BackgroundAudioService.instance.setStopRequestedHandler(() async {
+    BackgroundAudioService.instance.setStopRequestedHandler(tabId ?? 'android',
+        () async {
       _audioServiceActive = false;
       BackgroundAudioService.instance.markStopped();
       await player.pause();
@@ -2248,7 +2251,8 @@ ${error is Error ? (error as Error).stackTrace : ""}''');
       _audioServiceActive = false;
       unawaited(BackgroundAudioService.instance.stop());
     }
-    BackgroundAudioService.instance.setStopRequestedHandler(null);
+    BackgroundAudioService.instance
+        .setStopRequestedHandler(tabId ?? 'android', null);
     danmakuController = null;
     _liveDurationTimer?.cancel();
     super.onClose();
