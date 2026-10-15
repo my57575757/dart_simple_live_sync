@@ -1523,3 +1523,67 @@ git commit -m "fix(windows): 多标签验收问题修复"
 
 - **计划 2（M3）**：DouyinPresenceGateway + PresenceClient，单引擎意图栈，多抖音标签唯一心跳与关闭回退接管。
 - **计划 3（M1+M4+M5+M6）**：存储后端抽口（M1）、子窗/IPC/快照写穿/跨窗拖拽（M4）、NativeEditHost 自宿主化与插件回调正式落地（M5）、打磨发布（M6）；是否含「后台仅音频」由 M0 结论决定。
+
+---
+
+## M0 探针结论（2026-10-15 填写）
+
+### 1. 四项核心验证总览
+
+| # | 验证点 | 结果 | 证据 |
+|---|---|---|---|
+| 1 | desktop_multi_window 0.3.1 多引擎创建与生命周期 | **PASS**（经修复后） | 补丁后连开 3 子窗、视频子窗播放 HLS 出画面 `playing:true` |
+| 2 | window_manager 关窗语义 | **PASS** | `close()` 单独关子窗主窗正常；主窗 X → 子窗全部联动消失，tasklist 无残留进程 |
+| 3 | NativeEditHost 子窗 IME | **PASS（功能）/ 已知缺陷（g_instance）** | 搜狗拼音组字/选词/英文/提交中文正常；进程级单例污染实测复现 |
+| 4 | 4 路同时播放 10 分钟性能 | **PASS** | CPU 1.5–8%（16 逻辑核归一化）、WS 1.55–1.76GB、无卡顿爆音、GPU 很低 |
+
+### 2. window_manager 版本裁决：用 pub 0.5.2，不换 fork
+
+spec 9.3 的换 fork 条件**不触发**。首轮"关子窗全进程退出"根因是探针误用 `destroy()`——pub 0.5.2 的 `Destroy()` 实现就是 `PostQuitMessage(0)`（window_manager.cpp:232-234）；该版本已按引擎绑定各自根窗（注册时 `GetAncestor(view, GA_ROOT)`，window_manager_plugin.cpp:348）。正确关窗路径：
+
+- 子窗收尾后一律 **`close()`**（SC_CLOSE→本窗销毁→插件析构 `RemoveWindow`，windows_ 非空不退出，multi_window_manager.cc:141-152）；
+- `destroy()`/PostQuitMessage 仅保留给主窗退出路径；
+- 播放器子窗需先 `setPreventClose(true)`，`onWindowClose` 内 dispose → setPreventClose(false) → close()，消除 native 释放竞争。
+
+### 3. 重大发现：media_kit_video 2.0.1 多引擎窗口过程错路由（计划外，阻塞级）
+
+**现象**：子引擎注册 media_kit_video 后，第一个子窗一出来主窗即永久无响应（能拖动、CPU 0%），第二窗永远不创建；lifecycle 空窗（不碰 Player）同样致死，与播放无关。
+
+**根因**（插件 windows/media_kit_video_plugin.cc）：
+
+1. 插件有进程级静态 `instance_`，构造时对本引擎根 HWND `SetWindowLongPtr(GWLP_WNDPROC, WindowProcDelegate)` 做窗口子类化；
+2. 静态 `WindowProcDelegate` 对**所有**被其子类化的窗口一律经 `instance_->original_window_proc_` 转发；
+3. 子引擎插件实例 B 构造后覆盖 `instance_`，主窗 HWND 的消息被 `CallWindowProc` 到**子窗**的原窗口过程 → 主窗平台/UI 消息全部被吞；第二次 SPAWN 的 Dart 点击回调因此根本不触发（打点日志：第二引擎回调从未开始）。
+
+**二分证据**：子引擎注册插件 0 个活（白屏）/ 前 3 活 / 前 5 活 / 前 6（加入 MediaKitVideo）死；去掉该插件多窗正常。
+
+**修复**：窗口过程改为按 HWND 分派——新增 `static std::unordered_map<HWND, MediaKitVideoPlugin*> hwnd_instances_`（配 mutex），构造注册、析构注销，delegate 按 hwnd 查表取实例。补丁全文（83 行）存档于 `.superpowers/sdd/2026-10-15-multi-window-tabs-plan1-m0-m2/media-kit-video-2.0.1-hwnd-dispatch.patch`。补丁后全量 13 插件：3 窗开关、播放、主窗联动关闭全部正常。
+
+**正式化（计划 3 M4 新增前置任务）**：pub 上 2.0.1 已是 media_kit_video 当前最新线（依赖仅 `media_kit: ^1.2.3`，与本项目 1.2.6 兼容），不能靠升级解决。M4 首次多窗联调前必须完成：把补丁版整包（1.5MB）vendor 进仓（建议 `third_party/media_kit_video/`），`pubspec.yaml` 改 path 依赖并注释指向本结论；Android 端 path 包内各平台目录完整不影响其他端。M2（Task 5-11）只在主引擎内做单窗多标签，不创建第二引擎，因此不被此补丁阻塞。
+
+> 编码注意：MSVC 在中文系统按 GBK 解码无 BOM 的 UTF-8 源文件，补丁里的中文注释尾字节会吞掉下一行（实测致 C2065/C2039 假错误），vendor 时注释一律英文或存为 UTF-8 BOM。
+
+### 4. NativeEditHost 结论（M5 必做，无延期理由）
+
+- **方向成立**：不改 dmw 插件源码，子窗 created 回调内 `new NativeEditHost(::GetParent(child), child, messenger)` 即可获得完整中文 IME 能力。
+- **g_instance 进程级污染实测确认**：native_edit_host.cpp 的静态 `g_instance`（:97 无条件赋值）被每个新开子窗覆盖，多窗时 ESC/消息只路由到最后创建的 host——先开子窗的原生 popup 残留无法关闭、hint 文本悬停主窗区域。主窗普通 TextField 不受影响，但主窗与子窗的弹幕原生输入会串台。M5 必须按 spec 9.1 做 `SetWindowSubclass`（按 HWND 取 this）自宿主化。
+- **popup 跟随缺口**：dmw 子窗走插件自带 FlutterWindow（windows/flutter_window.cc OnCreate 无 runner 的 WM_MOVE/WM_SIZE 钩子），runner 侧 OnOwnerMoved 跟随对子窗不生效；M5 子类化时一并承担位置跟随。
+- 探针中"popup 不在子窗内"是探针按钮坐标算错（960 宽窗内铅笔按钮 x≈864+16，300 宽框大部分落出窗外），非架构问题。
+
+### 5. 性能数据与「后台仅音频」判定
+
+4 路 HLS 同时播放 10 分钟（2026-10-15 21:42–21:52，机器 16 逻辑核，debug 构建，单进程多引擎）：
+
+- CPU 全程 1.5–8%，绝大多数时间 4–6%；
+- 工作集 ~1.55GB 平稳约 9 分钟，尾段波动至 1.68–1.76GB（HLS 码率切换/窗口操作所致，随后回落）；
+- 句柄 ~1940、线程 ~245 平稳，尾段两次短时跃升后均回落，无单调增长；
+- 无崩溃、无可感知卡顿、无爆音；GPU 占用用户观察"很低"。
+
+**判定：远优于阈值（持续 >70%/单核满载/卡顿爆音），V1 全量后台渲染成立，计划 3 不做「后台仅音频」开关。** 若未来低端机实测不达标，再按 spec 作为 V1.1 优化项单独立项。
+
+### 6. 环境与复现
+
+- Flutter 3.47.5 / Dart 3.13.4（`C:/tools/flutter347/flutter`，R1）；desktop_multi_window 0.3.1；media_kit_video 2.0.1 + media_kit 1.2.6。
+- 探针分支 spike/multi-window-m0（be70319..1991285，throwaway，结论写完即删）。
+- GUI 验证由用户在本机完成（R3）；性能脚本 `spike-perf-sample.ps1`（仓根临时文件，随探针清理）。
+
