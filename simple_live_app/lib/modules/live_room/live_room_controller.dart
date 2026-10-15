@@ -16,6 +16,7 @@ import 'package:simple_live_app/app/constant.dart';
 import 'package:simple_live_app/app/controller/app_settings_controller.dart';
 import 'package:simple_live_app/app/event_bus.dart';
 import 'package:simple_live_app/app/log.dart';
+import 'package:simple_live_app/app/multiwindow/shell/tab_store.dart';
 import 'package:simple_live_app/app/sites.dart';
 import 'package:simple_live_app/app/utils.dart';
 import 'package:simple_live_app/models/db/follow_user.dart';
@@ -236,8 +237,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       countdown.value -= 1;
       if (countdown.value <= 0) {
         timer = Timer(const Duration(seconds: 10), () async {
-          await WakelockPlus.disable();
-          exit(0);
+          await _handleAutoExit();
         });
         autoExitTimer?.cancel();
         var delay = await Utils.showAlertDialog("定时关闭已到时,是否延迟关闭?",
@@ -249,11 +249,30 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
           setAutoExit();
         } else {
           delayAutoExit.value = false;
-          await WakelockPlus.disable();
-          exit(0);
+          await _handleAutoExit();
         }
       }
     });
+  }
+
+  /// 定时关闭到时：Windows 标签模式关闭本标签（停止播放即满足入睡场景），
+  /// 无标签壳（Android / 路由模式）保持退出进程
+  Future<void> _handleAutoExit() async {
+    await WakelockPlus.disable();
+    if (Platform.isWindows &&
+        tabId != null &&
+        Get.isRegistered<TabStore>()) {
+      final store = Get.find<TabStore>();
+      if (store.tabs.any((t) => t.tabId == tabId)) {
+        final navigator = Get.key.currentState;
+        if (navigator != null && navigator.canPop()) {
+          Get.back();
+        }
+        store.close(tabId!);
+      }
+      return;
+    }
+    exit(0);
   }
   // 弹窗逻辑
 
