@@ -106,4 +106,18 @@ void main() {
     expect(registry.registered, isEmpty);
     expect(store.isHomeActive, true);
   });
+
+  test('closeOthers 未知 tabId 抛 ArgumentError 且不改动标签', () {
+    store.open(req('a', '1'));
+    expect(() => store.closeOthers('nope'), throwsArgumentError);
+    expect(store.tabs.length, 1);
+    expect(registry.registered.length, 1);
+  });
+
+  test('closeRight 未知 tabId 抛 ArgumentError 且不改动标签', () {
+    store.open(req('a', '1'));
+    expect(() => store.closeRight('nope'), throwsArgumentError);
+    expect(store.tabs.length, 1);
+    expect(registry.registered.length, 1);
+  });
 }

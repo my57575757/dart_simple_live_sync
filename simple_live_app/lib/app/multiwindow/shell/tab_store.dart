@@ -66,6 +66,10 @@ class TabStore extends GetxController {
   }
 
   void closeOthers(String tabId) {
+    final index = tabs.indexWhere((t) => t.tabId == tabId);
+    if (index < 0) {
+      throw ArgumentError('tab not found: $tabId');
+    }
     final victims = tabs.where((t) => t.tabId != tabId).toList();
     for (final t in victims) {
       registry.unregister(t.tabId);
@@ -76,6 +80,9 @@ class TabStore extends GetxController {
 
   void closeRight(String tabId) {
     final index = tabs.indexWhere((t) => t.tabId == tabId);
+    if (index < 0) {
+      throw ArgumentError('tab not found: $tabId');
+    }
     final victims = tabs.sublist(index + 1);
     for (final t in victims) {
       registry.unregister(t.tabId);
