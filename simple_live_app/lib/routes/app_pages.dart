@@ -1,6 +1,10 @@
 // ignore_for_file: prefer_inlined_adds
 
 import 'package:get/get.dart';
+import 'package:simple_live_app/app/multiwindow/shell/getx_room_controller_registry.dart';
+import 'package:simple_live_app/app/multiwindow/shell/room_controller_registry.dart';
+import 'package:simple_live_app/app/multiwindow/shell/room_shell_page.dart';
+import 'package:simple_live_app/app/multiwindow/shell/tab_store.dart';
 import 'package:simple_live_app/modules/category/detail/category_detail_controller.dart';
 import 'package:simple_live_app/modules/category/detail/category_detail_page.dart';
 import 'package:simple_live_app/modules/indexed/indexed_controller.dart';
@@ -54,6 +58,16 @@ import 'route_path.dart';
 class AppPages {
   AppPages._();
   static final routes = [
+    // Windows 标签壳
+    GetPage(
+      name: RoutePath.kShell,
+      page: () => const RoomShellPage(),
+      binding: BindingsBuilder(() {
+        Get.put<RoomControllerRegistry>(GetxRoomControllerRegistry());
+        Get.put(IndexedController());
+        Get.put(TabStore(registry: Get.find<RoomControllerRegistry>()));
+      }),
+    ),
     // 首页
     GetPage(
       name: RoutePath.kIndex,

@@ -3,6 +3,9 @@ class RoutePath {
   /// 首页
   static const kIndex = "/index";
 
+  /// Windows 标签壳（首页 + 直播间标签）
+  static const kShell = "/shell";
+
   /// 搜索
   static const kSearch = "/search";
 

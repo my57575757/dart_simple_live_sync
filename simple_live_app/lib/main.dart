@@ -38,7 +38,6 @@ import 'package:simple_live_app/services/sync_service.dart';
 import 'package:simple_live_app/services/twitch_account_service.dart';
 import 'package:simple_live_app/services/update_service.dart';
 import 'package:simple_live_app/widgets/status/app_loadding_widget.dart';
-import 'package:simple_live_core/simple_live_core.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'package:path/path.dart' as p;
@@ -244,7 +243,8 @@ class MyApp extends StatelessWidget {
         darkTheme: AppStyle.darkTheme.copyWith(colorScheme: darkColorScheme),
         themeMode:
             ThemeMode.values[Get.find<AppSettingsController>().themeMode.value],
-        initialRoute: RoutePath.kIndex,
+        initialRoute:
+            Platform.isWindows ? RoutePath.kShell : RoutePath.kIndex,
         getPages: AppPages.routes,
         //国际化
         locale: const Locale("zh", "CN"),
