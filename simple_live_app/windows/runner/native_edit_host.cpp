@@ -433,6 +433,15 @@ LRESULT CALLBACK NativeEditHost::EditWndProc(HWND hwnd, UINT message,
     case WM_GETDLGCODE:
       return DLGC_WANTALLKEYS;
 
+    case WM_CHAR:
+      // TranslateMessage 在派发 WM_KEYDOWN 之前就已把回车译为 WM_CHAR('\r')
+      // 入队，KEYDOWN 里 return 0 拦不住；单行 EDIT 默认过程收到 '\r' 会响一声
+      // 错误提示。发送已在 WM_KEYDOWN 处理，这里把回车字符吞掉消音。
+      if (wparam == VK_RETURN) {
+        return 0;
+      }
+      break;
+
     case WM_SETFOCUS:
       if (self) {
         self->has_focus_ = true;
