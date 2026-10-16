@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:media_kit/media_kit.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:desktop_multi_window/desktop_multi_window.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'package:simple_live_app/app/controller/app_settings_controller.dart';
+import 'package:simple_live_app/app/utils.dart';
 import 'package:simple_live_app/app/log.dart';
 import 'package:simple_live_app/app/multiwindow/shell/getx_room_controller_registry.dart';
 import 'package:simple_live_app/app/multiwindow/shell/room_controller_registry.dart';
@@ -41,6 +43,7 @@ Future<void> runSubEngine(WindowController self) async {
 
   MultiWindowRole.isSubWindow = true;
   MediaKit.ensureInitialized();
+  Utils.packageInfo = await PackageInfo.fromPlatform();
   await windowManager.ensureInitialized();
   // 原生建窗时为 800x600 空标题且 hiddenAtLaunch，由 window_manager 接管外观
   windowManager.waitUntilReadyToShow(

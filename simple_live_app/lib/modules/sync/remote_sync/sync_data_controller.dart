@@ -64,6 +64,9 @@ class SyncDataController extends BaseController {
 
   void addUserData(FollowUser user) async{
     try{
+      if (AppSettingsController.instance.syncUrl.value.trim().isEmpty) {
+        return;
+      }
       var userName = AppSettingsController.instance.userName.value;
       var syncUrl = AppSettingsController.instance.syncUrl.value;
       Map<String, dynamic> param = user.toJson();
@@ -82,6 +85,9 @@ class SyncDataController extends BaseController {
 
   void delUserData(String id, String roomId) async{
     try{
+      if (AppSettingsController.instance.syncUrl.value.trim().isEmpty) {
+        return;
+      }
       var userName = AppSettingsController.instance.userName.value;
       var syncUrl = AppSettingsController.instance.syncUrl.value;
       var param = {

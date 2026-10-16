@@ -3,12 +3,12 @@ import 'package:simple_live_app/app/multiwindow/window/window_args.dart';
 
 void main() {
   test('完整快照往返编解码，中文与各类型不丢', () {
-    final args = RoomWindowArgs(
-      tabs: const [
+    const args = RoomWindowArgs(
+      tabs: [
         RoomTabArg(siteId: 'douyin', roomId: '123456', shareUrl: 'https://live.douyin.com/123456'),
         RoomTabArg(siteId: 'bilibili', roomId: '654321'),
       ],
-      snapshot: const WindowSnapshot(
+      snapshot: WindowSnapshot(
         settings: {
           'kThemeMode': 2,
           'kDanmuEnable': true,
