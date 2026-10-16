@@ -510,6 +510,7 @@ import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:simple_live_app/app/constant.dart';
 import 'package:simple_live_app/app/multiwindow/presence/douyin_presence_gateway.dart';
+import 'package:simple_live_app/app/multiwindow/presence/local_presence_client.dart';
 import 'package:simple_live_app/app/multiwindow/presence/presence_claimant.dart';
 import 'package:simple_live_app/services/guard_server_service.dart';
 import 'package:simple_live_core/simple_live_core.dart';
