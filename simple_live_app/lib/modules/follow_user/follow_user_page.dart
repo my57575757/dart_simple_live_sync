@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:remixicon/remixicon.dart';
 import 'package:simple_live_app/app/app_style.dart';
+import 'package:simple_live_app/app/multiwindow/shell/room_context_menu.dart';
 import 'package:simple_live_app/app/sites.dart';
 import 'package:simple_live_app/app/utils.dart';
 import 'package:simple_live_app/models/db/follow_user.dart';
@@ -207,6 +208,17 @@ class FollowUserPage extends GetView<FollowUserController> {
                         site: site,
                         roomId: follow.roomId,
                         shareUrl: follow.shareUrl);
+                  },
+                  onSecondaryTapUp: (details) {
+                    var follow =
+                        DBService.instance.followBox.get(item.id) ?? item;
+                    showRoomContextMenu(
+                      context: context,
+                      site: site,
+                      roomId: follow.roomId,
+                      shareUrl: follow.shareUrl,
+                      position: details.globalPosition,
+                    );
                   },
                   onLongPress: () {
                     setFollowTagDialog(item);

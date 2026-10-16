@@ -120,4 +120,28 @@ void main() {
     expect(store.tabs.length, 1);
     expect(registry.registered.length, 1);
   });
+
+  test('后台打开新标签：tabs +1 但不激活（首页态），随后普通打开才切换', () {
+    final t1 = store.open(req('douyin', 'r1'), activate: false);
+    expect(store.tabs.single.tabId, t1.tabId);
+    expect(registry.registered.containsKey(t1.tabId), true);
+    expect(store.activeTabId.value, null);
+    expect(store.isHomeActive, true);
+
+    final t2 = store.open(req('douyin', 'r2'));
+    expect(store.tabs.length, 2);
+    expect(store.activeTabId.value, t2.tabId);
+  });
+
+  test('后台打开已存在标签：不新增、不改变当前激活', () {
+    final a = store.open(req('douyin', 'A'));
+    final b = store.open(req('douyin', 'B'));
+    expect(store.activeTabId.value, b.tabId);
+
+    final again = store.open(req('douyin', 'A'), activate: false);
+    expect(again.tabId, a.tabId);
+    expect(store.tabs.length, 2);
+    expect(registry.registered.length, 2);
+    expect(store.activeTabId.value, b.tabId);
+  });
 }

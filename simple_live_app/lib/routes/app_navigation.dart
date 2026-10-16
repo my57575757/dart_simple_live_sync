@@ -26,9 +26,14 @@ class AppNavigator {
   }
 
   /// 跳转至直播间
+  /// [background]=true（仅 Windows 右键后台打开）：跳过登录提示、创建标签但不激活
   static void toLiveRoomDetail(
-      {required Site site, required String roomId, required String shareUrl}) async {
-    if (site.id == Constant.kBiliBili &&
+      {required Site site,
+      required String roomId,
+      required String shareUrl,
+      bool background = false}) async {
+    if (!background &&
+        site.id == Constant.kBiliBili &&
         !BiliBiliAccountService.instance.logined.value &&
         AppSettingsController.instance.bilibiliLoginTip.value) {
       var result = await Utils.showAlertDialog(
@@ -55,6 +60,7 @@ class AppNavigator {
     if (Platform.isWindows) {
       Get.find<TabStore>().open(
         TabOpenRequest(siteId: site.id, roomId: roomId, shareUrl: shareUrl),
+        activate: !background,
       );
       return;
     }

@@ -26,18 +26,23 @@ class TabStore extends GetxController {
   }
 
   /// 打开（或激活已存在的）直播间标签
-  TabDescriptor open(TabOpenRequest request) {
+  /// [activate]=false 时为后台打开：去重命中不激活、新建也不切换激活标签
+  TabDescriptor open(TabOpenRequest request, {bool activate = true}) {
     final existing =
         tabs.firstWhereOrNull((t) => t.request.key == request.key);
     if (existing != null) {
-      activeTabId.value = existing.tabId;
+      if (activate) {
+        activeTabId.value = existing.tabId;
+      }
       return existing;
     }
     final tabId = _uuid.v4();
     registry.register(tabId, request);
     final descriptor = TabDescriptor(tabId: tabId, request: request);
     tabs.add(descriptor);
-    activeTabId.value = tabId;
+    if (activate) {
+      activeTabId.value = tabId;
+    }
     return descriptor;
   }
 

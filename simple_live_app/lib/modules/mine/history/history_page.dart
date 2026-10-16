@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:simple_live_app/app/app_style.dart';
+import 'package:simple_live_app/app/multiwindow/shell/room_context_menu.dart';
 import 'package:simple_live_app/app/sites.dart';
 import 'package:simple_live_app/app/utils.dart';
 import 'package:simple_live_app/modules/mine/history/history_controller.dart';
@@ -52,51 +53,62 @@ class HistoryPage extends GetView<HistoryController> {
             onDismissed: (_) {
               controller.removeItem(item);
             },
-            child: ListTile(
-              leading: NetImage(
-                item.face,
-                width: 48,
-                height: 48,
-                borderRadius: 24,
+            child: GestureDetector(
+              onSecondaryTapUp: (details) => showRoomContextMenu(
+                context: context,
+                site: site,
+                roomId: item.roomId,
+                shareUrl: '',
+                position: details.globalPosition,
               ),
-              title: Text(item.userName),
-              subtitle: Row(
-                children: [
-                  Expanded(
-                    child: Row(
-                      children: [
-                        Image.asset(
-                          site.logo,
-                          width: 20,
-                        ),
-                        AppStyle.hGap4,
-                        Text(
-                          site.name,
-                          style: const TextStyle(
-                            fontSize: 12,
-                            color: Colors.grey,
+              child: ListTile(
+                leading: NetImage(
+                  item.face,
+                  width: 48,
+                  height: 48,
+                  borderRadius: 24,
+                ),
+                title: Text(item.userName),
+                subtitle: Row(
+                  children: [
+                    Expanded(
+                      child: Row(
+                        children: [
+                          Image.asset(
+                            site.logo,
+                            width: 20,
                           ),
-                        ),
-                      ],
+                          AppStyle.hGap4,
+                          Text(
+                            site.name,
+                            style: const TextStyle(
+                              fontSize: 12,
+                              color: Colors.grey,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
-                  ),
-                  Text(
-                    Utils.parseTime(item.updateTime),
-                    style: const TextStyle(fontSize: 12, color: Colors.grey),
-                  ),
-                ],
+                    Text(
+                      Utils.parseTime(item.updateTime),
+                      style:
+                          const TextStyle(fontSize: 12, color: Colors.grey),
+                    ),
+                  ],
+                ),
+                onTap: () {
+                  AppNavigator.toLiveRoomDetail(
+                      site: site, roomId: item.roomId, shareUrl: "");
+                },
+                onLongPress: () async {
+                  var result = await Utils.showAlertDialog("确定要删除此记录吗?",
+                      title: "删除记录");
+                  if (!result) {
+                    return;
+                  }
+                  controller.removeItem(item);
+                },
               ),
-              onTap: () {
-                AppNavigator.toLiveRoomDetail(site: site, roomId: item.roomId, shareUrl:"");
-              },
-              onLongPress: () async {
-                var result =
-                    await Utils.showAlertDialog("确定要删除此记录吗?", title: "删除记录");
-                if (!result) {
-                  return;
-                }
-                controller.removeItem(item);
-              },
             ),
           );
         },

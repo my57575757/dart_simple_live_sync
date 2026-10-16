@@ -13,12 +13,14 @@ class FollowUserItem extends StatelessWidget {
   final Function()? onRemove;
   final Function()? onTap;
   final Function()? onLongPress;
+  final Function(TapUpDetails)? onSecondaryTapUp;
   final bool playing;
   const FollowUserItem({
     required this.item,
     this.onRemove,
     this.onTap,
     this.onLongPress,
+    this.onSecondaryTapUp,
     this.playing = false,
     Key? key,
   }) : super(key: key);
@@ -26,7 +28,7 @@ class FollowUserItem extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     var site = Sites.allSites[item.siteId]!;
-    return ListTile(
+    final tile = ListTile(
       contentPadding: AppStyle.edgeInsetsL16.copyWith(right: 4),
       leading: NetImage(
         item.face,
@@ -135,6 +137,12 @@ class FollowUserItem extends StatelessWidget {
                 )),
       onTap: onTap,
       onLongPress: onLongPress,
+    );
+    // 仅声明右键（secondary），左键与长按仍归 ListTile 自身处理；
+    // 不传 onSecondaryTapUp 的使用方行为零变化
+    return GestureDetector(
+      onSecondaryTapUp: onSecondaryTapUp,
+      child: tile,
     );
   }
 

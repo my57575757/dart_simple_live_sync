@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:remixicon/remixicon.dart';
 import 'package:simple_live_app/app/app_style.dart';
+import 'package:simple_live_app/app/multiwindow/shell/room_context_menu.dart';
 import 'package:simple_live_app/app/sites.dart';
 import 'package:simple_live_app/app/utils.dart';
 import 'package:simple_live_app/routes/app_navigation.dart';
@@ -19,6 +20,13 @@ class LiveRoomCard extends StatelessWidget {
       onTap: () {
         AppNavigator.toLiveRoomDetail(site: site, roomId: item.roomId, shareUrl:"");
       },
+      onSecondaryTapUp: (details) => showRoomContextMenu(
+        context: context,
+        site: site,
+        roomId: item.roomId,
+        shareUrl: '',
+        position: details.globalPosition,
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [

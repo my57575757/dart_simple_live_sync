@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'package:get/get.dart';
 import 'package:simple_live_app/app/app_style.dart';
+import 'package:simple_live_app/app/multiwindow/shell/room_context_menu.dart';
 import 'package:simple_live_app/modules/search/search_list_controller.dart';
 import 'package:simple_live_app/routes/app_navigation.dart';
 import 'package:simple_live_app/widgets/keep_alive_wrapper.dart';
@@ -46,40 +47,53 @@ class SearchListView extends StatelessWidget {
                 itemBuilder: (_, i) {
                   var item = controller.list[i] as LiveAnchorItem;
 
-                  return ListTile(
-                    leading: NetImage(
-                      item.avatar,
-                      width: 48,
-                      height: 48,
-                      borderRadius: 24,
+                  return GestureDetector(
+                    onSecondaryTapUp: (details) => showRoomContextMenu(
+                      context: context,
+                      site: controller.site,
+                      roomId: item.roomId,
+                      shareUrl: '',
+                      position: details.globalPosition,
                     ),
-                    title: Text(item.userName),
-                    subtitle: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Container(
-                          width: 8,
-                          height: 8,
-                          decoration: BoxDecoration(
-                            color: item.liveStatus ? Colors.green : Colors.grey,
-                            borderRadius: AppStyle.radius12,
+                    child: ListTile(
+                      leading: NetImage(
+                        item.avatar,
+                        width: 48,
+                        height: 48,
+                        borderRadius: 24,
+                      ),
+                      title: Text(item.userName),
+                      subtitle: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Container(
+                            width: 8,
+                            height: 8,
+                            decoration: BoxDecoration(
+                              color: item.liveStatus
+                                  ? Colors.green
+                                  : Colors.grey,
+                              borderRadius: AppStyle.radius12,
+                            ),
                           ),
-                        ),
-                        AppStyle.hGap4,
-                        Text(
-                          item.liveStatus ? "直播中" : "未开播",
-                          style: TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.normal,
-                            color: item.liveStatus ? null : Colors.grey,
+                          AppStyle.hGap4,
+                          Text(
+                            item.liveStatus ? "直播中" : "未开播",
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.normal,
+                              color: item.liveStatus ? null : Colors.grey,
+                            ),
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
+                      onTap: () {
+                        AppNavigator.toLiveRoomDetail(
+                            site: controller.site,
+                            roomId: item.roomId,
+                            shareUrl: "");
+                      },
                     ),
-                    onTap: () {
-                      AppNavigator.toLiveRoomDetail(
-                          site: controller.site, roomId: item.roomId,shareUrl:"");
-                    },
                   );
                 },
               ),
