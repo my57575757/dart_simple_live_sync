@@ -262,4 +262,25 @@ void main() {
     expect(settings, containsPair('NumSetting', 1));
     expect(settings, containsPair('BoolSetting', false));
   });
+
+  test('build：mainWindowId 透传；buildDataSnapshot 与 build 同源', () {
+    final storage =
+        Get.find<LocalStorageService>() as InMemoryLocalStorageService;
+    storage.settingsBox.put('ThemeMode', 2);
+    storage.shieldBox.put('垃圾词', '垃圾词');
+
+    final args = WindowSnapshotBuilder.build(
+      [req('douyin', 'r1')],
+      mainWindowId: '42',
+    );
+    expect(args.mainWindowId, '42');
+    expect(args.snapshot.settings['ThemeMode'], 2);
+    expect(args.snapshot.shield, contains('垃圾词'));
+
+    final snap = WindowSnapshotBuilder.buildDataSnapshot();
+    expect(snap.settings['ThemeMode'], 2);
+    expect(snap.shield, contains('垃圾词'));
+    expect(snap.volumes, args.snapshot.volumes);
+    expect(snap.followShareUrls, args.snapshot.followShareUrls);
+  });
 }

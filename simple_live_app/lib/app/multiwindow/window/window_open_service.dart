@@ -6,6 +6,7 @@ import 'package:simple_live_app/app/multiwindow/shell/tab_store.dart';
 import 'package:simple_live_app/services/db_service.dart';
 import 'package:simple_live_app/services/local_storage_service.dart';
 
+import 'dmw_sub_window_port.dart';
 import 'sub_window_port.dart';
 import 'window_args.dart';
 import 'window_registry.dart';
@@ -42,7 +43,8 @@ class WindowSnapshotBuilder {
   static bool isSensitiveKey(String key) =>
       sensitiveKeys.contains(key) || key.startsWith(sensitivePrefix);
 
-  static RoomWindowArgs build(List<TabOpenRequest> requests) {
+  /// 当前主引擎数据面全量快照（开窗参数与 dp_ready 对账共用同一来源）
+  static WindowSnapshot buildDataSnapshot() {
     final storage = LocalStorageService.instance;
     final db = DBService.instance;
 
@@ -60,7 +62,20 @@ class WindowSnapshotBuilder {
       }
     }
 
+    return WindowSnapshot(
+      settings: settings,
+      shield: storage.shieldBox.values.toList(),
+      volumes: db.exportVolumes(),
+      followShareUrls: db.exportFollowShareUrls(),
+    );
+  }
+
+  static RoomWindowArgs build(
+    List<TabOpenRequest> requests, {
+    String mainWindowId = '',
+  }) {
     return RoomWindowArgs(
+      mainWindowId: mainWindowId,
       tabs: [
         for (final request in requests)
           RoomTabArg(
@@ -69,12 +84,7 @@ class WindowSnapshotBuilder {
             shareUrl: request.shareUrl,
           ),
       ],
-      snapshot: WindowSnapshot(
-        settings: settings,
-        shield: storage.shieldBox.values.toList(),
-        volumes: db.exportVolumes(),
-        followShareUrls: db.exportFollowShareUrls(),
-      ),
+      snapshot: buildDataSnapshot(),
     );
   }
 }
@@ -126,7 +136,10 @@ class WindowOpenService extends GetxService {
       return;
     }
     final handle = await port.createRoomWindow(
-      WindowSnapshotBuilder.build([request]).encode(),
+      WindowSnapshotBuilder.build(
+        [request],
+        mainWindowId: DmwSubWindowPort.mainWindowId ?? '',
+      ).encode(),
     );
     registry.registerChild(handle.windowId, {request.key});
   }
@@ -155,7 +168,10 @@ class WindowOpenService extends GetxService {
     if (descriptor == null) return;
     final request = descriptor.request;
     final handle = await port.createRoomWindow(
-      WindowSnapshotBuilder.build([request]).encode(),
+      WindowSnapshotBuilder.build(
+        [request],
+        mainWindowId: DmwSubWindowPort.mainWindowId ?? '',
+      ).encode(),
     );
     registry.registerChild(handle.windowId, {request.key});
     store.close(tabId);

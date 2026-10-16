@@ -63,17 +63,26 @@ class WindowSnapshot {
 
 /// 子窗启动参数（dmw WindowConfiguration.arguments 承载的 JSON 字符串）
 class RoomWindowArgs {
-  const RoomWindowArgs({required this.tabs, this.snapshot = const WindowSnapshot()});
+  const RoomWindowArgs({
+    required this.tabs,
+    this.snapshot = const WindowSnapshot(),
+    this.mainWindowId = '',
+  });
 
   static const String type = 'room_shell';
 
   final List<RoomTabArg> tabs;
   final WindowSnapshot snapshot;
 
+  /// 创建该窗的主引擎 windowId（dmw String id）；子窗数据面 IPC 据此回连。
+  /// M4-2 前的旧参数无此字段，缺省空串表示不启用写穿（纯快照模式）。
+  final String mainWindowId;
+
   Map<String, dynamic> toJson() => {
         'type': type,
         'tabs': tabs.map((e) => e.toJson()).toList(),
         'snapshot': snapshot.toJson(),
+        'mainWindowId': mainWindowId,
       };
 
   String encode() => jsonEncode(toJson());
@@ -89,6 +98,7 @@ class RoomWindowArgs {
           .map((e) => RoomTabArg.fromJson(e as Map<String, dynamic>))
           .toList(),
       snapshot: WindowSnapshot.fromJson(snapshotJson),
+      mainWindowId: (json['mainWindowId'] as String?) ?? '',
     );
   }
 

@@ -57,4 +57,22 @@ void main() {
       throwsA(isA<FormatException>()),
     );
   });
+
+  test('mainWindowId：缺省空串、编解码往返、旧参数缺字段兼容', () {
+    const withId = RoomWindowArgs(
+      tabs: [RoomTabArg(siteId: 'bilibili', roomId: '1')],
+      mainWindowId: '7',
+    );
+    final decoded = RoomWindowArgs.decode(withId.encode());
+    expect(decoded.mainWindowId, '7');
+
+    const legacy = RoomWindowArgs(
+      tabs: [RoomTabArg(siteId: 'bilibili', roomId: '1')],
+    );
+    expect(legacy.mainWindowId, '');
+    final legacyJson = legacy.toJson()..remove('mainWindowId');
+    final decodedLegacy =
+        RoomWindowArgs.fromJson(Map<String, dynamic>.from(legacyJson));
+    expect(decodedLegacy.mainWindowId, '');
+  });
 }
