@@ -1265,11 +1265,27 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
 
   int guestVerifyReplays = 0;
 
+  /// 本控制器是否对应一个【非激活】标签（后台打开、尚未被用户切到）。
+  /// 后台标签加载不得弹全局 loading：遮罩挂根 Overlay 且不穿透指针，
+  /// 会打断用户在列表上连续右键后台开窗；Android/路由模式 tabId==null，
+  /// 恒按前台处理，行为与原状一致。仅按调用时刻判定一次，加载中途
+  /// 激活标签也不补 HUD。
+  bool _isBackgroundTab() {
+    return tabId != null &&
+        Get.isRegistered<TabStore>() &&
+        Get.find<TabStore>().activeTabId.value != tabId;
+  }
+
   /// 加载直播间信息
   void loadData() async {
     presence.value = RoomPresence.guest;
+    // 仅前台标签（或 Android）弹全局 loading；show/dismiss 必须按本调用的
+    // 同一开关配对，避免多个后台标签并发时 SmartDialog 单例计数失衡。
+    final bool showGlobalLoading = !_isBackgroundTab();
     try {
-      SmartDialog.showLoading(msg: "");
+      if (showGlobalLoading) {
+        SmartDialog.showLoading(msg: "");
+      }
       loadError.value = false;
       error = null;
       update();
@@ -1352,7 +1368,9 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       }
       // 打开验证页前必须先关全局 loading：SmartDialog 遮罩在 Navigator 之上，
       // 会罩住验证页导致滑块无法操作（表现为无限转圈/卡死）
-      SmartDialog.dismiss(status: SmartStatus.loading);
+      if (showGlobalLoading) {
+        SmartDialog.dismiss(status: SmartStatus.loading);
+      }
       // 全局去重：进房与关注列表后台刷新共用同一验证页，只弹一次
       final result = await DouyinGuestVerifyGate.instance.open(e.webRid);
       if (result == true && guestVerifyReplays < 1) {
@@ -1367,7 +1385,9 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       loadError.value = true;
       error = e;
     } finally {
-      SmartDialog.dismiss(status: SmartStatus.loading);
+      if (showGlobalLoading) {
+        SmartDialog.dismiss(status: SmartStatus.loading);
+      }
     }
   }
 
