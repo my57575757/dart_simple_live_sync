@@ -11,6 +11,10 @@ class GetxRoomControllerRegistry implements RoomControllerRegistry {
     if (site == null) {
       throw ArgumentError('unknown site: ${request.siteId}');
     }
+    // permanent: true——标签生命周期独立于任一路由。否则在搜索/历史/工具箱/
+    // 分类详情等压栈路由内打开的标签，其控制器会被 GetX 绑定到该路由，
+    // 用户侧键退出入口页时被连带 Get.delete（真退房/停心跳/销毁播放器），
+    // 而标签描述符与 IndexedStack 中的页面仍在，形成死标签。
     Get.put(
       LiveRoomController(
         pSite: site,
@@ -19,12 +23,14 @@ class GetxRoomControllerRegistry implements RoomControllerRegistry {
         tabId: tabId,
       ),
       tag: tabId,
+      permanent: true,
     );
   }
 
   @override
   void unregister(String tabId) {
-    Get.delete<LiveRoomController>(tag: tabId);
+    // permanent 实例必须 force 才能删除，否则关标签/closeAll 会永久泄漏
+    Get.delete<LiveRoomController>(tag: tabId, force: true);
   }
 
   @override

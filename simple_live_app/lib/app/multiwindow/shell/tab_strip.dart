@@ -147,6 +147,7 @@ class _TabItem extends StatelessWidget {
 
   Future<void> _showMenu(BuildContext context, Offset position) async {
     final store = Get.find<TabStore>();
+    final registry = Get.find<RoomControllerRegistry>();
     final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
     final rel = RelativeRect.fromRect(
       Rect.fromPoints(position, position),
@@ -171,8 +172,20 @@ class _TabItem extends StatelessWidget {
       case 'right':
         store.closeRight(descriptor.tabId);
       case 'copy':
+        // 优先复制控制器已加载的真实房间链接，避免 shareUrl 为空时复制裸 roomId
+        String? realUrl;
+        if (registry.isRegistered(descriptor.tabId)) {
+          realUrl = Get.find<LiveRoomController>(tag: descriptor.tabId)
+              .detail
+              .value
+              ?.url;
+        }
         final r = descriptor.request;
-        Utils.copyToClipboard(r.shareUrl.isNotEmpty ? r.shareUrl : r.roomId);
+        Utils.copyToClipboard(
+          (realUrl != null && realUrl.isNotEmpty)
+              ? realUrl
+              : (r.shareUrl.isNotEmpty ? r.shareUrl : r.roomId),
+        );
     }
   }
 }

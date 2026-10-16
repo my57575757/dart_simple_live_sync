@@ -945,6 +945,12 @@ class PlayerController extends BaseController
     Log.w("播放器关闭");
     if (smallWindowState.value) {
       exitSmallWindow();
+    } else if (!Platform.isAndroid &&
+        !Platform.isIOS &&
+        fullScreenState.value) {
+      // 全屏中标签被关闭（×/中键/右键/侧键/定时关闭）后控制器直接消失，
+      // 无人恢复 OS 窗口状态，这里复用 exitFull 成套恢复，避免无标题栏/最大化残留
+      exitFull();
     }
     disposeStream();
     disposeDanmakuController();

@@ -255,10 +255,13 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     });
   }
 
-  /// 定时关闭到时：Windows 标签模式关闭本标签（停止播放即满足入睡场景），
-  /// 无标签壳（Android / 路由模式）保持退出进程
+  /// 定时关闭到时（R14 裁决）：Windows 多标签模式关闭【全部】直播间标签
+  /// （回首页、全部静音，进程不退）；仅当本定时器宿主标签仍在 store.tabs 中
+  /// 时才执行——宽限期内用户已手动关掉本标签时，幽灵 Timer/二次进入一律
+  /// no-op，且不得误关其他标签。全关后才释放 wakelock，避免后台标签到点
+  /// 全局关 wakelock 导致正在观看的标签息屏。
+  /// 无标签壳（Android / 路由模式）保持释放 wakelock 后退出进程。
   Future<void> _handleAutoExit() async {
-    await WakelockPlus.disable();
     if (Platform.isWindows &&
         tabId != null &&
         Get.isRegistered<TabStore>()) {
@@ -268,10 +271,12 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
         if (navigator != null && navigator.canPop()) {
           Get.back();
         }
-        store.close(tabId!);
+        await store.closeAll();
+        await WakelockPlus.disable();
       }
       return;
     }
+    await WakelockPlus.disable();
     exit(0);
   }
   // 弹窗逻辑

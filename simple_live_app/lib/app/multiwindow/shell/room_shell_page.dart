@@ -15,6 +15,9 @@ class RoomShellPage extends StatefulWidget {
 }
 
 class _RoomShellPageState extends State<RoomShellPage> with WindowListener {
+  /// 关闭流程重入保护：确认框弹出期间窗口关闭事件可能被再次触发
+  bool _closing = false;
+
   @override
   void initState() {
     super.initState();
@@ -24,8 +27,11 @@ class _RoomShellPageState extends State<RoomShellPage> with WindowListener {
 
   @override
   void onWindowClose() async {
+    if (_closing) return;
     final store = Get.find<TabStore>();
     if (store.tabs.isNotEmpty) {
+      // 决定进入关闭流程即占位，防止确认框弹出期间重复触发
+      _closing = true;
       final ok = await Get.dialog<bool>(
         AlertDialog(
           title: const Text('关闭窗口'),
@@ -42,7 +48,11 @@ class _RoomShellPageState extends State<RoomShellPage> with WindowListener {
           ],
         ),
       );
-      if (ok != true) return;
+      if (ok != true) {
+        // 取消：复位以保证再次点 X 仍能弹框
+        _closing = false;
+        return;
+      }
     }
     await store.closeAll();
     await windowManager.destroy();
