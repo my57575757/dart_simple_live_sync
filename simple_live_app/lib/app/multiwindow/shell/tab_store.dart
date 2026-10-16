@@ -37,12 +37,25 @@ class TabStore extends GetxController {
       return existing;
     }
     final tabId = _uuid.v4();
-    registry.register(tabId, request);
-    final descriptor = TabDescriptor(tabId: tabId, request: request);
-    tabs.add(descriptor);
+    // 激活态必须先于 register 设置：register 同步触发 Get.put→onInit→
+    // loadData，控制器在其同步头内据此判定前/后台，决定是否弹全局 loading；
+    // 若在 register 之后才赋值，首次左键前台开标签也会被误判为后台。
+    // 激活态先于 tabs 成员关系只存在于 register 的同步调用栈内——Obx 最早
+    // 下一帧重建，届时 tabs.add 已完成。
+    final previousActive = activeTabId.value;
     if (activate) {
       activeTabId.value = tabId;
     }
+    try {
+      registry.register(tabId, request);
+    } catch (_) {
+      // 防御 register 失败（如未知 site）：恢复原激活态，避免悬空指向
+      // 尚未加入 tabs 的标签，然后原样抛出
+      activeTabId.value = previousActive;
+      rethrow;
+    }
+    final descriptor = TabDescriptor(tabId: tabId, request: request);
+    tabs.add(descriptor);
     return descriptor;
   }
 

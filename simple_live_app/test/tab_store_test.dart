@@ -17,6 +17,30 @@ class FakeRegistry implements RoomControllerRegistry {
   bool isRegistered(String tabId) => registered.containsKey(tabId);
 }
 
+/// register 同步抛错（模拟未知 site），用于验证 open 的激活态回滚
+class ThrowingRegistry implements RoomControllerRegistry {
+  @override
+  void register(String tabId, TabOpenRequest request) =>
+      throw ArgumentError('unknown site: ${request.siteId}');
+  @override
+  void unregister(String tabId) {}
+  @override
+  bool isRegistered(String tabId) => false;
+}
+
+/// 首次 register 成功、其后抛错，模拟打开第二个标签时控制器初始化失败
+class FakeThenThrowRegistry extends FakeRegistry {
+  int registerCalls = 0;
+  @override
+  void register(String tabId, TabOpenRequest request) {
+    registerCalls++;
+    if (registerCalls > 1) {
+      throw ArgumentError('boom');
+    }
+    super.register(tabId, request);
+  }
+}
+
 void main() {
   late FakeRegistry registry;
   late TabStore store;
@@ -143,5 +167,30 @@ void main() {
     expect(store.tabs.length, 2);
     expect(registry.registered.length, 2);
     expect(store.activeTabId.value, b.tabId);
+  });
+
+  test('register 抛异常（首页态）：不加标签、激活态恢复 null 并原样抛出', () {
+    final failingStore = TabStore(registry: ThrowingRegistry());
+    expect(
+      () => failingStore.open(req('unknown-site', 'x')),
+      throwsArgumentError,
+    );
+    expect(failingStore.tabs, isEmpty);
+    expect(failingStore.activeTabId.value, null);
+    expect(failingStore.isHomeActive, true);
+  });
+
+  test('register 抛异常（已有激活标签）：激活态回滚为原标签、不加新标签', () {
+    final mixedRegistry = FakeThenThrowRegistry();
+    final mixedStore = TabStore(registry: mixedRegistry);
+    final t1 = mixedStore.open(req('douyin', 'r1'));
+    expect(mixedStore.activeTabId.value, t1.tabId);
+
+    expect(
+      () => mixedStore.open(req('douyin', 'r2')),
+      throwsArgumentError,
+    );
+    expect(mixedStore.tabs.single.tabId, t1.tabId);
+    expect(mixedStore.activeTabId.value, t1.tabId);
   });
 }
