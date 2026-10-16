@@ -181,6 +181,11 @@ class MainDataPlaneService extends GetxService {
         _suppressed.add(kind);
         try {
           await _kvBox(boxName).clear();
+          // Hive BoxBaseImpl.clear 先 await backend 后同步 keystore.notify，
+          // 逐 key 事件经 async broadcast 以 microtask 链式重排，而 await 链
+          // 同步坍缩会使 finally 早于它们执行；排空一个事件轮次再解除抑制。
+          // MemoryKvBox 为 sync 广播，此处空等。
+          await Future<void>.delayed(Duration.zero);
         } finally {
           _suppressed.remove(kind);
         }

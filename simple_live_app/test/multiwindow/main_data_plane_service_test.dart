@@ -1,8 +1,10 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:get/get.dart';
+import 'package:hive/hive.dart';
 import 'package:simple_live_app/app/constant.dart';
 import 'package:simple_live_app/app/event_bus.dart';
 import 'package:simple_live_app/app/multiwindow/bootstrap/kv_box.dart';
@@ -321,5 +323,67 @@ void main() {
     await flushReloadTimer();
     final windows = changedCalls().map((c) => c.$1).toSet();
     expect(windows, containsAll({'w1', 'w2'}));
+  });
+
+  test('真实 Hive：shield clear 风暴抑制（async broadcast + clear 时序）',
+      () async {
+    // MemoryKvBox 永远测不出此路径：真实 Hive BoxBaseImpl.clear 先 await
+    // backend.clear() 后 keystore.clear()，逐 key notify 经 async broadcast
+    // 以 microtask 链式重排，await 链同步坍缩会使 finally 早于事件执行。
+    final tempDir = await Directory.systemTemp.createTemp('m42_hive_clear');
+    final boxName =
+        'shield_${DateTime.now().microsecondsSinceEpoch}';
+    final hiveBox =
+        await Hive.openBox<String>(boxName, path: tempDir.path);
+    try {
+      await hiveBox.put('a', 'a');
+      await hiveBox.put('b', 'b');
+      await hiveBox.put('c', 'c');
+
+      storage = LocalStorageService()
+        ..settingsBox = MemoryKvBox<dynamic>()
+        ..shieldBox = HiveKvBox<String>(hiveBox);
+      Get.put<LocalStorageService>(storage, permanent: true);
+      db = DBService()
+        ..historyBox = MemoryKvBox<History>()
+        ..followBox = MemoryKvBox<FollowUser>()
+        ..tagBox = MemoryKvBox<FollowUserTag>()
+        ..volumeBox = MemoryKvBox<double>();
+      Get.put<DBService>(db, permanent: true);
+      port = _FakePort();
+      registry = WindowRegistry(mainWindowId: 'main');
+      registry.registerChild('w1', {'douyin_r1'});
+      reloadCount = 0;
+      svc = MainDataPlaneService(
+        port: port,
+        registry: registry,
+        storage: storage,
+        db: db,
+        onSettingsChanged: () => reloadCount++,
+      );
+      svc.onInit();
+      port.calls.clear();
+
+      final r = await call(
+          DataPlaneProtocol.mKvClear,
+          DataPlaneProtocol.kvClear(DataPlaneProtocol.boxShield));
+      expect(r, isTrue);
+      // 再排一个事件轮次兜底；随后 120ms 冲掉防抖 Timer
+      await Future<void>.delayed(Duration.zero);
+      await flushReloadTimer();
+
+      final changed = changedCalls();
+      expect(changed.length, 1, reason: '仅一条 clear:true，无逐 key 风暴');
+      final payload = changed.single.$2! as Map;
+      expect(payload['kind'], DataPlaneProtocol.kindShield);
+      expect(payload['key'], '');
+      expect(payload['clear'], isTrue);
+      expect(payload.containsKey('deleted'), isFalse);
+      expect(hiveBox.values, isEmpty);
+    } finally {
+      svc.onClose();
+      await Hive.close();
+      tempDir.deleteSync(recursive: true);
+    }
   });
 }
