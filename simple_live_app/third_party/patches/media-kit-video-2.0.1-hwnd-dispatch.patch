@@ -1,3 +1,9 @@
+# 溯源说明（2026-10-16 M4-1）：
+# 本存档是探针期原始补丁，注释行为英文 SPIKE PATCH；入仓版本
+# third_party/media_kit_video/windows/ 已把这 3 处注释正式化为中文，并给
+# media_kit_video_plugin.cc/.h 加 UTF-8 BOM（中文 Windows MSVC 按 CP936
+# 解析无 BOM 文件会吞注释行尾换行导致编译失败）。代码 hunk 与本存档逐字一致。
+# 文件头为裸文件名（非 a/ b/ 路径），不能直接 git apply -p1，仅作审计存档。
 --- media_kit_video_plugin.h.orig-spike	2026-10-15 20:56:13.763748500 +0800
 +++ media_kit_video_plugin.h	2026-10-15 21:03:24.071608900 +0800
 @@ -14,6 +14,7 @@
