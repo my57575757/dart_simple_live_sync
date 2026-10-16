@@ -37,6 +37,11 @@ class DataPlaneProtocol {
   };
 
   /// 禁止跨窗传播的键：各平台登录凭据、guard 配置/账号、WebDAV、同步信息。
+  ///
+  /// 入单准则（M4-1 游客态不变量）：任何被子引擎服务初始化读取后会翻转
+  /// 登录/配置标志的键都必须在此——DouyinLoginCookie 使子引擎
+  /// DouyinAccountService.onInit 判定 logined=true，GuardServerUrl 使
+  /// GuardServerService.configured=true，均会破坏子窗固定游客态。
   /// 账号类数据唯一合法通道是 M4-3 的账号面协议。
   static const Set<String> sensitiveKeys = {
     'BilibiliCookie',

@@ -90,6 +90,11 @@ void main() {
               {'box': 'shield', 'key': 'k', 'value': 1}),
           isNull,
           reason: 'shield 只接受 String');
+      expect(
+          DataPlaneProtocol.decodeKvSet(DataPlaneProtocol.kvSet(
+              DataPlaneProtocol.boxShield, 'k', null)),
+          isNull,
+          reason: 'shield 显式 null 也拒绝');
       expect(DataPlaneProtocol.decodeKvSet('x'), isNull);
       expect(
           DataPlaneProtocol.decodeKvSet({'box': 'settings', 'key': 1}), isNull,
