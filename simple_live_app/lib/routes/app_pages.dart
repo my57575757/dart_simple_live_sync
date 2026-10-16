@@ -3,6 +3,8 @@
 import 'dart:io';
 
 import 'package:get/get.dart';
+import 'package:simple_live_app/app/controller/app_settings_controller.dart';
+import 'package:simple_live_app/app/multiwindow/data/main_data_plane_service.dart';
 import 'package:simple_live_app/app/multiwindow/presence/douyin_presence_gateway.dart';
 import 'package:simple_live_app/app/multiwindow/shell/getx_room_controller_registry.dart';
 import 'package:simple_live_app/app/multiwindow/shell/room_controller_registry.dart';
@@ -58,7 +60,9 @@ import 'package:simple_live_app/modules/settings/indexed_settings/indexed_settin
 import 'package:simple_live_app/modules/settings/other/other_settings_controller.dart';
 import 'package:simple_live_app/modules/settings/other/other_settings_page.dart';
 import 'package:simple_live_app/modules/settings/play_settings_page.dart';
+import 'package:simple_live_app/services/db_service.dart';
 import 'package:simple_live_app/services/guard_server_service.dart';
+import 'package:simple_live_app/services/local_storage_service.dart';
 
 import '../modules/indexed/indexed_page.dart';
 import 'route_path.dart';
@@ -80,17 +84,31 @@ class AppPages {
             presenceGateway: Get.find<DouyinPresenceGateway>(),
           ),
         );
-        // 仅主引擎 Windows 壳需要开窗协调者（main() 已挂主窗 controller）
+        // 仅主引擎 Windows 壳需要开窗协调者与数据面服务（main() 已挂主窗 controller）
         if (Platform.isWindows &&
             !MultiWindowRole.isSubWindow &&
             DmwSubWindowPort.mainWindowId != null) {
+          final subWindowPort = DmwSubWindowPort();
+          final windowRegistry = WindowRegistry(
+            mainWindowId: DmwSubWindowPort.mainWindowId!,
+          );
           Get.put(
             WindowOpenService(
-              port: DmwSubWindowPort(),
+              port: subWindowPort,
               store: Get.find<TabStore>(),
-              registry: WindowRegistry(
-                mainWindowId: DmwSubWindowPort.mainWindowId!,
-              ),
+              registry: windowRegistry,
+            ),
+            permanent: true,
+          );
+          Get.put(
+            MainDataPlaneService(
+              port: subWindowPort,
+              registry: windowRegistry,
+              storage: LocalStorageService.instance,
+              db: DBService.instance,
+              onSettingsChanged: () =>
+                  AppSettingsController.instance.reloadFromStorage(),
+              mainController: DmwSubWindowPort.mainController,
             ),
             permanent: true,
           );

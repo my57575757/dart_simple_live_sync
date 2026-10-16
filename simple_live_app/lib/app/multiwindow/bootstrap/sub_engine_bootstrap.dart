@@ -8,6 +8,10 @@ import 'package:window_manager/window_manager.dart';
 import 'package:simple_live_app/app/controller/app_settings_controller.dart';
 import 'package:simple_live_app/app/utils.dart';
 import 'package:simple_live_app/app/log.dart';
+import 'package:simple_live_app/app/multiwindow/data/data_plane_protocol.dart';
+import 'package:simple_live_app/app/multiwindow/data/remote_kv_box.dart';
+import 'package:simple_live_app/app/multiwindow/data/sub_data_plane_client.dart';
+import 'package:simple_live_app/app/multiwindow/data/sub_data_plane_port.dart';
 import 'package:simple_live_app/app/multiwindow/shell/getx_room_controller_registry.dart';
 import 'package:simple_live_app/app/multiwindow/shell/room_controller_registry.dart';
 import 'package:simple_live_app/app/multiwindow/shell/tab_open_request.dart';
@@ -59,12 +63,31 @@ Future<void> runSubEngine(WindowController self) async {
     },
   );
 
-  // —— 内存后端（必须先于一切服务）——
-  final storage = InMemoryLocalStorageService();
-  storage.applySnapshot(args.snapshot);
+  // —— 内存后端（必须先于一切服务）。带主窗 id 时启用数据面写穿 ——
+  final SubDataPlanePort? dataPort = args.mainWindowId.isEmpty
+      ? null
+      : DmwSubDataPlanePort(args.mainWindowId);
+
+  RemoteKvBox<dynamic>? settingsKv;
+  RemoteKvBox<String>? shieldKv;
+  final InMemoryLocalStorageService storage;
+  if (dataPort != null) {
+    settingsKv =
+        RemoteKvBox<dynamic>(DataPlaneProtocol.boxSettings, dataPort);
+    shieldKv = RemoteKvBox<String>(DataPlaneProtocol.boxShield, dataPort);
+    settingsKv.seedReplaceAll(
+        Map<Object, dynamic>.of(args.snapshot.settings));
+    shieldKv.seedReplaceAll(
+        <Object, String>{for (final w in args.snapshot.shield) w: w});
+    storage = InMemoryLocalStorageService(
+        settingsBox: settingsKv, shieldBox: shieldKv);
+  } else {
+    storage = InMemoryLocalStorageService()..applySnapshot(args.snapshot);
+  }
   Get.put<LocalStorageService>(storage, permanent: true);
-  final db = InMemoryDBService();
-  db.applySnapshot(args.snapshot);
+
+  final db = InMemoryDBService(dataPort: dataPort)
+    ..applySnapshot(args.snapshot);
   Get.put<DBService>(db, permanent: true);
 
   // —— 最小服务集 ——
@@ -95,6 +118,42 @@ Future<void> runSubEngine(WindowController self) async {
     permanent: true,
   );
 
+  // —— 数据面客户端 + 总 handler：handler 先就位，再 await 对账（spec §6.4）——
+  final SubDataPlaneClient? dataClient = dataPort == null
+      ? null
+      : SubDataPlaneClient(
+          port: dataPort,
+          settings: settingsKv!,
+          shield: shieldKv!,
+          db: db,
+          registry: Get.find<RoomControllerRegistry>(),
+          onSettingsChanged: () =>
+              AppSettingsController.instance.reloadFromStorage(),
+        );
+
+  self.setWindowMethodHandler((call) async {
+    switch (call.method) {
+      case DataPlaneProtocol.mChanged:
+        dataClient?.handleChanged(call.arguments);
+        return true;
+      case 'focus_tab':
+        await windowManager.show();
+        await windowManager.focus();
+        store.activateByKey(call.arguments as String);
+        return true;
+      case 'close_window':
+        final closer = SubWindowCommands.closeRequested;
+        if (closer != null) {
+          await closer();
+        }
+        return true;
+      default:
+        return null;
+    }
+  });
+
+  await dataClient?.reconcile();
+
   for (final tab in args.tabs) {
     try {
       store.open(
@@ -114,25 +173,6 @@ Future<void> runSubEngine(WindowController self) async {
     await windowManager.close();
     return;
   }
-
-  // —— 跨窗 IPC（handler 只能挂在本 engine 自己的 controller 上）——
-  self.setWindowMethodHandler((call) async {
-    switch (call.method) {
-      case 'focus_tab':
-        await windowManager.show();
-        await windowManager.focus();
-        store.activateByKey(call.arguments as String);
-        return true;
-      case 'close_window':
-        final closer = SubWindowCommands.closeRequested;
-        if (closer != null) {
-          await closer();
-        }
-        return true;
-      default:
-        return null;
-    }
-  });
 
   runApp(const MyApp(isSubWindow: true));
 }

@@ -19,8 +19,10 @@ class AppSettingsController extends GetxController {
 
   var firstRun = false;
 
-  @override
-  void onInit() {
+  /// 从 LocalStorage 重新加载全部设置型 Rx。onInit 调一次；跨窗数据面
+  /// 广播后由 MainDataPlaneService / SubDataPlaneClient 防抖再调。
+  /// 不含一次性副作用（Log.initWriter 只在 onInit）。
+  void reloadFromStorage() {
     themeMode.value = LocalStorageService.instance
         .getValue(LocalStorageService.kThemeMode, 0);
     firstRun = LocalStorageService.instance
@@ -119,9 +121,6 @@ class AppSettingsController extends GetxController {
 
     logEnable.value = LocalStorageService.instance
         .getValue(LocalStorageService.kLogEnable, false);
-    if (logEnable.value) {
-      Log.initWriter();
-    }
 
     customPlayerOutput.value = LocalStorageService.instance
         .getValue(LocalStorageService.kCustomPlayerOutput, false);
@@ -162,7 +161,14 @@ class AppSettingsController extends GetxController {
 
     initSiteSort();
     initHomeSort();
+  }
 
+  @override
+  void onInit() {
+    reloadFromStorage();
+    if (logEnable.value) {
+      Log.initWriter();
+    }
     super.onInit();
   }
 
