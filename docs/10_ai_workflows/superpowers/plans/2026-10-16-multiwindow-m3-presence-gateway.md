@@ -2344,3 +2344,23 @@ git commit -m "feat(windows): 抖音标签接入心跳网关——claim 抢占/�
 - 子窗登录代办、设置写穿等 M4 数据面。
 - 后台标签的其他全局 UI 收口（DouyinGuestVerifyGate、斗鱼 relogin 等，M2 已记账 follow-up，M3/M6 处理）；yield 游客重连刻意不弹验证页。
 - suspended 态的专属 UI 文案/按钮（复用 guest 态入口）。
+
+---
+
+## 实施记录（2026-10-16 完成，已 ff 合入 my_dev @afc1a48）
+
+8 个 commit：计划 7b7e903 → T1 状态机 55f5edc → T2 网关（8464a97 + e6febe4 + 2f2396d 两轮并发修复）→ T3 接线 7d10235 → 最终评审修复 afc1a48。
+门禁：167/167（基线 117 + 仲裁 21 + 网关 25 + 控制器集成 4）、analyze 22 条存量零新增、build windows --debug 通过。
+最终复审（opus）Ready to merge: Yes。最终修复三项：①控制器 presence 世代令牌 `_presenceGeneration`（让位/重进在途续体过期不落弹幕 side effect；onClose/refresh/reset 同样使世代失效）；②`_doEnterViaGateway` granted 分支兜底 presence=account（弹幕重连抛错不卡 entering）；③`DouyinPresenceTab.isClosed`（进房在途时单关标签，网关跳过 apply/心跳，排队 release 发 exit 收口；GetX onDelete 先置 isClosed 再调 onClose）。
+
+## M4 开工前记账（最终整支评审 Minor + 实施裁决）
+
+1. 抽 PresenceClient 接口：控制器现直接依赖具体类 DouyinPresenceGateway（_resolveGateway/bindPresenceGateway/hasClaim），M4 IPC 前必须解耦；IPC 远端代理必须实现 isClosed。
+2. 写动作（sendDanmaku 等 guard 发送）纳入 claim 同一串行域，消除"发送瞬间 holder 切换打到后一房间"的小窗口（spec 7.2 收口未尽部分）。
+3. dispose 生命周期：网关是普通类非 GetLifeCycle，生产无人调 dispose；M4 改 GetxService 或由 TabStore.onClose/壳退出调用。
+4. detach 唯一持有者早退时 Timer 为**永久残留**（早退在 cancel 之前），M4 接 detach 前修：wasHolder 快照后提前 cancel。
+5. beat 非重入：heartbeat RTT>20s 时多拍重叠，迟到 inRoom=false 可误 suspended；加 _beatInFlight，顺带清 retried 死参数。
+6. 网关 _exitRoom 补 canStartDanmaku/空 roomId 守卫（旧 _exitGuardRoom 有，搬迁时漏；SSR 骨架房会多发一条 exit）。
+7. 在途进房的新 holder 被单关时，仍对未关闭旧 holder 发一次 yield（gateway 让位分支只查 previousHolder.isClosed 未查 tab.isClosed）；世代令牌保证终态自愈，代价是多发一次游客 getRoomDetail + 可能短暂 guest 弹幕/双 sysMsg。两处 isClosed 防御分支经复审实证为真实可达（非"防未来"），保留。
+8. 快速连点两次批量菜单可致"刚 enter 即 exit"抖动（终态正确）：禁用菜单或复用串行链。
+9. M6：补真实 GetX 注销序 e2e、suspended 触发日志；push/发版前 Android 真机回归 6 项 + Windows GUI 9 项手工验收。
