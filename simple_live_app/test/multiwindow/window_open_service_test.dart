@@ -221,4 +221,45 @@ void main() {
     );
     expect(args.snapshot.shield, contains('垃圾词'));
   });
+
+  test('快照安全回归：全部敏感键逐名剥离、非基础类型拒绝、显式 null 保留', () {
+    final storage =
+        Get.find<LocalStorageService>() as InMemoryLocalStorageService;
+
+    // 锚定清单规模：删键会失败提醒评审，加键由下方遍历自动纳入断言
+    expect(WindowSnapshotBuilder.sensitiveKeys.length, 17);
+    for (final key in WindowSnapshotBuilder.sensitiveKeys) {
+      storage.settingsBox.put(key, 'secret-$key');
+    }
+    storage.settingsBox.put('GuardAccountId_douyin', 'acct1');
+    storage.settingsBox.put('GuardAccountId_bilibili', 'acct2');
+
+    // 类型白名单：List/Map 不得进快照，显式 null 属于允许的基础类型
+    storage.settingsBox.put('ListSetting', <String>['a', 'b']);
+    storage.settingsBox.put('MapSetting', <String, dynamic>{'k': 1});
+    storage.settingsBox.put('NullSetting', null);
+    storage.settingsBox.put('NumSetting', 1);
+    storage.settingsBox.put('BoolSetting', false);
+
+    final settings =
+        WindowSnapshotBuilder.build([req('douyin', 'a')]).snapshot.settings;
+
+    for (final key in WindowSnapshotBuilder.sensitiveKeys) {
+      expect(settings, isNot(contains(key)),
+          reason: '$key 不得跨窗传播');
+    }
+    expect(
+      settings.keys.any((k) => k.startsWith('GuardAccountId_')),
+      isFalse,
+      reason: 'GuardAccountId_ 前缀键不得跨窗传播',
+    );
+    expect(settings, isNot(contains('ListSetting')),
+        reason: 'List 类型值不得进快照');
+    expect(settings, isNot(contains('MapSetting')),
+        reason: 'Map 类型值不得进快照');
+    expect(settings, containsPair('NullSetting', null),
+        reason: '显式 null 是白名单基础类型，键保留且值为 null');
+    expect(settings, containsPair('NumSetting', 1));
+    expect(settings, containsPair('BoolSetting', false));
+  });
 }
