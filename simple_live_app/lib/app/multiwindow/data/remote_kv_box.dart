@@ -75,6 +75,8 @@ class RemoteKvBox<T> implements SeedableKvBox<T> {
     }
   }
 
+  // 直通本地箱变更流；本类有意不订阅它：远端下发只走 seed*（SubDataPlaneClient），
+  // 此处订阅会与乐观写重复形成回环。
   @override
   Stream<KvChange<T>> changes() => _local.changes();
 

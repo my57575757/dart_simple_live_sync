@@ -41,6 +41,7 @@ void main() {
     await box.delete('k');
     expect(port.calls.last.$1, DataPlaneProtocol.mKvDelete);
     expect((port.calls.last.$2! as Map)['key'], 'k');
+    expect((port.calls.last.$2! as Map)['box'], DataPlaneProtocol.boxSettings);
     expect(box.containsKey('k'), isFalse);
   });
 
@@ -52,7 +53,18 @@ void main() {
     final n = await box.clear();
     expect(n, 1);
     expect(port.calls.single.$1, DataPlaneProtocol.mKvClear);
+    expect((port.calls.single.$2! as Map)['box'], DataPlaneProtocol.boxShield);
     expect(box.values, isEmpty);
+  });
+
+  test('空箱 clear 仍发单条 mKvClear（不依赖本地是否有键）', () async {
+    final port = _RecordingPort();
+    final box = RemoteKvBox<String>(DataPlaneProtocol.boxShield, port);
+
+    final n = await box.clear();
+    expect(n, 0);
+    expect(port.calls.single.$1, DataPlaneProtocol.mKvClear);
+    expect((port.calls.single.$2! as Map)['box'], DataPlaneProtocol.boxShield);
   });
 
   test('seed* 静默：不发任何 IPC', () async {

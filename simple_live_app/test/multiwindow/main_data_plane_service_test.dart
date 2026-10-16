@@ -331,11 +331,13 @@ void main() {
     // backend.clear() 后 keystore.clear()，逐 key notify 经 async broadcast
     // 以 microtask 链式重排，await 链同步坍缩会使 finally 早于事件执行。
     final tempDir = await Directory.systemTemp.createTemp('m42_hive_clear');
-    final boxName =
-        'shield_${DateTime.now().microsecondsSinceEpoch}';
-    final hiveBox =
-        await Hive.openBox<String>(boxName, path: tempDir.path);
+    Box<String>? hiveBox;
+    MainDataPlaneService? hiveSvc;
     try {
+      final boxName =
+          'shield_${DateTime.now().microsecondsSinceEpoch}';
+      hiveBox =
+          await Hive.openBox<String>(boxName, path: tempDir.path);
       await hiveBox.put('a', 'a');
       await hiveBox.put('b', 'b');
       await hiveBox.put('c', 'c');
@@ -361,6 +363,7 @@ void main() {
         db: db,
         onSettingsChanged: () => reloadCount++,
       );
+      hiveSvc = svc;
       svc.onInit();
       port.calls.clear();
 
@@ -381,7 +384,8 @@ void main() {
       expect(payload.containsKey('deleted'), isFalse);
       expect(hiveBox.values, isEmpty);
     } finally {
-      svc.onClose();
+      // openBox 抛异常时 svc/box 可能未初始化，可空判空保证临时目录不泄漏
+      hiveSvc?.onClose();
       await Hive.close();
       tempDir.deleteSync(recursive: true);
     }

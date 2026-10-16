@@ -215,4 +215,39 @@ void main() {
     client.handleChanged({'kind': 'nope'});
     expect(port.calls, isEmpty);
   });
+
+  test('reconcile：对账在途时已挂的防抖 reload 被合并，最终只 reload 一次', () {
+    fakeAsync((async) {
+      final port = _FakePort()
+        ..readyResult = {
+          'settings': <String, dynamic>{},
+          'shield': <String>[],
+          'volumes': <String, double>{},
+          'followShareUrls': <String, String>{},
+        };
+      final settings =
+          RemoteKvBox<dynamic>(DataPlaneProtocol.boxSettings, port);
+      final shield = RemoteKvBox<String>(DataPlaneProtocol.boxShield, port);
+      var reloads = 0;
+      final client = SubDataPlaneClient(
+        port: port,
+        settings: settings,
+        shield: shield,
+        db: InMemoryDBService(),
+        registry: _FakeRegistry(),
+        onSettingsChanged: () => reloads++,
+      );
+
+      // mReady 在途期间先到一个 kv 事件，挂起 100ms 防抖 Timer
+      client.handleChanged(DataPlaneProtocol.changed(
+          kind: DataPlaneProtocol.kindKv, key: 'DanmuSize', value: 18.0));
+      expect(reloads, 0);
+
+      client.reconcile();
+      async.flushMicrotasks();
+      expect(reloads, 1, reason: '对账立即 reload，且取消合并了防抖 Timer');
+      async.elapse(const Duration(milliseconds: 120));
+      expect(reloads, 1, reason: '防抖 Timer 已取消，无第二次 reload');
+    });
+  });
 }
