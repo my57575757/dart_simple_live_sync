@@ -2,8 +2,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:simple_live_app/app/multiwindow/bootstrap/in_memory_services.dart';
 import 'package:simple_live_app/app/multiwindow/window/window_args.dart';
 import 'package:simple_live_app/models/db/follow_user.dart';
-import 'package:simple_live_app/services/local_storage_service.dart';
-import 'package:simple_live_app/services/db_service.dart';
 
 void main() {
   test('InMemoryLocalStorageService：快照播种后设置与屏蔽词可读', () {
