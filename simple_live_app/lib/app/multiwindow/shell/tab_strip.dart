@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
@@ -168,9 +170,9 @@ class _TabItem extends StatelessWidget {
       case 'close':
         store.close(descriptor.tabId);
       case 'others':
-        store.closeOthers(descriptor.tabId);
+        unawaited(store.closeOthers(descriptor.tabId));
       case 'right':
-        store.closeRight(descriptor.tabId);
+        unawaited(store.closeRight(descriptor.tabId));
       case 'copy':
         // 优先复制控制器已加载的真实房间链接，避免 shareUrl 为空时复制裸 roomId
         String? realUrl;

@@ -1,6 +1,7 @@
 // ignore_for_file: prefer_inlined_adds
 
 import 'package:get/get.dart';
+import 'package:simple_live_app/app/multiwindow/presence/douyin_presence_gateway.dart';
 import 'package:simple_live_app/app/multiwindow/shell/getx_room_controller_registry.dart';
 import 'package:simple_live_app/app/multiwindow/shell/room_controller_registry.dart';
 import 'package:simple_live_app/app/multiwindow/shell/room_shell_page.dart';
@@ -51,6 +52,7 @@ import 'package:simple_live_app/modules/settings/indexed_settings/indexed_settin
 import 'package:simple_live_app/modules/settings/other/other_settings_controller.dart';
 import 'package:simple_live_app/modules/settings/other/other_settings_page.dart';
 import 'package:simple_live_app/modules/settings/play_settings_page.dart';
+import 'package:simple_live_app/services/guard_server_service.dart';
 
 import '../modules/indexed/indexed_page.dart';
 import 'route_path.dart';
@@ -65,7 +67,13 @@ class AppPages {
       binding: BindingsBuilder(() {
         Get.put<RoomControllerRegistry>(GetxRoomControllerRegistry());
         Get.put(IndexedController());
-        Get.put(TabStore(registry: Get.find<RoomControllerRegistry>()));
+        Get.put(DouyinPresenceGateway(GuardServerService.instance));
+        Get.put(
+          TabStore(
+            registry: Get.find<RoomControllerRegistry>(),
+            presenceGateway: Get.find<DouyinPresenceGateway>(),
+          ),
+        );
       }),
     ),
     // 首页

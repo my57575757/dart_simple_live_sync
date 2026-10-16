@@ -99,17 +99,17 @@ void main() {
     expect(store.activeTabId.value, store.tabs.single.tabId);
   });
 
-  test('closeOthers / closeRight', () {
+  test('closeOthers / closeRight', () async {
     final t1 = store.open(req('a', '1'));
     store.open(req('a', '2'));
     store.open(req('a', '3'));
-    store.closeOthers(t1.tabId);
+    await store.closeOthers(t1.tabId);
     expect(store.tabs.single.tabId, t1.tabId);
     expect(store.activeTabId.value, t1.tabId);
 
     store.open(req('a', '2'));
     store.open(req('a', '3'));
-    store.closeRight(t1.tabId);
+    await store.closeRight(t1.tabId);
     expect(store.tabs.map((t) => t.request.roomId), ['1']);
   });
 
@@ -131,16 +131,16 @@ void main() {
     expect(store.isHomeActive, true);
   });
 
-  test('closeOthers 未知 tabId 抛 ArgumentError 且不改动标签', () {
+  test('closeOthers 未知 tabId 抛 ArgumentError 且不改动标签', () async {
     store.open(req('a', '1'));
-    expect(() => store.closeOthers('nope'), throwsArgumentError);
+    await expectLater(store.closeOthers('nope'), throwsArgumentError);
     expect(store.tabs.length, 1);
     expect(registry.registered.length, 1);
   });
 
-  test('closeRight 未知 tabId 抛 ArgumentError 且不改动标签', () {
+  test('closeRight 未知 tabId 抛 ArgumentError 且不改动标签', () async {
     store.open(req('a', '1'));
-    expect(() => store.closeRight('nope'), throwsArgumentError);
+    await expectLater(store.closeRight('nope'), throwsArgumentError);
     expect(store.tabs.length, 1);
     expect(registry.registered.length, 1);
   });

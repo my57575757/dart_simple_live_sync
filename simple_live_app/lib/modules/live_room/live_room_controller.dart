@@ -16,6 +16,9 @@ import 'package:simple_live_app/app/constant.dart';
 import 'package:simple_live_app/app/controller/app_settings_controller.dart';
 import 'package:simple_live_app/app/event_bus.dart';
 import 'package:simple_live_app/app/log.dart';
+import 'package:simple_live_app/app/multiwindow/presence/douyin_presence_gateway.dart';
+import 'package:simple_live_app/app/multiwindow/presence/local_presence_client.dart';
+import 'package:simple_live_app/app/multiwindow/presence/presence_claimant.dart';
 import 'package:simple_live_app/app/multiwindow/shell/tab_store.dart';
 import 'package:simple_live_app/app/sites.dart';
 import 'package:simple_live_app/app/utils.dart';
@@ -156,6 +159,30 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   /// 进行中的进入流程，并发调用复用同一 Future
   Future<bool>? _enteringFuture;
 
+  /// Windows 标签壳下抖音账号态走全局网关；Android / 路由模式为 null
+  LocalPresenceClient? _presenceClient;
+  DouyinPresenceTab? _presenceTab;
+
+  DouyinPresenceGateway? _resolveGateway() {
+    if (tabId == null) {
+      return null;
+    }
+    if (!Get.isRegistered<DouyinPresenceGateway>()) {
+      return null;
+    }
+    return Get.find<DouyinPresenceGateway>();
+  }
+
+  /// 接线入口（onInit 与测试共用）：仅抖音标签绑定到网关
+  void bindPresenceGateway(DouyinPresenceGateway gateway) {
+    if (site.id != Constant.kDouyin || tabId == null) {
+      return;
+    }
+    _presenceTab = _ControllerPresenceTab(this);
+    gateway.bindTab(_presenceTab!);
+    _presenceClient = LocalPresenceClient(gateway, _presenceTab!);
+  }
+
   @visibleForTesting
   void stopGuardHeartbeatForTesting() => _stopGuardHeartbeat();
 
@@ -202,6 +229,11 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       BackgroundAudioService.instance.markStopped();
       await player.pause();
     });
+
+    final gateway = _resolveGateway();
+    if (gateway != null) {
+      bindPresenceGateway(gateway);
+    }
 
     super.onInit();
   }
@@ -282,9 +314,8 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   // 弹窗逻辑
 
   void refreshRoom() {
-    // 账号态刷新即退房回游客：best-effort 退出（在 loadData 换详情前发起）
-    if (site.id == Constant.kDouyin && presence.value == RoomPresence.account) {
-      unawaited(_exitGuardRoom());
+    if (site.id == Constant.kDouyin) {
+      unawaited(_leaveDouyinPresence(unconditional: false));
     }
     //messages.clear();
     superChats.clear();
@@ -428,13 +459,31 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       await showDanmakuLoginDialog();
       return false;
     }
-    final future = _doEnterAsAccount();
+    final client = _presenceClient;
+    final future = client == null
+        ? _doEnterAsAccount()
+        : _doEnterViaGateway(client);
     _enteringFuture = future;
     try {
       return await future;
     } finally {
       _enteringFuture = null;
     }
+  }
+
+  Future<bool> _doEnterViaGateway(LocalPresenceClient client) async {
+    presence.value = RoomPresence.entering;
+    final result = await client.claim();
+    if (result.granted) {
+      return true;
+    }
+    presence.value = RoomPresence.guest;
+    SmartDialog.showToast(
+      result.detailFailed
+          ? "无法以账号身份读取该房间（可能被主播限制）"
+          : "进入直播间失败，已保持游客观看",
+    );
+    return false;
   }
 
   /// 抖音写动作（发弹幕/点赞/灯牌/入团）前确保账号在场
@@ -448,14 +497,9 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     final liveSite = site.liveSite;
     if (liveSite is! DouyinSite) return false;
     presence.value = RoomPresence.entering;
-    // 不用全屏模态 loading：左上角「进入直播间」按钮在 entering 态自会转圈
-    // 反馈，画面继续播放、交互不被锁定
     final LiveRoomDetail accountDetail;
     try {
-      accountDetail = await liveSite.getRoomDetail(
-        roomId: "$roomId;$shareUrl",
-        asAccount: true,
-      );
+      accountDetail = await fetchAccountDetail();
     } catch (e) {
       SmartDialog.showToast("无法以账号身份读取该房间（可能被主播限制）");
       presence.value = RoomPresence.guest;
@@ -476,19 +520,68 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       return false;
     }
 
-    // 账号进场成功后才动弹幕：游客弹幕此刻停止，按账号身份重连
+    await applyAccountEnter(
+      accountDetail: accountDetail,
+      guardStatus: entered.status,
+      reentered: false,
+    );
+    _startGuardHeartbeat(entered.accountId);
+    return true;
+  }
+
+  /// 账号详情（网关端口与旧路径共用）
+  Future<LiveRoomDetail> fetchAccountDetail() {
+    return (site.liveSite as DouyinSite).getRoomDetail(
+      roomId: "$roomId;$shareUrl",
+      asAccount: true,
+    );
+  }
+
+  /// 账号进场成功后的弹幕/详情/状态切换（旧路径与网关 applyAccountEnter 共用）
+  Future<void> applyAccountEnter({
+    required LiveRoomDetail accountDetail,
+    required Map<String, dynamic> guardStatus,
+    required bool reentered,
+  }) async {
     await liveDanmaku.stop();
     detail.value = accountDetail;
     online.value = accountDetail.online;
     liveStatus.value = accountDetail.status || accountDetail.isRecord;
     initDanmau();
     await liveDanmaku.start(accountDetail.danmakuData);
-
-    _applyGuardStatus(entered.status);
-    _startGuardHeartbeat(entered.accountId);
+    _applyGuardStatus(guardStatus);
     presence.value = RoomPresence.account;
-    addSysMsg("已进入直播间");
-    return true;
+    addSysMsg(reentered ? "已自动在本标签恢复登录进入" : "已进入直播间");
+  }
+
+  /// 被更新打开的标签让位：播放不中断，游客详情重连弹幕（best-effort）
+  Future<void> applyYieldToGuest() async {
+    guardJoined.value = false;
+    guardStarRoom.value = false;
+    guardBadgeActive.value = false;
+    presence.value = RoomPresence.guest;
+    addSysMsg("已在更新打开的直播间标签中登录进入，本标签保持游客观看；该标签关闭后将自动切回。");
+    try {
+      final guestDetail = await (site.liveSite as DouyinSite).getRoomDetail(
+        roomId: "$roomId;$shareUrl",
+        asAccount: false,
+      );
+      await liveDanmaku.stop();
+      detail.value = guestDetail;
+      online.value = guestDetail.online;
+      liveStatus.value = guestDetail.status || guestDetail.isRecord;
+      initDanmau();
+      await liveDanmaku.start(guestDetail.danmakuData);
+    } catch (e) {
+      // best-effort：游客取页/弹幕重连失败不影响播放，账号弹幕随服务端断开自然终止。
+      // 不弹全局验证页（可能为后台标签），避免打断当前激活标签。
+      Log.logPrint("presence: 让位后游客重连失败: $e");
+    }
+  }
+
+  /// 外部端抢占：不切弹幕、不抢回；置 guest 使后续写动作走 claim 重进
+  void applySuspended() {
+    presence.value = RoomPresence.guest;
   }
 
   void _startGuardHeartbeat(String accountId) {
@@ -559,6 +652,30 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     }
   }
 
+  /// 抖音账号态离开：网关标签走 release（持有者发 exit + 次新回退接管；
+  /// 已被让位 / suspended 的标签仅出栈）；Android 与无网关时维持各调用点
+  /// 原有退房语义（onClose 全平台退房；refresh/reset 仅抖音账号态退房）。
+  /// [unconditional]=true 仅用于 onClose。
+  Future<void> _leaveDouyinPresence({required bool unconditional}) async {
+    final client = _presenceClient;
+    if (client != null) {
+      final gateway = _resolveGateway();
+      final inStack = gateway?.hasClaim(tabId!) ?? false;
+      if (unconditional ||
+          presence.value == RoomPresence.account ||
+          inStack) {
+        await client.release();
+      }
+      return;
+    }
+    if (unconditional) {
+      await _exitGuardRoom();
+    } else if (site.id == Constant.kDouyin &&
+        presence.value == RoomPresence.account) {
+      await _exitGuardRoom();
+    }
+  }
+
   Future<void> sendDanmaku(String text) async {
     var content = text.trim();
     if (content.isEmpty) {
@@ -623,8 +740,9 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
         }
 
         result = await sendOnce(accountId);
-        if (result.success) {
-          // 主动发送已在服务端抢占房间，恢复本端心跳保活
+        if (result.success && _presenceClient == null) {
+          // 网关模式下：发送前 ensureAccountPresence 已使本标签成为 holder，
+          // 唯一心跳由网关维护，控制器不再起 Timer
           _startGuardHeartbeat(accountId);
         }
       } else {
@@ -744,7 +862,9 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
         }
         if (action == "light_up") guardBadgeActive.value = true;
         // 主动操作已在服务端抢占房间，恢复本端心跳保活
-        _startGuardHeartbeat(accountId);
+        if (_presenceClient == null) {
+          _startGuardHeartbeat(accountId);
+        }
       }
     } on DioException catch (e) {
       final data = e.response?.data;
@@ -2192,9 +2312,8 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     }
 
     // 参数变更前先退房停心跳：抖音账号态真实退房，同时避免心跳 getter 读到新房 id
-    if (this.site.id == Constant.kDouyin &&
-        presence.value == RoomPresence.account) {
-      await _exitGuardRoom();
+    if (this.site.id == Constant.kDouyin) {
+      await _leaveDouyinPresence(unconditional: false);
     }
     presence.value = RoomPresence.guest;
 
@@ -2288,7 +2407,7 @@ ${error is Error ? (error as Error).stackTrace : ""}''');
     scrollController.removeListener(scrollListener);
     autoExitTimer?.cancel();
 
-    unawaited(_exitGuardRoom());
+    unawaited(_leaveDouyinPresence(unconditional: true));
 
     liveDanmaku.stop();
     if (_audioServiceActive) {
@@ -2306,4 +2425,46 @@ ${error is Error ? (error as Error).stackTrace : ""}''');
     var id = "${site.id}_$roomId";
     DBService.instance.addOrUpdateVolume(id, newValue);
   }
+}
+
+/// DouyinPresenceTab 的控制器适配器：网关只经此端口碰控制器状态，
+/// M4 主引擎侧的远端代理实现同一接口。
+class _ControllerPresenceTab implements DouyinPresenceTab {
+  _ControllerPresenceTab(this._c);
+
+  final LiveRoomController _c;
+
+  @override
+  String get tabId => _c.tabId!;
+
+  @override
+  Future<LiveRoomDetail> fetchAccountDetail() => _c.fetchAccountDetail();
+
+  @override
+  String get guardRoomId => _c._guardRoomId;
+
+  @override
+  String get guardWebRid => _c._guardWebRid;
+
+  @override
+  Map<String, dynamic> guardExtraArgs() => _c._guardExtraArgs();
+
+  @override
+  Future<void> applyAccountEnter({
+    required LiveRoomDetail accountDetail,
+    required Map<String, dynamic> guardStatus,
+    required bool reentered,
+  }) {
+    return _c.applyAccountEnter(
+      accountDetail: accountDetail,
+      guardStatus: guardStatus,
+      reentered: reentered,
+    );
+  }
+
+  @override
+  Future<void> applyYieldToGuest() => _c.applyYieldToGuest();
+
+  @override
+  void applySuspended() => _c.applySuspended();
 }

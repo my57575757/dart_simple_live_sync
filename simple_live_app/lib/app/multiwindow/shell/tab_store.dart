@@ -3,15 +3,24 @@ import 'dart:async';
 import 'package:get/get.dart';
 import 'package:uuid/uuid.dart';
 
+import '../presence/douyin_presence_gateway.dart';
 import 'room_controller_registry.dart';
 import 'tab_descriptor.dart';
 import 'tab_open_request.dart';
 
 class TabStore extends GetxController {
-  TabStore({required this.registry, this.hasHome = true});
+  TabStore({
+    required this.registry,
+    this.hasHome = true,
+    this.presenceGateway,
+  });
 
   final RoomControllerRegistry registry;
   final bool hasHome;
+
+  /// Windows 标签壳注入；null（单元测试 / 未来其他宿主）时行为与 M2 完全一致
+  final DouyinPresenceGateway? presenceGateway;
+
   final _uuid = const Uuid();
 
   final RxList<TabDescriptor> tabs = <TabDescriptor>[].obs;
@@ -83,12 +92,17 @@ class TabStore extends GetxController {
     return removed;
   }
 
-  void closeOthers(String tabId) {
+  Future<void> closeOthers(String tabId) async {
     final index = tabs.indexWhere((t) => t.tabId == tabId);
     if (index < 0) {
       throw ArgumentError('tab not found: $tabId');
     }
     final victims = tabs.where((t) => t.tabId != tabId).toList();
+    // 必须先摘栈再销毁控制器：否则 holder 关闭会对同样即将销毁的次新标签
+    // 连环发起 enter/exit；幸存者由网关一次性接管
+    await presenceGateway?.batchRelease(
+      victims.map((t) => t.tabId).toSet(),
+    );
     for (final t in victims) {
       registry.unregister(t.tabId);
       tabs.remove(t);
@@ -96,12 +110,15 @@ class TabStore extends GetxController {
     activeTabId.value = tabId;
   }
 
-  void closeRight(String tabId) {
+  Future<void> closeRight(String tabId) async {
     final index = tabs.indexWhere((t) => t.tabId == tabId);
     if (index < 0) {
       throw ArgumentError('tab not found: $tabId');
     }
     final victims = tabs.sublist(index + 1);
+    await presenceGateway?.batchRelease(
+      victims.map((t) => t.tabId).toSet(),
+    );
     for (final t in victims) {
       registry.unregister(t.tabId);
       tabs.remove(t);
@@ -120,6 +137,9 @@ class TabStore extends GetxController {
 
   Future<void> closeAll() async {
     final all = tabs.toList();
+    await presenceGateway?.batchRelease(
+      all.map((t) => t.tabId).toSet(),
+    );
     for (final t in all) {
       registry.unregister(t.tabId);
     }
