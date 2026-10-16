@@ -112,7 +112,7 @@ class DouyinPresenceGateway {
     }
     _startHeartbeat(tab, entered.accountId);
 
-    if (previousHolder != null) {
+    if (previousHolder != null && !selfWasHolder) {
       // best-effort：不阻塞 claim 返回；播放不中断，游客详情/弹幕重连失败
       // 只记日志（spec 7.5）
       unawaited(

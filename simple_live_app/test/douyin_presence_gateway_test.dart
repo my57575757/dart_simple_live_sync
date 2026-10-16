@@ -597,11 +597,14 @@ void main() {
       expect(a.reenteredCalls, [false], reason: '回退失败不 apply');
 
       a.detailThrows = false;
+      final yieldsBeforeReclaim = a.yields;
       final r = await gw.claim(a); // 不得命中 holder 短路
 
       expect(r.granted, isTrue);
       expect(guard.enters.last, 'acct1@room_111', reason: '必须完整重进');
       expect(a.reenteredCalls, [false, false]);
+      expect(a.yields, yieldsBeforeReclaim,
+          reason: '自我重进不得对自己让位降级');
       expect(gw.holderTabId, 'A');
       gw.stopHeartbeatForTesting();
     });
