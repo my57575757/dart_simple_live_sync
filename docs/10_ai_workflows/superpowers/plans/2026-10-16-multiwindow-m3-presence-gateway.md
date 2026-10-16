@@ -622,7 +622,6 @@ LiveRoomDetail _detail(String webRid, String cookie) => LiveRoomDetail(
 class FakeTab implements DouyinPresenceTab {
   FakeTab(this.id, this.webRid, {this.cookie = 'sessionid=abc'});
 
-  @override
   final String id;
   final String webRid;
   final String cookie;
