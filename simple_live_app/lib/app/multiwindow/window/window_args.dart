@@ -1,0 +1,97 @@
+import 'dart:convert';
+
+/// 单个待打开的房间（跨窗重建用）
+class RoomTabArg {
+  const RoomTabArg({
+    required this.siteId,
+    required this.roomId,
+    this.shareUrl = '',
+  });
+
+  final String siteId;
+  final String roomId;
+  final String shareUrl;
+
+  Map<String, dynamic> toJson() => {
+        'siteId': siteId,
+        'roomId': roomId,
+        'shareUrl': shareUrl,
+      };
+
+  factory RoomTabArg.fromJson(Map<String, dynamic> json) => RoomTabArg(
+        siteId: json['siteId'] as String,
+        roomId: json['roomId'] as String,
+        shareUrl: (json['shareUrl'] as String?) ?? '',
+      );
+}
+
+/// 主引擎 → 子引擎的只读数据快照（M4-1：设置/屏蔽词/音量/关注存在性）
+class WindowSnapshot {
+  const WindowSnapshot({
+    this.settings = const {},
+    this.shield = const [],
+    this.volumes = const {},
+    this.followShareUrls = const {},
+  });
+
+  final Map<String, dynamic> settings;
+  final List<String> shield;
+  final Map<String, double> volumes;
+
+  /// key=siteId_roomId，value=shareUrl（可能为空串，仅用于关注存在性判断）
+  final Map<String, String> followShareUrls;
+
+  Map<String, dynamic> toJson() => {
+        'settings': settings,
+        'shield': shield,
+        'volumes': volumes,
+        'followShareUrls': followShareUrls,
+      };
+
+  factory WindowSnapshot.fromJson(Map<String, dynamic> json) => WindowSnapshot(
+        settings:
+            Map<String, dynamic>.from(json['settings'] as Map? ?? const {}),
+        shield: ((json['shield'] as List?) ?? const [])
+            .map((e) => e.toString())
+            .toList(),
+        volumes: ((json['volumes'] as Map?) ?? const {})
+            .map((k, v) => MapEntry(k.toString(), (v as num).toDouble())),
+        followShareUrls: ((json['followShareUrls'] as Map?) ?? const {})
+            .map((k, v) => MapEntry(k.toString(), v.toString())),
+      );
+}
+
+/// 子窗启动参数（dmw WindowConfiguration.arguments 承载的 JSON 字符串）
+class RoomWindowArgs {
+  const RoomWindowArgs({required this.tabs, this.snapshot = const WindowSnapshot()});
+
+  static const String type = 'room_shell';
+
+  final List<RoomTabArg> tabs;
+  final WindowSnapshot snapshot;
+
+  Map<String, dynamic> toJson() => {
+        'type': type,
+        'tabs': tabs.map((e) => e.toJson()).toList(),
+        'snapshot': snapshot.toJson(),
+      };
+
+  String encode() => jsonEncode(toJson());
+
+  factory RoomWindowArgs.fromJson(Map<String, dynamic> json) {
+    if (json['type'] != type) {
+      throw FormatException('unknown window args type: ${json['type']}');
+    }
+    final snapshotJson =
+        (json['snapshot'] as Map?)?.cast<String, dynamic>() ?? const {};
+    return RoomWindowArgs(
+      tabs: ((json['tabs'] as List?) ?? const [])
+          .map((e) => RoomTabArg.fromJson(e as Map<String, dynamic>))
+          .toList(),
+      snapshot: WindowSnapshot.fromJson(snapshotJson),
+    );
+  }
+
+  factory RoomWindowArgs.decode(String raw) =>
+      RoomWindowArgs.fromJson(jsonDecode(raw) as Map<String, dynamic>);
+}
