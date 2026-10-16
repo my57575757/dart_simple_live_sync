@@ -1,0 +1,83 @@
+--- media_kit_video_plugin.h.orig-spike	2026-10-15 20:56:13.763748500 +0800
++++ media_kit_video_plugin.h	2026-10-15 21:03:24.071608900 +0800
+@@ -14,6 +14,7 @@
+ #include <functional>
+ #include <queue>
+ #include <mutex>
++#include <unordered_map>
+ 
+ #include "video_output_manager.h"
+ 
+@@ -50,6 +51,9 @@
+   std::queue<std::function<void()>> main_thread_tasks_;
+   std::mutex main_thread_tasks_mutex_;
+   static MediaKitVideoPlugin* instance_;
++  // SPIKE PATCH: per-HWND window proc dispatch for multiple Flutter engines.
++  static std::unordered_map<HWND, MediaKitVideoPlugin*> hwnd_instances_;
++  static std::mutex hwnd_instances_mutex_;
+ };
+ 
+ }  // namespace media_kit_video
+--- media_kit_video_plugin.cc.orig-spike	2026-10-15 20:56:13.738653200 +0800
++++ media_kit_video_plugin.cc	2026-10-15 21:03:26.619299700 +0800
+@@ -13,6 +13,10 @@
+ namespace media_kit_video {
+ 
+ MediaKitVideoPlugin* MediaKitVideoPlugin::instance_ = nullptr;
++// SPIKE PATCH
++std::unordered_map<HWND, MediaKitVideoPlugin*>
++    MediaKitVideoPlugin::hwnd_instances_;
++std::mutex MediaKitVideoPlugin::hwnd_instances_mutex_;
+ 
+ void MediaKitVideoPlugin::RegisterWithRegistrar(
+     flutter::PluginRegistrarWindows* registrar) {
+@@ -30,6 +34,10 @@
+   original_window_proc_ = reinterpret_cast<WNDPROC>(
+       ::SetWindowLongPtr(flutter_window_, GWLP_WNDPROC,
+                          reinterpret_cast<LONG_PTR>(WindowProcDelegate)));
++  {
++    std::lock_guard<std::mutex> lock(hwnd_instances_mutex_);
++    hwnd_instances_[flutter_window_] = this;
++  }
+ 
+   channel_ = std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
+       registrar->messenger(), "com.alexmercerind/media_kit_video",
+@@ -43,6 +51,8 @@
+   if (flutter_window_ && original_window_proc_) {
+     ::SetWindowLongPtr(flutter_window_, GWLP_WNDPROC,
+                        reinterpret_cast<LONG_PTR>(original_window_proc_));
++    std::lock_guard<std::mutex> lock(hwnd_instances_mutex_);
++    hwnd_instances_.erase(flutter_window_);
+   }
+   if (instance_ == this) {
+     instance_ = nullptr;
+@@ -66,13 +76,25 @@
+                                                          UINT message,
+                                                          WPARAM wParam,
+                                                          LPARAM lParam) {
+-  if (message == kMainThreadTaskMessage && instance_) {
+-    instance_->ProcessMainThreadTasks();
++  // SPIKE PATCH: resolve plugin instance by HWND instead of the global instance_.
++  MediaKitVideoPlugin* self = nullptr;
++  {
++    std::lock_guard<std::mutex> lock(hwnd_instances_mutex_);
++    auto it = hwnd_instances_.find(hwnd);
++    if (it != hwnd_instances_.end()) {
++      self = it->second;
++    }
++  }
++  if (!self) {
++    return ::DefWindowProc(hwnd, message, wParam, lParam);
++  }
++  if (message == kMainThreadTaskMessage) {
++    self->ProcessMainThreadTasks();
+     return 0;
+   }
+ 
+-  if (instance_ && instance_->original_window_proc_) {
+-    return ::CallWindowProc(instance_->original_window_proc_, hwnd, message,
++  if (self->original_window_proc_) {
++    return ::CallWindowProc(self->original_window_proc_, hwnd, message,
+                             wParam, lParam);
+   }
+ 
