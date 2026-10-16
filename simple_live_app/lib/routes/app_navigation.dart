@@ -7,6 +7,7 @@ import 'package:simple_live_app/app/constant.dart';
 import 'package:simple_live_app/app/controller/app_settings_controller.dart';
 import 'package:simple_live_app/app/multiwindow/shell/tab_open_request.dart';
 import 'package:simple_live_app/app/multiwindow/shell/tab_store.dart';
+import 'package:simple_live_app/app/multiwindow/window/window_open_service.dart';
 import 'package:simple_live_app/app/sites.dart';
 import 'package:simple_live_app/app/utils.dart';
 import 'package:simple_live_app/models/sync_client_info_model.dart';
@@ -58,10 +59,18 @@ class AppNavigator {
     }
 
     if (Platform.isWindows) {
-      Get.find<TabStore>().open(
-        TabOpenRequest(siteId: site.id, roomId: roomId, shareUrl: shareUrl),
-        activate: !background,
+      final request = TabOpenRequest(
+        siteId: site.id,
+        roomId: roomId,
+        shareUrl: shareUrl,
       );
+      if (Get.isRegistered<WindowOpenService>()) {
+        // 已在子窗打开 → 置前子窗；否则按 background 语义在主窗开/激活
+        await WindowOpenService.instance
+            .openLocallyWithGlobalDedup(request, background: background);
+      } else {
+        Get.find<TabStore>().open(request, activate: !background);
+      }
       return;
     }
 

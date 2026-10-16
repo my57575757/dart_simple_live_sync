@@ -1,11 +1,17 @@
 // ignore_for_file: prefer_inlined_adds
 
+import 'dart:io';
+
 import 'package:get/get.dart';
 import 'package:simple_live_app/app/multiwindow/presence/douyin_presence_gateway.dart';
 import 'package:simple_live_app/app/multiwindow/shell/getx_room_controller_registry.dart';
 import 'package:simple_live_app/app/multiwindow/shell/room_controller_registry.dart';
 import 'package:simple_live_app/app/multiwindow/shell/room_shell_page.dart';
 import 'package:simple_live_app/app/multiwindow/shell/tab_store.dart';
+import 'package:simple_live_app/app/multiwindow/window/dmw_sub_window_port.dart';
+import 'package:simple_live_app/app/multiwindow/window/window_open_service.dart';
+import 'package:simple_live_app/app/multiwindow/window/window_registry.dart';
+import 'package:simple_live_app/app/multiwindow/window/window_role.dart';
 import 'package:simple_live_app/modules/category/detail/category_detail_controller.dart';
 import 'package:simple_live_app/modules/category/detail/category_detail_page.dart';
 import 'package:simple_live_app/modules/indexed/indexed_controller.dart';
@@ -74,6 +80,21 @@ class AppPages {
             presenceGateway: Get.find<DouyinPresenceGateway>(),
           ),
         );
+        // 仅主引擎 Windows 壳需要开窗协调者（main() 已挂主窗 controller）
+        if (Platform.isWindows &&
+            !MultiWindowRole.isSubWindow &&
+            DmwSubWindowPort.mainWindowId != null) {
+          Get.put(
+            WindowOpenService(
+              port: DmwSubWindowPort(),
+              store: Get.find<TabStore>(),
+              registry: WindowRegistry(
+                mainWindowId: DmwSubWindowPort.mainWindowId!,
+              ),
+            ),
+            permanent: true,
+          );
+        }
       }),
     ),
     // 首页

@@ -1,9 +1,12 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:simple_live_app/app/app_style.dart';
+import 'package:simple_live_app/app/multiwindow/window/window_open_service.dart';
+import 'package:simple_live_app/app/multiwindow/window/window_role.dart';
 import 'package:simple_live_app/app/utils.dart';
 import 'package:simple_live_app/modules/live_room/live_room_controller.dart';
 
@@ -155,14 +158,38 @@ class _TabItem extends StatelessWidget {
       Rect.fromPoints(position, position),
       Offset.zero & overlay.size,
     );
+    LiveRoomController? controller;
+    if (registry.isRegistered(descriptor.tabId)) {
+      controller = Get.find<LiveRoomController>(tag: descriptor.tabId);
+    }
+    final isAccount =
+        controller?.presence.value == RoomPresence.account;
+    // M4-1：移动仅主窗游客态可用；子窗不显示该项，账号态置灰
+    final showMoveItem = Platform.isWindows &&
+        !MultiWindowRole.isSubWindow &&
+        Get.isRegistered<WindowOpenService>();
+    Widget moveChild = const Text('移到新窗口');
+    if (isAccount) {
+      moveChild = const Tooltip(
+        message: '账号跨窗在下一阶段支持',
+        child: Text('移到新窗口'),
+      );
+    }
+
     final value = await showMenu<String>(
       context: context,
       position: rel,
-      items: const [
-        PopupMenuItem(value: 'close', child: Text('关闭')),
-        PopupMenuItem(value: 'others', child: Text('关闭其他标签')),
-        PopupMenuItem(value: 'right', child: Text('关闭右侧标签')),
-        PopupMenuItem(value: 'copy', child: Text('复制房间链接')),
+      items: [
+        const PopupMenuItem(value: 'close', child: Text('关闭')),
+        const PopupMenuItem(value: 'others', child: Text('关闭其他标签')),
+        const PopupMenuItem(value: 'right', child: Text('关闭右侧标签')),
+        if (showMoveItem)
+          PopupMenuItem(
+            value: 'move_window',
+            enabled: !isAccount,
+            child: moveChild,
+          ),
+        const PopupMenuItem(value: 'copy', child: Text('复制房间链接')),
       ],
     );
     if (value == null) return;
@@ -173,6 +200,11 @@ class _TabItem extends StatelessWidget {
         unawaited(store.closeOthers(descriptor.tabId));
       case 'right':
         unawaited(store.closeRight(descriptor.tabId));
+      case 'move_window':
+        unawaited(
+          WindowOpenService.instance
+              .moveTabToNewWindow(descriptor.tabId),
+        );
       case 'copy':
         // 优先复制控制器已加载的真实房间链接，避免 shareUrl 为空时复制裸 roomId
         String? realUrl;
