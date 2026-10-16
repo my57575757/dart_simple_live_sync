@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:dio/dio.dart';
 import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -14,6 +16,12 @@ class FakeGuard extends GuardServerService {
   final beats = <String>[];
   final reregisters = <String>[];
   final ensureAccounts = <String>[];
+
+  /// 非 null 时 enterRoom 会等在该 Completer 上，用于构造在途 claim
+  Completer<void>? enterGate;
+
+  /// 严格时序的事件流水（含 enter/exit），用于断言 exit 先于 fallback enter
+  final events = <String>[];
 
   bool enterThrowsOnce = false;
   bool detailGuardUnconfigured = false;
@@ -50,6 +58,10 @@ class FakeGuard extends GuardServerService {
     String webRid = '',
     Map<String, dynamic>? extra,
   }) async {
+    final gate = enterGate;
+    if (gate != null) {
+      await gate.future;
+    }
     if (enterThrowsOnce) {
       enterThrowsOnce = false;
       throw DioException(
@@ -61,6 +73,7 @@ class FakeGuard extends GuardServerService {
       );
     }
     enters.add('$accountId@$roomId');
+    events.add('enter:$roomId');
     return {'joined': false, 'starGuard': false, 'badgeActive': true};
   }
 
@@ -92,6 +105,7 @@ class FakeGuard extends GuardServerService {
     Map<String, dynamic>? extra,
   }) async {
     exits.add('$accountId@$roomId');
+    events.add('exit:$roomId');
   }
 }
 
@@ -350,6 +364,10 @@ void main() {
         async.elapse(const Duration(milliseconds: 250));
         expect(guard.reregisters, [Constant.kDouyin]);
         expect(guard.beats.last, 'acct2@room_111');
+        gw.release('A');
+        async.flushMicrotasks();
+        expect(guard.exits, ['acct2@room_111'],
+            reason: 'accountId 缓存必须随 reregister 同步');
         gw.stopHeartbeatForTesting();
       });
     });
@@ -373,6 +391,90 @@ void main() {
         gw.stopHeartbeatForTesting();
       });
     });
+
+    test('claim 在途时 release 同标签：排队到进场完成后 exit，无孤儿心跳',
+        () {
+      FakeAsync().run((async) {
+        final guard = FakeGuard();
+        final gw = DouyinPresenceGateway(
+          guard,
+          heartbeatInterval: const Duration(milliseconds: 100),
+        );
+        final b = FakeTab('B', '222');
+        final gate = Completer<void>();
+        guard.enterGate = gate;
+
+        PresenceClaimResult? claimResult;
+        var releaseDone = false;
+        gw.claim(b).then((r) => claimResult = r);
+        async.flushMicrotasks(); // claim 停在 enterRoom 闸门
+        final releaseFuture = gw.release('B');
+        releaseFuture.then((_) => releaseDone = true);
+        async.flushMicrotasks(); // release 在串行链上排队
+        expect(gw.holderTabId, isNull);
+        expect(guard.enters, isEmpty);
+
+        gate.complete();
+        async.flushMicrotasks(); // claim 完成 → release 执行 exit
+
+        expect(claimResult?.granted, isTrue);
+        expect(releaseDone, isTrue);
+        expect(gw.holderTabId, isNull);
+        expect(gw.hasClaim('B'), isFalse);
+        expect(guard.exits, ['acct1@room_222']);
+
+        async.elapse(const Duration(milliseconds: 300));
+        expect(guard.beats, isEmpty, reason: '已关闭标签不得留下心跳');
+        gw.stopHeartbeatForTesting();
+      });
+    });
+
+    test('并发 claim 串行：B、C 先后在途，终态 C 为 holder 且心跳只打 C', () {
+      FakeAsync().run((async) {
+        final guard = FakeGuard();
+        final gw = DouyinPresenceGateway(
+          guard,
+          heartbeatInterval: const Duration(milliseconds: 100),
+        );
+        final a = FakeTab('A', '111');
+        final b = FakeTab('B', '222');
+        final c = FakeTab('C', '333');
+
+        gw.claim(a);
+        async.flushMicrotasks();
+        async.elapse(const Duration(milliseconds: 150));
+
+        final gate = Completer<void>();
+        guard.enterGate = gate;
+        final fb = gw.claim(b);
+        async.flushMicrotasks();
+        final fc = gw.claim(c); // 排在 B 之后
+        async.flushMicrotasks();
+        expect(gw.holderTabId, 'A', reason: 'B 仍卡在闸门');
+
+        gate.complete();
+        async.flushMicrotasks(); // B 完成
+        async.flushMicrotasks(); // C（gate 已完成）完成
+        expect(fb.then((r) => r.granted), completion(isTrue));
+        expect(fc.then((r) => r.granted), completion(isTrue));
+
+        expect(
+          guard.enters,
+          ['acct1@room_111', 'acct1@room_222', 'acct1@room_333'],
+        );
+        expect(gw.holderTabId, 'C');
+        expect(b.yields, 1, reason: 'B 被 C 让位');
+
+        async.elapse(const Duration(milliseconds: 250));
+        expect(
+          guard.beats.where((s) => s.contains('room_222')),
+          isEmpty,
+          reason: '中间 claimant B 不得有任何心跳',
+        );
+        expect(guard.beats.last, 'acct1@room_333');
+        gw.stopHeartbeatForTesting();
+      });
+    });
   });
 
   group('release / detach', () {
@@ -390,6 +492,11 @@ void main() {
 
       await gw.release('B');
 
+      expect(
+        guard.events,
+        ['enter:room_111', 'enter:room_222', 'exit:room_222', 'enter:room_111'],
+        reason: '必须先 exit B 再 fallback enter A',
+      );
       expect(guard.exits, ['acct1@room_222']);
       expect(guard.enters, ['acct1@room_111']);
       expect(gw.holderTabId, 'A');
@@ -469,6 +576,33 @@ void main() {
       expect(r.granted, isTrue);
       await client.release();
       expect(gw.holderTabId, isNull);
+      gw.stopHeartbeatForTesting();
+    });
+
+    test('回退接管失败后写动作再 claim：完整重新进场并恢复心跳归属',
+        () async {
+      final guard = FakeGuard();
+      final gw = DouyinPresenceGateway(
+        guard,
+        heartbeatInterval: const Duration(milliseconds: 100),
+      );
+      final a = FakeTab('A', '111');
+      final b = FakeTab('B', '222');
+      await gw.claim(a);
+      await gw.claim(b);
+      await Future<void>.value();
+      a.detailThrows = true;
+      await gw.release('B'); // 回退 A 失败：holder=A 但不 ready
+      expect(gw.holderTabId, 'A');
+      expect(a.reenteredCalls, [false], reason: '回退失败不 apply');
+
+      a.detailThrows = false;
+      final r = await gw.claim(a); // 不得命中 holder 短路
+
+      expect(r.granted, isTrue);
+      expect(guard.enters.last, 'acct1@room_111', reason: '必须完整重进');
+      expect(a.reenteredCalls, [false, false]);
+      expect(gw.holderTabId, 'A');
       gw.stopHeartbeatForTesting();
     });
   });
