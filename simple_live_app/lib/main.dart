@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:desktop_multi_window/desktop_multi_window.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -15,7 +16,10 @@ import 'package:path_provider/path_provider.dart';
 import 'package:simple_live_app/app/app_style.dart';
 import 'package:simple_live_app/app/controller/app_settings_controller.dart';
 import 'package:simple_live_app/app/log.dart';
+import 'package:simple_live_app/app/multiwindow/bootstrap/sub_engine_bootstrap.dart';
+import 'package:simple_live_app/app/multiwindow/shell/room_shell_page.dart';
 import 'package:simple_live_app/app/multiwindow/shell/tab_store.dart';
+import 'package:simple_live_app/app/multiwindow/window/dmw_sub_window_port.dart';
 import 'package:simple_live_app/app/utils.dart';
 import 'package:simple_live_app/app/utils/listen_fourth_button.dart';
 import 'package:simple_live_app/models/db/follow_user.dart';
@@ -44,8 +48,21 @@ import 'package:window_manager/window_manager.dart';
 import 'package:path/path.dart' as p;
 import 'package:dynamic_color/dynamic_color.dart';
 
-void main() async {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  if (Platform.isWindows) {
+    // 主窗 arguments 为空串；子窗为 RoomWindowArgs JSON
+    final self = await WindowController.fromCurrentEngine();
+    if (self.arguments.isNotEmpty) {
+      await runSubEngine(self);
+      return;
+    }
+    DmwSubWindowPort.attachMain(self);
+  }
+  await runMainEngine();
+}
+
+Future<void> runMainEngine() async {
   await migrateData();
   await initWindow();
   MediaKit.ensureInitialized();
@@ -217,7 +234,11 @@ void initCoreLog() {
 }
 
 class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+  const MyApp({super.key, this.isSubWindow = false});
+
+  /// 房间子引擎：以 home 直挂 RoomShellPage，不经 kShell binding
+  /// （避免重复注册 presence 网关/IndexedController）；其余 App 行为与主窗一致
+  final bool isSubWindow;
 
   @override
   Widget build(BuildContext context) {
@@ -244,8 +265,13 @@ class MyApp extends StatelessWidget {
         darkTheme: AppStyle.darkTheme.copyWith(colorScheme: darkColorScheme),
         themeMode:
             ThemeMode.values[Get.find<AppSettingsController>().themeMode.value],
-        initialRoute:
-            Platform.isWindows ? RoutePath.kShell : RoutePath.kIndex,
+        // 等价于简报参数列表 if/else（Dart 3.13 不支持条件命名参数）：
+        // 子引擎挂 home 直入房间壳且 initialRoute 为 null；主引擎反之，
+        // home/getPages 可共存，路由表保留给子窗深路由
+        home: isSubWindow ? const RoomShellPage(isSubWindow: true) : null,
+        initialRoute: isSubWindow
+            ? null
+            : (Platform.isWindows ? RoutePath.kShell : RoutePath.kIndex),
         getPages: AppPages.routes,
         //国际化
         locale: const Locale("zh", "CN"),
