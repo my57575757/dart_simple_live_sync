@@ -78,6 +78,18 @@ class TabStore extends GetxController {
     if (hasHome) activeTabId.value = null;
   }
 
+  /// 按 siteId_roomId 查找标签（跨窗全局去重用）
+  TabDescriptor? findByKey(String key) =>
+      tabs.firstWhereOrNull((t) => t.request.key == key);
+
+  /// 跨窗 IPC 置前：按 siteId_roomId 激活本窗标签
+  void activateByKey(String key) {
+    final tab = findByKey(key);
+    if (tab != null) {
+      activeTabId.value = tab.tabId;
+    }
+  }
+
   TabDescriptor close(String tabId) {
     final index = tabs.indexWhere((t) => t.tabId == tabId);
     if (index < 0) {

@@ -193,4 +193,18 @@ void main() {
     expect(mixedStore.tabs.single.tabId, t1.tabId);
     expect(mixedStore.activeTabId.value, t1.tabId);
   });
+
+  test('findByKey 与 activateByKey（跨窗置前用）', () {
+    final t1 = store.open(req('douyin', 'r1'));
+    final t2 = store.open(req('douyin', 'r2'));
+    store.activate(t2.tabId);
+    expect(store.activeTabId.value, t2.tabId);
+
+    store.activateByKey('douyin_r1');
+    expect(store.activeTabId.value, t1.tabId);
+    expect(store.findByKey('douyin_r1')?.tabId, t1.tabId);
+    expect(store.findByKey('douyin_missing'), isNull);
+    store.activateByKey('douyin_missing');
+    expect(store.activeTabId.value, t1.tabId, reason: '未命中不改变激活态');
+  });
 }
