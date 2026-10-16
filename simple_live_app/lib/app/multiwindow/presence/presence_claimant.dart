@@ -7,6 +7,11 @@ import 'package:simple_live_core/simple_live_core.dart';
 abstract class DouyinPresenceTab {
   String get tabId;
 
+  /// 控制器是否已销毁（onClose 之后）。网关在 apply* 与启心跳前检查：
+  /// 在途进房 HTTP 期间标签被单关（控制器先销毁、release 在串行链上排队）
+  /// 时不得再 apply，否则会拉起无人回收的弹幕连接。
+  bool get isClosed;
+
   /// 以账号身份读取房间详情（DouyinSite.getRoomDetail(asAccount:true)）。
   /// 被主播限制等失败由实现方抛出异常，网关据此判定为详情失败。
   Future<LiveRoomDetail> fetchAccountDetail();

@@ -141,9 +141,13 @@ class FakeTab implements DouyinPresenceTab {
   final reenteredCalls = <bool>[];
   Map<String, dynamic>? lastStatus;
   String? lastDetailCookie;
+  bool closed = false;
 
   @override
   String get tabId => id;
+
+  @override
+  bool get isClosed => closed;
 
   @override
   Future<LiveRoomDetail> fetchAccountDetail() async {
@@ -422,6 +426,46 @@ void main() {
         expect(gw.holderTabId, isNull);
         expect(gw.hasClaim('B'), isFalse);
         expect(guard.exits, ['acct1@room_222']);
+
+        async.elapse(const Duration(milliseconds: 300));
+        expect(guard.beats, isEmpty, reason: '已关闭标签不得留下心跳');
+        gw.stopHeartbeatForTesting();
+      });
+    });
+
+    test('claim 在途时标签已关闭：跳过 apply/心跳，排队 release 仍发 exit 收口',
+        () {
+      FakeAsync().run((async) {
+        final guard = FakeGuard();
+        final gw = DouyinPresenceGateway(
+          guard,
+          heartbeatInterval: const Duration(milliseconds: 100),
+        );
+        final b = FakeTab('B', '222');
+        final gate = Completer<void>();
+        guard.enterGate = gate;
+
+        PresenceClaimResult? claimResult;
+        var releaseDone = false;
+        gw.claim(b).then((r) => claimResult = r);
+        async.flushMicrotasks(); // claim 停在 enterRoom 闸门
+        b.closed = true; // 模拟单关路径：控制器已 onClose，release 在链上排队
+        final releaseFuture = gw.release('B');
+        releaseFuture.then((_) => releaseDone = true);
+        async.flushMicrotasks();
+
+        gate.complete();
+        async.flushMicrotasks(); // claim 完成（跳过 apply/心跳）→ release 执行 exit
+        async.flushMicrotasks();
+
+        expect(claimResult?.granted, isTrue);
+        expect(releaseDone, isTrue);
+        expect(b.reenteredCalls, isEmpty,
+            reason: '已销毁标签不得 apply（不拉起弹幕连接）');
+        expect(gw.holderTabId, isNull);
+        expect(gw.hasClaim('B'), isFalse);
+        expect(guard.exits, ['acct1@room_222'],
+            reason: '服务端进场由排队的 release 发 exit 收口');
 
         async.elapse(const Duration(milliseconds: 300));
         expect(guard.beats, isEmpty, reason: '已关闭标签不得留下心跳');

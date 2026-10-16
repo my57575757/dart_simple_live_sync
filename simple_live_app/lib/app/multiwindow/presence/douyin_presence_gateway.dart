@@ -100,19 +100,28 @@ class DouyinPresenceGateway {
       _ready.remove(previousHolder.tabId);
     }
     _ready.add(tab.tabId);
-    try {
-      await tab.applyAccountEnter(
-        accountDetail: entered.detail,
-        guardStatus: entered.status,
-        reentered: false,
-      );
-    } catch (e) {
-      // 服务端已进场，以仲裁/心跳为准；弹幕侧重连失败只记日志
-      Log.logPrint('presence: applyAccountEnter 失败: $e');
+    if (tab.isClosed) {
+      // 在途进房期间标签已被单关（控制器销毁、其 release 在串行链上紧随
+      // 其后）：不再 apply / 启心跳，避免拉起无人回收的弹幕连接；服务端
+      // 进场由随后的 release 发 exit 收口并触发幸存者接管。
+      Log.logPrint('presence: 进房在途时标签已关闭，跳过 apply: ${tab.tabId}');
+    } else {
+      try {
+        await tab.applyAccountEnter(
+          accountDetail: entered.detail,
+          guardStatus: entered.status,
+          reentered: false,
+        );
+      } catch (e) {
+        // 服务端已进场，以仲裁/心跳为准；弹幕侧重连失败只记日志
+        Log.logPrint('presence: applyAccountEnter 失败: $e');
+      }
+      _startHeartbeat(tab, entered.accountId);
     }
-    _startHeartbeat(tab, entered.accountId);
 
-    if (previousHolder != null && !selfWasHolder) {
+    if (previousHolder != null &&
+        !selfWasHolder &&
+        !previousHolder.isClosed) {
       // best-effort：不阻塞 claim 返回；播放不中断，游客详情/弹幕重连失败
       // 只记日志（spec 7.5）
       unawaited(
@@ -211,16 +220,20 @@ class DouyinPresenceGateway {
     }
     _accountIds[fallbackId] = entered.accountId;
     _ready.add(fallbackId);
-    try {
-      await fallback.applyAccountEnter(
-        accountDetail: entered.detail,
-        guardStatus: entered.status,
-        reentered: true,
-      );
-    } catch (e) {
-      Log.logPrint('presence: 回退接管 apply 失败: $e');
+    if (fallback.isClosed) {
+      Log.logPrint('presence: 回退接管时幸存者标签已关闭，跳过 apply: $fallbackId');
+    } else {
+      try {
+        await fallback.applyAccountEnter(
+          accountDetail: entered.detail,
+          guardStatus: entered.status,
+          reentered: true,
+        );
+      } catch (e) {
+        Log.logPrint('presence: 回退接管 apply 失败: $e');
+      }
+      _startHeartbeat(fallback, entered.accountId);
     }
-    _startHeartbeat(fallback, entered.accountId);
   }
 
   DouyinPresenceTab? _currentHolderTab() {

@@ -163,6 +163,11 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   LocalPresenceClient? _presenceClient;
   DouyinPresenceTab? _presenceTab;
 
+  /// presence 状态切换世代：每次 apply* 切换递增；续体在每个 await 后发现
+  /// 世代已变（让位降级在途时被回退接管/重进/suspended/关闭/刷新抢先）即放弃
+  /// 落 side effect，避免迟到续体把账号弹幕覆盖回游客。
+  int _presenceGeneration = 0;
+
   DouyinPresenceGateway? _resolveGateway() {
     if (tabId == null) {
       return null;
@@ -319,6 +324,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     }
     //messages.clear();
     superChats.clear();
+    ++_presenceGeneration;
     liveDanmaku.stop();
     _danmakuSuspended = false;
     presence.value = RoomPresence.guest;
@@ -475,6 +481,10 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     presence.value = RoomPresence.entering;
     final result = await client.claim();
     if (result.granted) {
+      // applyAccountEnter 可能在弹幕重连处抛错，而网关已置 holder+ready，
+      // 后续 claim 短路不再 apply：账号态以服务端/心跳为准，此处必须落
+      // account，否则控制器永久停在 entering。
+      presence.value = RoomPresence.account;
       return true;
     }
     presence.value = RoomPresence.guest;
@@ -543,12 +553,15 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     required Map<String, dynamic> guardStatus,
     required bool reentered,
   }) async {
+    final generation = ++_presenceGeneration;
     await liveDanmaku.stop();
+    if (generation != _presenceGeneration) return;
     detail.value = accountDetail;
     online.value = accountDetail.online;
     liveStatus.value = accountDetail.status || accountDetail.isRecord;
     initDanmau();
     await liveDanmaku.start(accountDetail.danmakuData);
+    if (generation != _presenceGeneration) return;
     _applyGuardStatus(guardStatus);
     presence.value = RoomPresence.account;
     addSysMsg(reentered ? "已自动在本标签恢复登录进入" : "已进入直播间");
@@ -556,6 +569,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
 
   /// 被更新打开的标签让位：播放不中断，游客详情重连弹幕（best-effort）
   Future<void> applyYieldToGuest() async {
+    final generation = ++_presenceGeneration;
     guardJoined.value = false;
     guardStarRoom.value = false;
     guardBadgeActive.value = false;
@@ -566,7 +580,9 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
         roomId: "$roomId;$shareUrl",
         asAccount: false,
       );
+      if (generation != _presenceGeneration) return;
       await liveDanmaku.stop();
+      if (generation != _presenceGeneration) return;
       detail.value = guestDetail;
       online.value = guestDetail.online;
       liveStatus.value = guestDetail.status || guestDetail.isRecord;
@@ -581,6 +597,8 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
 
   /// 外部端抢占：不切弹幕、不抢回；置 guest 使后续写动作走 claim 重进
   void applySuspended() {
+    // 不切弹幕、不抢回；使在途的让位/进场续体失效
+    ++_presenceGeneration;
     presence.value = RoomPresence.guest;
   }
 
@@ -2315,6 +2333,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     if (this.site.id == Constant.kDouyin) {
       await _leaveDouyinPresence(unconditional: false);
     }
+    ++_presenceGeneration;
     presence.value = RoomPresence.guest;
 
     rxSite.value = site;
@@ -2402,6 +2421,7 @@ ${error is Error ? (error as Error).stackTrace : ""}''');
 
   @override
   void onClose() {
+    ++_presenceGeneration;
     WidgetsBinding.instance.removeObserver(this);
     _playbackWatchdog.cancel();
     scrollController.removeListener(scrollListener);
@@ -2436,6 +2456,9 @@ class _ControllerPresenceTab implements DouyinPresenceTab {
 
   @override
   String get tabId => _c.tabId!;
+
+  @override
+  bool get isClosed => _c.isClosed;
 
   @override
   Future<LiveRoomDetail> fetchAccountDetail() => _c.fetchAccountDetail();

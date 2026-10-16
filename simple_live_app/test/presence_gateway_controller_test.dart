@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -13,12 +15,17 @@ class FakeDanmaku extends LiveDanmaku {
   int starts = 0;
   int stops = 0;
   final cookies = <String?>[];
+  bool throwOnAccountStartOnce = false;
 
   @override
   Future<void> start(dynamic args) async {
     starts++;
     if (args is DouyinDanmakuArgs) {
       cookies.add(args.cookie);
+      if (throwOnAccountStartOnce && args.cookie == 'sessionid=abc') {
+        throwOnAccountStartOnce = false;
+        throw StateError('account danmaku ws failed');
+      }
     }
   }
 
@@ -38,6 +45,9 @@ class FakeDouyinSite extends DouyinSite {
   final String _webRid;
   final String _roomId;
   final FakeDanmaku danmaku;
+
+  /// 非 null 时，游客详情（asAccount=false）等在此闸门，用于构造慢 HTTP 交错
+  Completer<void>? guestGate;
 
   String get webRidPlaceholder => _webRid;
 
@@ -68,6 +78,10 @@ class FakeDouyinSite extends DouyinSite {
     required String roomId,
     bool asAccount = false,
   }) async {
+    final gate = guestGate;
+    if (gate != null && !asAccount) {
+      await gate.future;
+    }
     return buildDetail(asAccount: asAccount);
   }
 }
@@ -242,6 +256,85 @@ void main() {
 
     // 失败路径无心跳；显式取消以备实现变化，避免残留 periodic Timer
     gw2.stopHeartbeatForTesting();
+  });
+
+  testWidgets('账号弹幕重连抛错：claim 仍 granted 且 presence=account，不卡 entering',
+      (tester) async {
+    final gateway = DouyinPresenceGateway(guard);
+
+    await tester.pumpWidget(
+      GetMaterialApp(
+        navigatorObservers: [FlutterSmartDialog.observer],
+        builder: FlutterSmartDialog.init(),
+        home: const Scaffold(body: SizedBox()),
+      ),
+    );
+    Get.put<DouyinAccountService>(FakeDouyinAccount());
+
+    final a = makeController(tabId: 'tabA', site: siteA, gateway: gateway);
+    siteA.danmaku.throwOnAccountStartOnce = true;
+
+    final ok = await a.enterAsAccount();
+    await tester.pump();
+
+    expect(ok, isTrue);
+    expect(a.presence.value, RoomPresence.account,
+        reason: '服务端已进场且心跳在跑，弹幕侧重连失败不得把控制器留在 entering');
+    // 写动作预检直接通过，不依赖重新 apply
+    expect(await a.ensureAccountPresence(), isTrue);
+
+    gateway.stopHeartbeatForTesting();
+  });
+
+  testWidgets('让位游客取数在途时 holder 回退：过期让位续体不得覆盖恢复的账号弹幕',
+      (tester) async {
+    final gateway = DouyinPresenceGateway(guard);
+
+    await tester.pumpWidget(
+      GetMaterialApp(
+        navigatorObservers: [FlutterSmartDialog.observer],
+        builder: FlutterSmartDialog.init(),
+        home: const Scaffold(body: SizedBox()),
+      ),
+    );
+    Get.put<DouyinAccountService>(FakeDouyinAccount());
+
+    final a = makeController(tabId: 'tabA', site: siteA, gateway: gateway);
+    final b = makeController(tabId: 'tabB', site: siteB, gateway: gateway);
+
+    // A 账号进入
+    var ok = await a.enterAsAccount();
+    await tester.pump();
+    expect(ok, isTrue);
+    expect(siteA.danmaku.cookies.last, 'sessionid=abc');
+
+    // B 进入；A 的让位游客取数卡在闸门（慢 HTTP）
+    final guestGate = Completer<void>();
+    siteA.guestGate = guestGate;
+    ok = await b.enterAsAccount();
+    await tester.pump();
+    expect(ok, isTrue);
+    expect(a.presence.value, RoomPresence.guest,
+        reason: '让位同步头立即落 guest');
+
+    // holder B 关闭 → A 回退接管为账号
+    await gateway.release('tabB');
+    expect(gateway.holderTabId, 'tabA');
+    expect(a.presence.value, RoomPresence.account);
+    expect(siteA.danmaku.cookies.last, 'sessionid=abc');
+    final cookiesAfterReclaim = siteA.danmaku.cookies.length;
+
+    // 过期让位续体此刻才返回：必须整体放弃
+    guestGate.complete();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+
+    expect(a.presence.value, RoomPresence.account);
+    expect(siteA.danmaku.cookies.last, 'sessionid=abc');
+    expect(siteA.danmaku.cookies.length, cookiesAfterReclaim,
+        reason: '过期让位续体不得再停账号弹幕/启动游客弹幕');
+
+    gateway.stopHeartbeatForTesting();
   });
 }
 
