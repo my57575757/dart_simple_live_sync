@@ -2,6 +2,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:simple_live_app/app/multiwindow/shell/room_controller_registry.dart';
 import 'package:simple_live_app/app/multiwindow/shell/tab_open_request.dart';
 import 'package:simple_live_app/app/multiwindow/shell/tab_store.dart';
+import 'package:simple_live_app/modules/live_room/live_room_controller.dart';
 
 TabOpenRequest req(String site, String room, [String share = ""]) =>
     TabOpenRequest(siteId: site, roomId: room, shareUrl: share);
@@ -15,6 +16,9 @@ class FakeRegistry implements RoomControllerRegistry {
   void unregister(String tabId) => registered.remove(tabId);
   @override
   bool isRegistered(String tabId) => registered.containsKey(tabId);
+
+  @override
+  LiveRoomController? controllerForRoomKey(String roomKey) => null;
 }
 
 /// register 同步抛错（模拟未知 site），用于验证 open 的激活态回滚
@@ -26,6 +30,9 @@ class ThrowingRegistry implements RoomControllerRegistry {
   void unregister(String tabId) {}
   @override
   bool isRegistered(String tabId) => false;
+
+  @override
+  LiveRoomController? controllerForRoomKey(String roomKey) => null;
 }
 
 /// 首次 register 成功、其后抛错，模拟打开第二个标签时控制器初始化失败

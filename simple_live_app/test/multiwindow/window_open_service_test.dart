@@ -11,6 +11,7 @@ import 'package:simple_live_app/app/multiwindow/window/sub_window_port.dart';
 import 'package:simple_live_app/app/multiwindow/window/window_args.dart';
 import 'package:simple_live_app/app/multiwindow/window/window_open_service.dart';
 import 'package:simple_live_app/app/multiwindow/window/window_registry.dart';
+import 'package:simple_live_app/modules/live_room/live_room_controller.dart';
 import 'package:simple_live_app/services/db_service.dart';
 import 'package:simple_live_app/services/local_storage_service.dart';
 
@@ -26,6 +27,9 @@ class FakeRegistry implements RoomControllerRegistry {
   void unregister(String tabId) => registered.remove(tabId);
   @override
   bool isRegistered(String tabId) => registered.containsKey(tabId);
+
+  @override
+  LiveRoomController? controllerForRoomKey(String roomKey) => null;
 }
 
 class FakeSubWindowPort implements SubWindowPort {
