@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:get/get.dart';
 import 'package:simple_live_app/app/multiwindow/bootstrap/in_memory_services.dart';
+import 'package:simple_live_app/app/multiwindow/data/data_plane_protocol.dart';
 import 'package:simple_live_app/app/multiwindow/shell/room_controller_registry.dart';
 import 'package:simple_live_app/app/multiwindow/shell/tab_open_request.dart';
 import 'package:simple_live_app/app/multiwindow/shell/tab_store.dart';
@@ -227,8 +228,8 @@ void main() {
         Get.find<LocalStorageService>() as InMemoryLocalStorageService;
 
     // 锚定清单规模：删键会失败提醒评审，加键由下方遍历自动纳入断言
-    expect(WindowSnapshotBuilder.sensitiveKeys.length, 17);
-    for (final key in WindowSnapshotBuilder.sensitiveKeys) {
+    expect(DataPlaneProtocol.sensitiveKeys.length, 17);
+    for (final key in DataPlaneProtocol.sensitiveKeys) {
       storage.settingsBox.put(key, 'secret-$key');
     }
     storage.settingsBox.put('GuardAccountId_douyin', 'acct1');
@@ -244,7 +245,7 @@ void main() {
     final settings =
         WindowSnapshotBuilder.build([req('douyin', 'a')]).snapshot.settings;
 
-    for (final key in WindowSnapshotBuilder.sensitiveKeys) {
+    for (final key in DataPlaneProtocol.sensitiveKeys) {
       expect(settings, isNot(contains(key)),
           reason: '$key 不得跨窗传播');
     }

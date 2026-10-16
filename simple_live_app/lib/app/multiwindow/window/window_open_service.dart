@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:get/get.dart';
+import 'package:simple_live_app/app/multiwindow/data/data_plane_protocol.dart';
 import 'package:simple_live_app/app/multiwindow/shell/tab_open_request.dart';
 import 'package:simple_live_app/app/multiwindow/shell/tab_store.dart';
 import 'package:simple_live_app/services/db_service.dart';
@@ -13,36 +14,6 @@ import 'window_registry.dart';
 
 /// 从主引擎当前 Hive 数据构造子窗只读快照
 class WindowSnapshotBuilder {
-  /// 禁止跨窗传播的键：各平台登录凭据、guard 服务配置/账号、WebDAV 与
-  /// 局域网同步信息。M4-1 子窗固定游客态：若带入抖音登录 cookie，子引擎
-  /// DouyinAccountService.onInit 会判定 logined=true；带入 GuardServerUrl
-  /// 会使 GuardServerService.configured=true——均破坏游客态假设。
-  static const Set<String> sensitiveKeys = {
-    'BilibiliCookie',
-    'DouyinCookie',
-    'DouyinLoginCookie',
-    'GuardServerUrl',
-    'GuardServerToken',
-    'DouyuCookie',
-    'DouyuLoginAccount',
-    'DouyuLoginPassword',
-    'HuyaCookie',
-    'TwitchClientId',
-    'TwitchToken',
-    'TwitchUserLogin',
-    'WebDAVUri',
-    'WebDAVUser',
-    'kWebDAVPassword',
-    'userName',
-    'syncUrl',
-  };
-
-  /// 敏感键前缀（guard 账号 id 按平台存多份）
-  static const String sensitivePrefix = 'GuardAccountId_';
-
-  static bool isSensitiveKey(String key) =>
-      sensitiveKeys.contains(key) || key.startsWith(sensitivePrefix);
-
   /// 当前主引擎数据面全量快照（开窗参数与 dp_ready 对账共用同一来源）
   static WindowSnapshot buildDataSnapshot() {
     final storage = LocalStorageService.instance;
@@ -51,7 +22,7 @@ class WindowSnapshotBuilder {
     final settings = <String, dynamic>{};
     for (final entry in storage.settingsBox.toMap().entries) {
       final key = entry.key.toString();
-      if (isSensitiveKey(key)) continue;
+      if (DataPlaneProtocol.isSensitiveKey(key)) continue;
       final value = entry.value;
       // IPC/JSON 只接受基础类型；LocalStorage 现存值均为 num/String/bool
       if (value == null ||
