@@ -26,6 +26,12 @@ class FollowService extends GetxService with WidgetsBindingObserver {
   StreamSubscription<dynamic>? subscription;
   static FollowService get instance => Get.find<FollowService>();
 
+  /// 子引擎（房间子窗）注入 false：不启动任何定时网络刷新，
+  /// 关注列表只来自启动快照
+  FollowService({this.enableScheduledRefresh = true});
+
+  final bool enableScheduledRefresh;
+
   /// App 是否在前台：后台时不发起任何直播状态获取，回前台才刷新
   @visibleForTesting
   bool appInForeground = true;
@@ -201,6 +207,11 @@ class FollowService extends GetxService with WidgetsBindingObserver {
   bool refreshDue = false;
 
   void initTimer() {
+    if (!enableScheduledRefresh) {
+      updateTimer?.cancel();
+      updateTimer = null;
+      return;
+    }
     if (AppSettingsController.instance.autoUpdateFollowEnable.value) {
       updateTimer?.cancel();
       updateTimer = Timer.periodic(

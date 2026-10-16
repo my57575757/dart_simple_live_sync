@@ -1,6 +1,7 @@
 import 'package:get/get.dart';
 import 'package:hive/hive.dart';
 import 'package:simple_live_app/app/log.dart';
+import 'package:simple_live_app/app/multiwindow/bootstrap/kv_box.dart';
 
 class LocalStorageService extends GetxService {
   static LocalStorageService get instance => Get.find<LocalStorageService>();
@@ -208,16 +209,14 @@ class LocalStorageService extends GetxService {
   /// WebDAV_最后一次备份时间
   static const String kWebDAVLastRecoverTime = "kWebDAVLastRecoverTime";
 
-  late Box settingsBox;
-  late Box<String> shieldBox;
+  late KvBox<dynamic> settingsBox;
+  late KvBox<String> shieldBox;
 
   Future init() async {
-    settingsBox = await Hive.openBox(
-      "LocalStorage",
-    );
-    shieldBox = await Hive.openBox(
-      "DanmuShield",
-    );
+    settingsBox =
+        HiveKvBox<dynamic>(await Hive.openBox("LocalStorage"));
+    shieldBox =
+        HiveKvBox<String>(await Hive.openBox<String>("DanmuShield"));
   }
 
   T getValue<T>(dynamic key, T defaultValue) {

@@ -180,4 +180,17 @@ void main() {
     // 等慢请求全部落地，避免悬空 future
     await Future<void>.delayed(const Duration(milliseconds: 2000));
   });
+
+  test('enableScheduledRefresh=false：initTimer 不创建定时刷新', () {
+    AppSettingsController.instance.autoUpdateFollowEnable.value = true;
+
+    final disabled = FollowService(enableScheduledRefresh: false);
+    disabled.initTimer();
+    expect(disabled.updateTimer, isNull);
+
+    final enabled = FollowService();
+    enabled.initTimer();
+    expect(enabled.updateTimer, isNotNull);
+    enabled.updateTimer?.cancel();
+  });
 }

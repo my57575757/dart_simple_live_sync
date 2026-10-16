@@ -85,9 +85,10 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     if (shareUrl.isNotEmpty) {
       return;
     }
-    var follow = DBService.instance.followBox.get("${site.id}_$roomId");
-    if (follow != null && follow.shareUrl.isNotEmpty) {
-      rxShareUrl.value = follow.shareUrl;
+    final followShareUrl =
+        DBService.instance.getFollowShareUrl("${site.id}_$roomId");
+    if (followShareUrl != null && followShareUrl.isNotEmpty) {
+      rxShareUrl.value = followShareUrl;
     }
   }
 

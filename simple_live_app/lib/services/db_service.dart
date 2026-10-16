@@ -1,5 +1,6 @@
 import 'package:get/get.dart';
 import 'package:hive/hive.dart';
+import 'package:simple_live_app/app/multiwindow/bootstrap/kv_box.dart';
 import 'package:simple_live_app/models/db/follow_user.dart';
 import 'package:simple_live_app/models/db/follow_user_tag.dart';
 import 'package:simple_live_app/models/db/history.dart';
@@ -11,17 +12,18 @@ import '../app/log.dart';
 
 class DBService extends GetxService {
   static DBService get instance => Get.find<DBService>();
-  late Box<History> historyBox;
-  late Box<FollowUser> followBox;
-  late Box<FollowUserTag> tagBox;
+  late KvBox<History> historyBox;
+  late KvBox<FollowUser> followBox;
+  late KvBox<FollowUserTag> tagBox;
   final Uuid uuid = const Uuid();
 
-  late Box<double> volumeBox;
+  late KvBox<double> volumeBox;
   Future init() async {
-    historyBox = await Hive.openBox("History");
-    followBox = await Hive.openBox("FollowUser");
-    volumeBox = await Hive.openBox("Volume");
-    tagBox = await Hive.openBox("FollowUserTag");
+    historyBox = HiveKvBox<History>(await Hive.openBox("History"));
+    followBox = HiveKvBox<FollowUser>(await Hive.openBox("FollowUser"));
+    volumeBox = HiveKvBox<double>(await Hive.openBox("Volume"));
+    tagBox =
+        HiveKvBox<FollowUserTag>(await Hive.openBox("FollowUserTag"));
   }
 
   // follow_user_tag 相关逻辑
@@ -80,6 +82,27 @@ class DBService extends GetxService {
 
   List<FollowUser> getFollowList() {
     return followBox.values.toList();
+  }
+
+  /// 关注记录中保存的分享链接；未关注或为空返回 null。
+  /// 供直播间构造期同步回填 shareUrl（替代对 followBox 的直连）。
+  String? getFollowShareUrl(String id) {
+    return followBox.get(id)?.shareUrl;
+  }
+
+  /// 导出全部房间音量（跨窗快照用）
+  Map<String, double> exportVolumes() {
+    return {
+      for (final key in volumeBox.keys)
+        key.toString(): volumeBox.get(key) ?? 70,
+    };
+  }
+
+  /// 导出关注房间 id → shareUrl（含空串，空串也代表“已关注”）
+  Map<String, String> exportFollowShareUrls() {
+    return {
+      for (final follow in followBox.values) follow.id: follow.shareUrl,
+    };
   }
 
   Future addFollow(FollowUser follow) async {
