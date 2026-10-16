@@ -43,7 +43,11 @@ class SubDataPlaneClient {
       shield.seedReplaceAll(
           <Object, String>{for (final word in snapshot.shield) word: word});
       db.seedDataSnapshot(snapshot);
-      _scheduleReload();
+      // spec §6.4：对账在 open tabs 前完成，reload 必须立即生效（非防抖），
+      // 否则播放器/弹幕等构建期一次性捕获的设置会整房陈旧。
+      // 对账期间已挂起的事件防抖 Timer 合并进这一次（reload 幂等）。
+      _reloadTimer?.cancel();
+      onSettingsChanged();
     } catch (e) {
       // 主窗不可达时沿用启动快照（主窗关闭=整个应用退出，此路径实际不可达）
       Log.d('dp_ready 对账失败，沿用启动快照：$e');

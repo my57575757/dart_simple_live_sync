@@ -46,7 +46,7 @@ void main() {
     Get.reset();
   });
 
-  test('reconcile：dp_ready 快照全量替换并防抖 reload 一次', () {
+  test('reconcile：dp_ready 快照全量替换并立即 reload 一次（非防抖，R-11）', () {
     fakeAsync((async) {
       final port = _FakePort()
         ..readyResult = {
@@ -84,6 +84,8 @@ void main() {
 
       client.reconcile();
       async.flushMicrotasks();
+      // R-11：reload 必须在 elapse 之前已同步发生（区分立即与防抖）
+      expect(reloads, 1, reason: '对账 reload 立即执行，非 100ms 防抖');
       async.elapse(const Duration(milliseconds: 120));
 
       expect(settings.get('DanmuSize'), 22.0);
