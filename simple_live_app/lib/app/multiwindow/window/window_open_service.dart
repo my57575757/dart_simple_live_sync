@@ -81,6 +81,7 @@ class WindowOpenService extends GetxService {
 
   /// 对账发现子窗进程消失（无临终消息）时推送被摘除 windowId 集。
   /// MainPresenceService 订阅后批量释放该窗名下远端 presence 标签。
+  /// 广播流不补发历史，订阅必须先于对账事件建立（MainPresenceService 在 onInit 订阅，早于任何开窗）。
   Stream<Set<String>> get onChildWindowsClosed =>
       _childWindowsClosed.stream;
 
