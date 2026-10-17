@@ -101,6 +101,20 @@ class DouyinAccountService extends GetxService {
     });
   }
 
+  /// 子窗口借用主窗口登录身份（M4-3 presence IPC）。
+  ///
+  /// 纯内存单点：只写 loginCookie 字段与 DouyinSite.loginCookie，不写 KV、
+  /// 不翻转 logined/loginName/hasCookie、不触发 guard 账号注册。cookie 仅
+  /// 在 pr_apply_enter 载荷里下行一次；yield/suspended/子窗关闭三个失效
+  /// 点立即传 null 清除，进程退出即消失。必须绕过 setSite()——那里受
+  /// logined 门控会把借用 cookie 立刻清空。
+  void setBorrowedLoginCookie(String? cookie) {
+    loginCookie = cookie ?? '';
+    final site =
+        Sites.allSites[Constant.kDouyin]!.liveSite as DouyinSite;
+    site.loginCookie = loginCookie;
+  }
+
   void logout() async {
     final accountId = LocalStorageService.instance.getValue(
       "${LocalStorageService.kGuardAccountIdPrefix}douyin",

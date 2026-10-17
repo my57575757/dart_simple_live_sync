@@ -74,4 +74,37 @@ void main() {
       expect(site.loginCookie, '');
     });
   });
+
+  group('setBorrowedLoginCookie 借用态（子窗）', () {
+    final site = Sites.allSites['douyin']!.liveSite as DouyinSite;
+    late DouyinAccountService service;
+
+    setUp(() {
+      service = DouyinAccountService();
+    });
+
+    tearDown(() {
+      site.cookie = '';
+      site.loginCookie = '';
+    });
+
+    test('借用 cookie 只写内存与 site.loginCookie，不翻转登录态；置 null 即清',
+        () {
+      // 本测试不注册 LocalStorageService / GuardServerService：借用路径
+      // 若误触 KV 写入或 guard 注册，Get.find 会同步抛错使测试失败
+      service.setBorrowedLoginCookie('sessionid=borrowed; ttwid=x');
+
+      expect(service.loginCookie, 'sessionid=borrowed; ttwid=x');
+      expect(site.loginCookie, 'sessionid=borrowed; ttwid=x');
+      expect(service.logined.value, isFalse, reason: '借用不翻转 logined');
+      expect(service.loginName.value, '未登录');
+      expect(service.hasCookie.value, isFalse);
+      expect(service.cookie, '', reason: '设备 ttwid 不受借用影响');
+
+      service.setBorrowedLoginCookie(null);
+      expect(service.loginCookie, '');
+      expect(site.loginCookie, '');
+      expect(service.logined.value, isFalse);
+    });
+  });
 }
