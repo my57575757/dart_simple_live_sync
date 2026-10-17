@@ -244,4 +244,28 @@ void main() {
         reason: '非子窗不绑定 IPC presence 通道');
     expect(port.calls, isEmpty);
   });
+
+  test('子窗刷新/切房 leave 后重建：再发 register 并立即清借用凭据', () async {
+    final port = _FakePort();
+    putCoordinator(port);
+    final c = makeController();
+
+    expect(c.bindSubWindowPresence(), isTrue);
+    // register 为 unawaited best-effort，排空一轮微任务
+    await Future<void>.delayed(Duration.zero);
+
+    final accounts = Get.find<DouyinAccountService>();
+    accounts.setBorrowedLoginCookie('sessionid=zzz');
+    expect(accounts.loginCookie, 'sessionid=zzz');
+
+    await c.debugReRegisterSubWindowAfterLeave();
+
+    final registers =
+        port.calls.where((x) => x.$1 == PresenceProtocol.mRegister).toList();
+    expect(registers, hasLength(2), reason: 'onInit 一次 + 刷新重建一次');
+    final last = PresenceProtocol.decodeRegister(registers.last.$2)!;
+    expect(last.tabId, 't1');
+    expect(last.roomId, '111');
+    expect(accounts.loginCookie, '', reason: '刷新路径立即清借用凭据');
+  });
 }

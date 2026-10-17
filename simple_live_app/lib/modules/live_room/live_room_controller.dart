@@ -242,6 +242,28 @@ class LiveRoomController extends PlayerController
         guardExtra: Map<String, Object?>.from(_guardExtraArgs()),
       );
 
+  /// 子窗刷新/切房 leave 完成后：重建主端死亡对账索引并清借用凭据。
+  /// release 同时摘除索引与仲裁标签，而注册只在 onInit 一次；不补注册
+  /// 则标签存活期内账号态永久不可用（后续 claim 被主端裸拒）。
+  /// 读入参数取控制器当刻身份：resetRoom 换房后即为新房间/新站点。
+  Future<void> _reRegisterSubWindowTabAfterLeave() async {
+    final tabId = this.tabId;
+    if (tabId == null || !Get.isRegistered<IpcPresenceCoordinator>()) {
+      return;
+    }
+    await Get.find<IpcPresenceCoordinator>().refreshRemoteTab(
+      tabId: tabId,
+      siteId: site.id,
+      roomId: roomId,
+      shareUrl: shareUrl,
+    );
+  }
+
+  /// 测试接缝：刷新/切房后的子窗 presence 重建（生产仅 refresh/reset 调用）
+  @visibleForTesting
+  Future<void> debugReRegisterSubWindowAfterLeave() =>
+      _reRegisterSubWindowTabAfterLeave();
+
   @visibleForTesting
   void stopGuardHeartbeatForTesting() => _stopGuardHeartbeat();
 
@@ -377,7 +399,13 @@ class LiveRoomController extends PlayerController
 
   void refreshRoom() {
     if (site.id == Constant.kDouyin) {
-      unawaited(_leaveDouyinPresence(unconditional: false));
+      final leave = _leaveDouyinPresence(unconditional: false);
+      if (_isSubWindowDouyin) {
+        // release 摘除主端索引后必须重注册，否则该标签账号态永久失效
+        unawaited(leave.then((_) => _reRegisterSubWindowTabAfterLeave()));
+      } else {
+        unawaited(leave);
+      }
     }
     //messages.clear();
     superChats.clear();
@@ -2485,7 +2513,8 @@ class LiveRoomController extends PlayerController
     }
 
     // 参数变更前先退房停心跳：抖音账号态真实退房，同时避免心跳 getter 读到新房 id
-    if (this.site.id == Constant.kDouyin) {
+    final wasDouyin = this.site.id == Constant.kDouyin;
+    if (wasDouyin) {
       await _leaveDouyinPresence(unconditional: false);
     }
     ++_presenceGeneration;
@@ -2494,6 +2523,11 @@ class LiveRoomController extends PlayerController
     rxSite.value = site;
     rxRoomId.value = roomId;
     rxShareUrl.value = shareUrl;
+    // 子窗跨房/跨站切房：leave 的 release 摘除索引后按新身份重建
+    // （douyin→非抖音主端仅完成凭据清理；非抖音→douyin 无 leave 也须补建索引）
+    if ((_isSubWindow && wasDouyin) || _isSubWindowDouyin) {
+      await _reRegisterSubWindowTabAfterLeave();
+    }
     // 清除全部消息
     liveDanmaku.stop();
     messages.clear();

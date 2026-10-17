@@ -448,4 +448,34 @@ void main() {
     expect(accounts.loginCookie, '');
     expect(site.loginCookie, '');
   });
+
+  test('refreshRemoteTab：先清借用凭据再发 register；register 抛错清理仍生效',
+      () async {
+    final c = coord(<String, PresenceApplyTarget>{});
+
+    accounts.setBorrowedLoginCookie('sessionid=zzz');
+    expect(accounts.loginCookie, 'sessionid=zzz');
+
+    await c.refreshRemoteTab(
+        tabId: 't1', siteId: 'douyin', roomId: '1', shareUrl: '');
+    expect(accounts.loginCookie, '', reason: '刷新路径立即清借用凭据');
+    expect(site.loginCookie, '', reason: 'DouyinSite 借用值同步清空');
+    expect(port.calls.last.$1, PresenceProtocol.mRegister,
+        reason: '清理之后发出 pr_register');
+    final reg = PresenceProtocol.decodeRegister(port.calls.last.$2)!;
+    expect(reg.tabId, 't1');
+    expect(reg.roomId, '1');
+
+    // register 失败：best-effort 不外逸；先清后发保证清理不受影响
+    port.throwing.add(PresenceProtocol.mRegister);
+    accounts.setBorrowedLoginCookie('sessionid=zzz');
+    await expectLater(
+      c.refreshRemoteTab(
+          tabId: 't1', siteId: 'douyin', roomId: '1', shareUrl: ''),
+      completes,
+    );
+    expect(accounts.loginCookie, '', reason: '注册失败不影响凭据清理');
+    expect(site.loginCookie, '');
+    port.throwing.clear();
+  });
 }

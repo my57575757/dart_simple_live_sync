@@ -500,4 +500,62 @@ void main() {
       isFalse,
     );
   });
+
+  test('release 摘索引后重 register：同 tabId 刷新后 claim 自愈；不重注则裸 false',
+      () async {
+    await register('w1', 't1');
+    expect(
+      PresenceProtocol.decodeClaimResult(
+        await claim('w1', 't1',
+            roomId: '1', guardRoomId: 'room_1', guardWebRid: '1'),
+      ),
+      (ok: true, reason: null),
+    );
+
+    // 子窗刷新：leave 发 release（摘死亡索引 + 仲裁标签）
+    expect(
+      await svc.handleCall(
+        PresenceProtocol.mRelease,
+        PresenceProtocol.encodeRelease(
+            const PresenceReleaseCall(windowId: 'w1', tabId: 't1')),
+      ),
+      isTrue,
+    );
+
+    // 不重注册直接 claim：裸 false（钉死故障现象，子端据此映射 ipcFailed）
+    expect(
+      await claim('w1', 't1',
+          roomId: '1', guardRoomId: 'room_1', guardWebRid: '1'),
+      isFalse,
+    );
+
+    // 刷新后重发 pr_register（幂等纯索引写）
+    expect(await register('w1', 't1'), isTrue);
+
+    // 同一 tabId 再 claim：granted（刷新自愈）
+    expect(
+      PresenceProtocol.decodeClaimResult(
+        await claim('w1', 't1',
+            roomId: '1', guardRoomId: 'room_1', guardWebRid: '1'),
+      ),
+      (ok: true, reason: null),
+    );
+
+    // 索引重建后 guard_send 恢复 holder 执行（不再 not_holder）
+    final send = PresenceProtocol.decodeSendResult(
+      await svc.handleCall(
+        PresenceProtocol.mGuardSend,
+        PresenceProtocol.encodeGuardSend(
+          const PresenceGuardSendCall(
+            windowId: 'w1',
+            tabId: 't1',
+            kind: PresenceProtocol.kAction,
+            action: 'like',
+          ),
+        ),
+      ),
+    )!;
+    expect(send.success, isTrue);
+    expect(guard.sendActions, isNotEmpty);
+  });
 }

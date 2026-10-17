@@ -68,7 +68,9 @@ class _Account extends DouyinAccountService {
 class _FakeClient implements PresenceClient {
   int claims = 0;
   int danmakuSends = 0;
+  int actionSends = 0;
   bool firstSendNotHolder = true;
+  bool firstActionNotHolder = true;
   @override
   bool isClaimed = true;
   @override
@@ -86,8 +88,14 @@ class _FakeClient implements PresenceClient {
     return const PresenceSendResult(success: true);
   }
   @override
-  Future<PresenceSendResult> sendAction(String action) async =>
-      const PresenceSendResult(success: true);
+  Future<PresenceSendResult> sendAction(String action) async {
+    actionSends++;
+    if (firstActionNotHolder) {
+      firstActionNotHolder = false;
+      return PresenceSendResult.notHolder;
+    }
+    return const PresenceSendResult(success: true);
+  }
   @override
   Future<void> release() async {}
   @override
@@ -129,6 +137,41 @@ void main() {
     // 首次 ensure（进入）claim 一次；not_holder 后强制回 guest 重进再 claim 一次
     expect(client.claims, 2);
     expect(client.danmakuSends, 2, reason: 'not_holder 后只重发一次');
+    expect(c.presence.value, RoomPresence.account);
+  });
+
+  testWidgets('抖音点赞遇 not_holder：强制回 guest → 重新 claim → 重发一次',
+      (tester) async {
+    await tester.pumpWidget(
+      GetMaterialApp(
+        navigatorObservers: [FlutterSmartDialog.observer],
+        builder: FlutterSmartDialog.init(),
+        home: const Scaffold(body: SizedBox()),
+      ),
+    );
+    Get.put<GuardServerService>(_Guard());
+    Get.put<DouyinAccountService>(_Account());
+
+    final site = _Site();
+    final c = LiveRoomController(
+      pSite: Site(id: Constant.kDouyin, name: '抖音', logo: '', liveSite: site),
+      pRoomId: '111',
+      pShareUrl: 'https://live.douyin.com/111',
+      tabId: 'tabA',
+    );
+    c.detail.value = site.guestDetail();
+    final client = _FakeClient();
+    c.debugBindPresenceClient(client);
+
+    await c.like();
+    await tester.pump();
+    for (var i = 0; i < 6; i++) {
+      await tester.pump(const Duration(milliseconds: 300));
+    }
+
+    // 首次 ensure（进入）claim 一次；not_holder 后强制回 guest 重进再 claim 一次
+    expect(client.claims, 2);
+    expect(client.actionSends, 2, reason: 'not_holder 后只重发一次');
     expect(c.presence.value, RoomPresence.account);
   });
 }

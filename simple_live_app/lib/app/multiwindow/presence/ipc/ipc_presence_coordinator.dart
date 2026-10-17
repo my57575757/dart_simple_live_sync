@@ -78,6 +78,28 @@ class IpcPresenceCoordinator extends GetxService
     }
   }
 
+  /// 子窗标签刷新/切房 leave 完成后的身份复位：pr_release 已把主端死亡
+  /// 对账索引与仲裁标签一并摘除，而 register 只在控制器 onInit 发生一次，
+  /// 不补登记则该 tabId 后续 claim 必被裸拒（子端误报主窗无响应）。
+  /// 同时立即清空借用登录凭据（刷新路径不经 yield/suspended 失效点），
+  /// 重新 claim 成功时 apply_enter 会再下发当刻新值。register 为幂等
+  /// 纯索引写入：非抖音站点主端拒绝注册，此处仅完成清理；主窗不可达
+  /// 时 best-effort 不抛错。
+  Future<void> refreshRemoteTab({
+    required String tabId,
+    required String siteId,
+    required String roomId,
+    required String shareUrl,
+  }) async {
+    _accounts.setBorrowedLoginCookie(null);
+    await registerRemoteTab(
+      tabId: tabId,
+      siteId: siteId,
+      roomId: roomId,
+      shareUrl: shareUrl,
+    );
+  }
+
   /// 控制器持有的 per-tab presence 客户端；guard 参数每次 claim 当刻
   /// 经 [args] 读取（游客详情刷新后 roomId/webRid 可能变化）。
   PresenceClient clientForTab({
