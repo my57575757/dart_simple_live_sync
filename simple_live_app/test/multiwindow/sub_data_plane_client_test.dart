@@ -350,4 +350,34 @@ void main() {
         value: 'junk'));
     expect(db.exportVolumes(), {'douyin_9': 9.0});
   });
+
+  test('dispose 取消待触发 reload；dispose 后再收事件不抛', () {
+    fakeAsync((async) {
+      final port = _FakePort();
+      var reloads = 0;
+      final client = SubDataPlaneClient(
+        port: port,
+        settings:
+            RemoteKvBox<dynamic>(DataPlaneProtocol.boxSettings, port),
+        shield: RemoteKvBox<String>(DataPlaneProtocol.boxShield, port),
+        db: InMemoryDBService(),
+        registry: _FakeRegistry(),
+        onSettingsChanged: () => reloads++,
+      );
+
+      client.handleChanged(DataPlaneProtocol.changed(
+          kind: DataPlaneProtocol.kindKv, key: 'DanmuSize', value: 18.0));
+      client.dispose();
+      async.elapse(const Duration(milliseconds: 120));
+      expect(reloads, 0, reason: '防抖 Timer 已取消');
+
+      expect(
+          () => client.handleChanged(DataPlaneProtocol.changed(
+              kind: DataPlaneProtocol.kindKv,
+              key: 'DanmuSize',
+              value: 19.0)),
+          returnsNormally);
+      client.dispose(); // 收尾：取消新挂 Timer，避免 fakeAsync 挂起计时器
+    });
+  });
 }

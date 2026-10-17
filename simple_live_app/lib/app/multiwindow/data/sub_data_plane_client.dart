@@ -69,6 +69,13 @@ class SubDataPlaneClient {
     }
   }
 
+  /// 取消待触发的防抖 reload。子引擎为进程级生命周期，本期生产无调用点；
+  /// 供未来引擎/窗口级销毁出现时直接可用。
+  void dispose() {
+    _reloadTimer?.cancel();
+    _reloadTimer = null;
+  }
+
   void _applySeed(SeedableKvBox<dynamic> box, ChangeEvent e) {
     if (e.clear) {
       unawaited(box.seedClear());
