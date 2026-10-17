@@ -528,7 +528,11 @@ class DouyinPresenceGateway extends GetxService {
           // 不再让 Timer 空转（spec §6.3，替代 M3 只记日志的旧行为）。
           try {
             final newId = await _guard.reregister(Constant.kDouyin);
-            if (newId != null && arbiter.holder == tab.tabId) {
+            if (arbiter.holder != tab.tabId) {
+              // 在途期间已让位：新 holder 自带心跳，旧拍直接放弃
+              return;
+            }
+            if (newId != null) {
               _accountIds[tab.tabId] = newId;
               _startHeartbeat(tab, newId);
             } else {
@@ -536,7 +540,9 @@ class DouyinPresenceGateway extends GetxService {
             }
           } catch (e2) {
             Log.logPrint('弹幕服务心跳重注册失败: $e2');
-            await _suspend(tab);
+            if (arbiter.holder == tab.tabId) {
+              await _suspend(tab);
+            }
           }
           return;
         }

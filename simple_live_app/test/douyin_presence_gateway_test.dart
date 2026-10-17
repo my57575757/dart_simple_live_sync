@@ -33,6 +33,9 @@ class FakeGuard extends GuardServerService {
   /// 非 null 时 heartbeat 进入即等待（在 beats.add 之前），造 RTT>间隔
   Completer<void>? heartbeatEnterGate;
 
+  /// 非 null 时 reregister 进入即等待，造重注册在途期间 holder 切换
+  Completer<String?>? reregisterEnterGate;
+
   bool reregisterReturnNull = false;
   bool enterAlways500 = false;
 
@@ -56,6 +59,10 @@ class FakeGuard extends GuardServerService {
   @override
   Future<String?> reregister(String platform) async {
     reregisters.add(platform);
+    final gate = reregisterEnterGate;
+    if (gate != null) {
+      await gate.future;
+    }
     if (reregisterReturnNull) return null;
     return 'acct2';
   }
@@ -666,6 +673,53 @@ void main() {
       });
     });
 
+    test('心跳 404 reregister 在途换 holder：旧拍放弃，新 holder 心跳不受影响',
+        () {
+      FakeAsync().run((async) {
+        final guard = FakeGuard()
+          ..heartbeatThrowOnce = DioException(
+            requestOptions: RequestOptions(path: '/api/room/heartbeat'),
+            response: Response<dynamic>(
+              requestOptions: RequestOptions(path: '/api/room/heartbeat'),
+              statusCode: 404,
+            ),
+          )
+          ..reregisterReturnNull = true;
+        final gw = DouyinPresenceGateway(
+          guard,
+          heartbeatInterval: const Duration(milliseconds: 100),
+        );
+        final a = FakeTab('A', '111');
+        final b = FakeTab('B', '222');
+        final gate = Completer<String?>();
+        guard.reregisterEnterGate = gate;
+
+        gw.claim(a);
+        async.flushMicrotasks();
+        async.elapse(const Duration(milliseconds: 150)); // A 首拍 404 挂在 reregister
+        async.flushMicrotasks();
+        expect(guard.reregisters, [Constant.kDouyin]);
+
+        gw.claim(b); // reregister 在途时经真实网关抢占
+        async.flushMicrotasks();
+        async.flushMicrotasks(); // B 进场成功并挂自己的心跳
+        expect(gw.holderTabId, 'B');
+
+        gate.complete(null); // 旧拍 reregister 完成（返回 null）
+        async.flushMicrotasks();
+        expect(a.suspended, 0, reason: '旧 holder 已让位，不得再 suspend A');
+
+        final beatsAfterGate = guard.beats.length;
+        async.elapse(const Duration(milliseconds: 100));
+        expect(guard.beats.length, greaterThan(beatsAfterGate),
+            reason: 'B 的续租必须继续，heartbeat 记录应增长');
+        expect(guard.beats.last, 'acct1@room_222', reason: '续租打在 B 的房间');
+        expect(async.periodicTimerCount, 1, reason: '仅 B 的一个心跳 Timer');
+        guard.reregisterEnterGate = null;
+        gw.stopHeartbeatForTesting();
+      });
+    });
+
     test('#7 新 holder 进房在途被关：不 yield 旧 holder，由排队 release reenter',
         () {
       FakeAsync().run((async) {
@@ -849,6 +903,8 @@ void main() {
         async.flushMicrotasks();
         expect(gw.holderTabId, isNull);
         expect(guard.exits, isEmpty, reason: 'detach 不发 exit');
+        expect(async.periodicTimerCount, 0,
+            reason: '唯一持有者 detach 后 periodic Timer 必须取消');
 
         final beats = guard.beats.length;
         async.elapse(const Duration(milliseconds: 300));
