@@ -86,14 +86,14 @@
 
 - 改：`lib/app/multiwindow/data/main_data_plane_service.dart`、
   `lib/app/multiwindow/data/sub_data_plane_client.dart`。
-- 测：既有对应测试文件内增量新增约 8 例（D1×2、D2×3 合并参数化、
-  D3+D4 表驱动 1 组、D5×1、D6×1–2）。
+- 测：既有对应测试文件内增量新增 7 例（D1×3、D2×1、
+  D3+D4 表驱动 1 组、D5×1、D6×1）。
 - 不新增生产文件、不改协议、不改 app_pages/bootstrap 注册。
 
 ## 4. 门禁
 
 - `C:/tools/flutter347/flutter/bin/flutter.bat analyze` 零新增告警；
-- 全量 `flutter test` 绿（基线 227，完成后约 235）；
+- 全量 `flutter test` 绿（基线 227，完成后 234）；
 - `flutter build windows --debug` 成功（落盘路径改动，跑一次）；
 - GUI 无新增项：改动均为错误路径，常规设置/关注操作冒烟随 M4-3
   GUI 清单第 1 项回归抽验覆盖。
