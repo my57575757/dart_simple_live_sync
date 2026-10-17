@@ -297,7 +297,7 @@ void main() {
     Get.put<DouyinAccountService>(FakeDouyinAccount());
     final unconfigured = _UnconfiguredGuard();
     final gw2 = DouyinPresenceGateway(unconfigured);
-    addTearDown(gw2.dispose);
+    addTearDown(gw2.stopHeartbeatForTesting);
     final c = makeController(tabId: 'tabC', site: siteA, gateway: gw2);
 
     final ok = await c.enterAsAccount();

@@ -61,6 +61,7 @@ import 'package:simple_live_app/modules/settings/other/other_settings_controller
 import 'package:simple_live_app/modules/settings/other/other_settings_page.dart';
 import 'package:simple_live_app/modules/settings/play_settings_page.dart';
 import 'package:simple_live_app/services/db_service.dart';
+import 'package:simple_live_app/services/douyin_account_service.dart';
 import 'package:simple_live_app/services/guard_server_service.dart';
 import 'package:simple_live_app/services/local_storage_service.dart';
 
@@ -77,7 +78,14 @@ class AppPages {
       binding: BindingsBuilder(() {
         Get.put<RoomControllerRegistry>(GetxRoomControllerRegistry());
         Get.put(IndexedController());
-        Get.put(DouyinPresenceGateway(GuardServerService.instance));
+        Get.put(
+          DouyinPresenceGateway(
+            GuardServerService.instance,
+            isAccountLoggedIn: () => DouyinAccountService
+                .instance.loginCookie
+                .contains('sessionid'),
+          ),
+        );
         Get.put(
           TabStore(
             registry: Get.find<RoomControllerRegistry>(),

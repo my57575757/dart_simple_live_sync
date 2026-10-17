@@ -38,5 +38,5 @@ abstract class DouyinPresenceTab {
 
   /// 同账号在外部端进入房间、心跳 inRoom!=true：停止本标签账号态语义，
   /// 不自动抢回；用户后续写动作经 claim 重新进入。
-  void applySuspended();
+  Future<void> applySuspended();
 }

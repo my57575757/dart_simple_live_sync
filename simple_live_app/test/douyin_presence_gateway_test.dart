@@ -30,6 +30,12 @@ class FakeGuard extends GuardServerService {
   Map<String, dynamic> heartbeatResult = {'inRoom': true};
   int inRoomFalseBeats = 0;
 
+  /// 非 null 时 heartbeat 进入即等待（在 beats.add 之前），造 RTT>间隔
+  Completer<void>? heartbeatEnterGate;
+
+  bool reregisterReturnNull = false;
+  bool enterAlways500 = false;
+
   final sentDanmaku = <String>[];
   final sentActions = <String>[];
   bool sendDanmakuThrow404Once = false;
@@ -50,6 +56,7 @@ class FakeGuard extends GuardServerService {
   @override
   Future<String?> reregister(String platform) async {
     reregisters.add(platform);
+    if (reregisterReturnNull) return null;
     return 'acct2';
   }
 
@@ -77,6 +84,15 @@ class FakeGuard extends GuardServerService {
         ),
       );
     }
+    if (enterAlways500) {
+      throw DioException(
+        requestOptions: RequestOptions(path: '/api/room/enter'),
+        response: Response<dynamic>(
+          requestOptions: RequestOptions(path: '/api/room/enter'),
+          statusCode: 500,
+        ),
+      );
+    }
     enters.add('$accountId@$roomId');
     events.add('enter:$roomId');
     return {'joined': false, 'starGuard': false, 'badgeActive': true};
@@ -93,6 +109,10 @@ class FakeGuard extends GuardServerService {
     if (thrown != null) {
       heartbeatThrowOnce = null;
       throw thrown;
+    }
+    final enterGate = heartbeatEnterGate;
+    if (enterGate != null) {
+      await enterGate.future;
     }
     beats.add('$accountId@$roomId');
     if (inRoomFalseBeats > 0) {
@@ -166,11 +186,13 @@ LiveRoomDetail _detail(String webRid, String cookie) => LiveRoomDetail(
     );
 
 class FakeTab implements DouyinPresenceTab {
-  FakeTab(this.id, this.webRid, {this.cookie = 'sessionid=abc'});
+  FakeTab(this.id, this.webRid, {this.cookie = 'sessionid=abc', String? roomId})
+      : guardRoomIdOverride = roomId;
 
   final String id;
   final String webRid;
   final String cookie;
+  final String? guardRoomIdOverride;
 
   int detailFetches = 0;
   bool detailThrows = false;
@@ -196,7 +218,7 @@ class FakeTab implements DouyinPresenceTab {
   }
 
   @override
-  String get guardRoomId => 'room_$webRid';
+  String get guardRoomId => guardRoomIdOverride ?? 'room_$webRid';
 
   @override
   String get guardWebRid => webRid;
@@ -223,7 +245,7 @@ class FakeTab implements DouyinPresenceTab {
   }
 
   @override
-  void applySuspended() {
+  Future<void> applySuspended() async {
     suspended++;
   }
 }
@@ -299,7 +321,7 @@ void main() {
       final a = FakeTab('A', '111');
       final r = await gw.claim(a);
       expect(r.granted, isFalse);
-      expect(r.reason, PresenceFailureReason.enterFailed);
+      expect(r.reason, PresenceFailureReason.notConfigured);
       expect(gw.holderTabId, isNull);
       gw.stopHeartbeatForTesting();
     });
@@ -323,6 +345,32 @@ void main() {
       final r = await gw.claim(a);
       expect(r.granted, isTrue);
       expect(gw.holderTabId, 'A');
+      gw.stopHeartbeatForTesting();
+    });
+
+    test('未登录：isAccountLoggedIn=false → reason=notLoggedIn，零账号 HTTP',
+        () async {
+      final guard = FakeGuard();
+      final gw = DouyinPresenceGateway(
+        guard,
+        isAccountLoggedIn: () => false,
+      );
+      final a = FakeTab('A', '111');
+      final r = await gw.claim(a);
+      expect(r.granted, isFalse);
+      expect(r.reason, PresenceFailureReason.notLoggedIn);
+      expect(guard.ensureAccounts, isEmpty);
+      expect(guard.enters, isEmpty);
+      expect(gw.holderTabId, isNull);
+    });
+
+    test('enterRoom 持续 500：reason=enterFailed', () async {
+      final guard = FakeGuard()..enterAlways500 = true;
+      final gw = DouyinPresenceGateway(guard);
+      final r = await gw.claim(FakeTab('A', '111'));
+      expect(r.granted, isFalse);
+      expect(r.reason, PresenceFailureReason.enterFailed);
+      expect(guard.enters, isEmpty);
       gw.stopHeartbeatForTesting();
     });
   });
@@ -558,6 +606,98 @@ void main() {
         gw.stopHeartbeatForTesting();
       });
     });
+
+    test('#5 心跳 RTT 超间隔：重叠拍跳过，不并发 heartbeat', () {
+      FakeAsync().run((async) {
+        final guard = FakeGuard();
+        final gw = DouyinPresenceGateway(
+          guard,
+          heartbeatInterval: const Duration(milliseconds: 100),
+        );
+        final a = FakeTab('A', '111');
+        final gate = Completer<void>();
+        guard.heartbeatEnterGate = gate;
+
+        gw.claim(a);
+        async.flushMicrotasks();
+        async.elapse(const Duration(milliseconds: 100)); // 首拍卡在 gate
+        async.elapse(const Duration(milliseconds: 100)); // 重叠拍必须跳过
+        expect(guard.beats, isEmpty, reason: '在途拍未返回，不应有完成的 beat');
+
+        gate.complete();
+        async.flushMicrotasks();
+        expect(guard.beats, ['acct1@room_111']);
+
+        async.elapse(const Duration(milliseconds: 100)); // 下一拍正常
+        expect(guard.beats.length, 2, reason: '无并发，仅两拍');
+        guard.heartbeatEnterGate = null;
+        gw.stopHeartbeatForTesting();
+      });
+    });
+
+    test('心跳 404 且 reregister 失败：转 suspended、停心跳、通知标签', () {
+      FakeAsync().run((async) {
+        final guard = FakeGuard()
+          ..heartbeatThrowOnce = DioException(
+            requestOptions: RequestOptions(path: '/api/room/heartbeat'),
+            response: Response<dynamic>(
+              requestOptions: RequestOptions(path: '/api/room/heartbeat'),
+              statusCode: 404,
+            ),
+          )
+          ..reregisterReturnNull = true;
+        final gw = DouyinPresenceGateway(
+          guard,
+          heartbeatInterval: const Duration(milliseconds: 100),
+        );
+        final a = FakeTab('A', '111');
+        gw.claim(a);
+        async.flushMicrotasks();
+        async.elapse(const Duration(milliseconds: 150));
+        async.flushMicrotasks();
+
+        expect(gw.holderTabId, isNull);
+        expect(a.suspended, 1);
+        expect(guard.reregisters, [Constant.kDouyin]);
+        final beats = guard.beats.length;
+        async.elapse(const Duration(milliseconds: 300));
+        expect(guard.beats.length, beats, reason: 'suspended 后心跳必须停止');
+        gw.stopHeartbeatForTesting();
+      });
+    });
+
+    test('#7 新 holder 进房在途被关：不 yield 旧 holder，由排队 release reenter',
+        () {
+      FakeAsync().run((async) {
+        final guard = FakeGuard();
+        final gw = DouyinPresenceGateway(
+          guard,
+          heartbeatInterval: const Duration(milliseconds: 100),
+        );
+        final a = FakeTab('A', '111');
+        final b = FakeTab('B', '222');
+        gw.claim(a);
+        async.flushMicrotasks();
+
+        final gate = Completer<void>();
+        guard.enterGate = gate;
+        gw.claim(b);
+        async.flushMicrotasks(); // B 停在 enterRoom
+        b.closed = true;
+        gate.complete();
+        async.flushMicrotasks();
+        async.flushMicrotasks();
+        expect(a.yields, 0, reason: '新 holder 已关闭，不得 yield 旧 holder');
+
+        guard.enters.clear();
+        gw.release('B');
+        async.flushMicrotasks();
+        expect(a.reenteredCalls, contains(true),
+            reason: '排队 release 触发 fallback 一次性重新 enter A');
+        expect(a.yields, 0);
+        gw.stopHeartbeatForTesting();
+      });
+    });
   });
 
   group('release / detach', () {
@@ -690,6 +830,40 @@ void main() {
           reason: '自我重进不得对自己让位降级');
       expect(gw.holderTabId, 'A');
       gw.stopHeartbeatForTesting();
+    });
+
+    test('#4 detach 唯一持有者无 fallback：心跳 Timer 取消，无残留拍', () {
+      FakeAsync().run((async) {
+        final guard = FakeGuard();
+        final gw = DouyinPresenceGateway(
+          guard,
+          heartbeatInterval: const Duration(milliseconds: 100),
+        );
+        final a = FakeTab('A', '111');
+        gw.claim(a);
+        async.flushMicrotasks();
+        async.elapse(const Duration(milliseconds: 150));
+        expect(guard.beats.length, 1);
+
+        gw.detach('A'); // 唯一持有者、无 fallback：exits/enters 双 null
+        async.flushMicrotasks();
+        expect(gw.holderTabId, isNull);
+        expect(guard.exits, isEmpty, reason: 'detach 不发 exit');
+
+        final beats = guard.beats.length;
+        async.elapse(const Duration(milliseconds: 300));
+        expect(guard.beats.length, beats, reason: 'Timer 必须已取消，无残留拍');
+        gw.stopHeartbeatForTesting();
+      });
+    });
+
+    test('#6 guardRoomId 为空：release holder 不发 exit', () async {
+      final guard = FakeGuard();
+      final gw = DouyinPresenceGateway(guard);
+      final a = FakeTab('A', '', roomId: '');
+      await gw.claim(a);
+      await gw.release('A');
+      expect(guard.exits, isEmpty, reason: '空 roomId 骨架房不发 exit');
     });
   });
 

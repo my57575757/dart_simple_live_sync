@@ -619,7 +619,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   }
 
   /// 外部端抢占：不切弹幕、不抢回；置 guest 使后续写动作走 claim 重进
-  void applySuspended() {
+  Future<void> applySuspended() async {
     // 不切弹幕、不抢回；使在途的让位/进场续体失效
     ++_presenceGeneration;
     presence.value = RoomPresence.guest;
@@ -2573,5 +2573,5 @@ class _ControllerPresenceTab implements DouyinPresenceTab {
   Future<void> applyYieldToGuest() => _c.applyYieldToGuest();
 
   @override
-  void applySuspended() => _c.applySuspended();
+  Future<void> applySuspended() => _c.applySuspended();
 }

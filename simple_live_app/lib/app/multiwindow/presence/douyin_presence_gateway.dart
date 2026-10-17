@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
+import 'package:get/get.dart';
 import 'package:simple_live_app/app/constant.dart';
 import 'package:simple_live_app/app/log.dart';
 import 'package:simple_live_app/services/guard_server_service.dart';
@@ -20,14 +21,16 @@ import 'presence_client.dart';
 /// 所有变更操作经 [_serialized] 串行：claim 的 HTTP 在途时到达的
 /// release/batchRelease 会排队到进场完成之后执行，避免迟到的成功结果
 /// 把已关闭标签变成孤儿 holder。
-class DouyinPresenceGateway {
+class DouyinPresenceGateway extends GetxService {
   DouyinPresenceGateway(
     this._guard, {
     this.heartbeatInterval = const Duration(seconds: 20),
-  });
+    bool Function()? isAccountLoggedIn,
+  }) : _isAccountLoggedIn = isAccountLoggedIn;
 
   final GuardServerService _guard;
   final Duration heartbeatInterval;
+  final bool Function()? _isAccountLoggedIn;
   final PresenceArbiter arbiter = PresenceArbiter();
 
   final Map<String, DouyinPresenceTab> _tabs = {};
@@ -38,6 +41,9 @@ class DouyinPresenceGateway {
   final Set<String> _ready = <String>{};
 
   Timer? _heartbeatTimer;
+
+  /// 心跳拍在途标志：heartbeat RTT 超过间隔时跳过重叠拍，杜绝并发续租（#5）
+  bool _beatInFlight = false;
 
   /// 变更操作串行链
   Future<void> _chain = Future<void>.value();
@@ -92,9 +98,7 @@ class DouyinPresenceGateway {
         }
       }
       return PresenceClaimResult.failure(
-        reason: result.detailFailed
-            ? PresenceFailureReason.detailFailed
-            : PresenceFailureReason.enterFailed,
+        reason: result.reason ?? PresenceFailureReason.enterFailed,
       );
     }
 
@@ -126,6 +130,7 @@ class DouyinPresenceGateway {
 
     if (previousHolder != null &&
         !selfWasHolder &&
+        !tab.isClosed &&
         !previousHolder.isClosed) {
       // best-effort：不阻塞 claim 返回；播放不中断，游客详情/弹幕重连失败
       // 只记日志（spec 7.5）
@@ -151,16 +156,22 @@ class DouyinPresenceGateway {
   Future<void> _remove(String tabId, {required bool emitExit}) async {
     final tab = _tabs[tabId];
     final accountId = _accountIds[tabId];
+    // 必须在 arbiter 摘栈前快照：detach 唯一持有者且无 fallback 时
+    // transition 的 exits/enters 均为 null，会命中下方早退导致 Timer 残留（#4）
+    final wasHolder = arbiter.holder == tabId;
     final transition =
         emitExit ? arbiter.release(tabId) : arbiter.detach(tabId);
     _tabs.remove(tabId);
     _accountIds.remove(tabId);
     _ready.remove(tabId);
+    if (wasHolder) {
+      _heartbeatTimer?.cancel();
+    }
     if (transition == null) {
       return; // 未知 tab
     }
     if (transition.exits == null && transition.enters == null) {
-      return; // 非持有者：仅出栈，零 HTTP
+      return; // 非持有者仅出栈 / detach 唯一持有者无 fallback：心跳已在上方取消
     }
     _heartbeatTimer?.cancel();
 
@@ -388,6 +399,10 @@ class DouyinPresenceGateway {
   }
 
   Future<void> _exitRoom(DouyinPresenceTab tab, String? accountId) async {
+    // SSR 骨架房抖音 args.roomId 为空：没有可退的服务端房间，不发 exit（#6）
+    if (tab.guardRoomId.isEmpty) {
+      return;
+    }
     try {
       final id = accountId ?? _guard.savedAccountId(Constant.kDouyin);
       if (id == null) {
@@ -404,23 +419,28 @@ class DouyinPresenceGateway {
     }
   }
 
-  /// 账号进场 HTTP 序列：账号详情 → ensureAccount → enterRoom（404 重注册
-  /// 重试一次）。任一步失败 outcome 为 null，detailFailed 区分失败类型。
-  Future<({_EnterOutcome? outcome, bool detailFailed})> _performEnter(
-      DouyinPresenceTab tab) async {
+  /// 账号进场 HTTP 序列：账号详情 → 登录态 → 配置 → ensureAccount →
+  /// enterRoom（404 重注册一次）。失败 outcome 为 null，reason 给细分原因。
+  Future<({_EnterOutcome? outcome, PresenceFailureReason? reason})>
+      _performEnter(DouyinPresenceTab tab) async {
     final LiveRoomDetail detail;
     try {
       detail = await tab.fetchAccountDetail();
     } catch (e) {
-      return (outcome: null, detailFailed: true);
+      return (outcome: null, reason: PresenceFailureReason.detailFailed);
+    }
+    // 登录态门在配置门之前：未登录时不计"未配置"，文案指向主窗登录
+    final loggedIn = _isAccountLoggedIn?.call() ?? true;
+    if (!loggedIn) {
+      return (outcome: null, reason: PresenceFailureReason.notLoggedIn);
     }
     if (!_guard.configured) {
-      return (outcome: null, detailFailed: false);
+      return (outcome: null, reason: PresenceFailureReason.notConfigured);
     }
     try {
       var accountId = await _guard.ensureAccount(Constant.kDouyin);
       if (accountId == null) {
-        return (outcome: null, detailFailed: false);
+        return (outcome: null, reason: PresenceFailureReason.enterFailed);
       }
       Map<String, dynamic> status;
       try {
@@ -437,7 +457,7 @@ class DouyinPresenceGateway {
         // 服务端会话丢失：重新注册后再进一次
         final newId = await _guard.reregister(Constant.kDouyin);
         if (newId == null) {
-          return (outcome: null, detailFailed: false);
+          return (outcome: null, reason: PresenceFailureReason.enterFailed);
         }
         accountId = newId;
         status = await _guard.enterRoom(
@@ -453,22 +473,39 @@ class DouyinPresenceGateway {
           status: status,
           detail: detail,
         ),
-        detailFailed: false,
+        reason: null,
       );
     } catch (e) {
       Log.logPrint('presence: guard 进场失败: $e');
-      return (outcome: null, detailFailed: false);
+      return (outcome: null, reason: PresenceFailureReason.enterFailed);
+    }
+  }
+
+  /// 心跳失去 holder 资格或重注册失败的统一收口：cancel Timer、移出
+  /// _ready、标 suspended、通知标签（best-effort）。inRoom!=true 与
+  /// 404-reregister 失败共用此路径。
+  Future<void> _suspend(DouyinPresenceTab tab) async {
+    _heartbeatTimer?.cancel();
+    _ready.remove(tab.tabId);
+    arbiter.markSuspended(tab.tabId);
+    try {
+      await tab.applySuspended();
+    } catch (e) {
+      Log.logPrint('presence: applySuspended 失败: $e');
     }
   }
 
   void _startHeartbeat(DouyinPresenceTab tab, String accountId) {
     _heartbeatTimer?.cancel();
 
-    Future<void> beat({bool retried = false}) async {
+    Future<void> beat() async {
+      // 上一拍仍在途（RTT > 间隔）：跳过本拍，不并发 heartbeat（#5）
+      if (_beatInFlight) return;
       // 回调延迟期间 holder 可能已切换：非 holder 不再续租
       if (arbiter.holder != tab.tabId) {
         return;
       }
+      _beatInFlight = true;
       try {
         final data = await _guard.heartbeat(
           accountId: accountId,
@@ -480,32 +517,35 @@ class DouyinPresenceGateway {
           return;
         }
         if (data['inRoom'] != true) {
-          // 同账号在外部端进入别的房间：停止心跳、标 suspended，不抢回
-          _heartbeatTimer?.cancel();
-          _ready.remove(tab.tabId);
-          arbiter.markSuspended(tab.tabId);
-          tab.applySuspended();
+          // 同账号在外部端进入别的房间：suspended 收口，不抢回
+          await _suspend(tab);
+          return;
         }
       } on DioException catch (e) {
-        if (!retried && e.response?.statusCode == 404) {
-          // reregister 自身再抛不会被同级 catch 接住，单独包一层
+        if (e.response?.statusCode == 404) {
+          // 服务端会话丢失：reregister 一次。成功且仍为 holder → 同步
+          // accountId 缓存并重挂心跳；失败/已不持有 → suspended 收口，
+          // 不再让 Timer 空转（spec §6.3，替代 M3 只记日志的旧行为）。
           try {
             final newId = await _guard.reregister(Constant.kDouyin);
             if (newId != null && arbiter.holder == tab.tabId) {
-              // 同步 accountId 缓存，否则该 holder 关闭时 exit 会打到过期账号
               _accountIds[tab.tabId] = newId;
               _startHeartbeat(tab, newId);
+            } else {
+              await _suspend(tab);
             }
           } catch (e2) {
             Log.logPrint('弹幕服务心跳重注册失败: $e2');
+            await _suspend(tab);
           }
           return;
         }
         Log.logPrint('弹幕服务心跳失败: ${e.message}');
       } catch (e) {
-        // 响应体畸形、applySuspended 抛错等：只记日志，不让单个 beat 的
-        // 异常成为未处理 async 异常；Timer 仍在，下一拍继续续租。
+        // 响应体畸形等：只记日志，不让单个 beat 成为未处理 async 异常
         Log.logPrint('弹幕服务心跳异常: $e');
+      } finally {
+        _beatInFlight = false;
       }
     }
 
@@ -518,9 +558,10 @@ class DouyinPresenceGateway {
     _heartbeatTimer = null;
   }
 
-  void dispose() {
+  @override
+  void onClose() {
     _heartbeatTimer?.cancel();
-    _heartbeatTimer = null;
+    super.onClose();
   }
 }
 
