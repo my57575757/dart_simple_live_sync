@@ -165,9 +165,11 @@ class IpcPresenceCoordinator extends GetxService
     }
   }
 
+  /// 防御性清理：仅在容器拆卸/测试场景可达。生产子引擎不主动 Get.delete
+  /// 本服务，子窗关闭时借用 cookie 随进程隔离销毁；活跃借用态的立即失效
+  /// 由 yield/suspended 两路径保证，主端死亡则经 batchRelease 对账释放。
   @override
   void onClose() {
-    // 三失效点之三：子窗关闭即清借用 cookie
     _accounts.setBorrowedLoginCookie(null);
     super.onClose();
   }

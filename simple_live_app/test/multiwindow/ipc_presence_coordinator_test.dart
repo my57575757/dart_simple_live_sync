@@ -34,6 +34,12 @@ class _FakeTarget implements PresenceApplyTarget {
   _FakeTarget(this.detail);
 
   final LiveRoomDetail detail;
+  // 注入账号服务以记录控制器方法被调「当刻」的借用 cookie，锁定
+  // 先写后取 / 先清后调的时刻顺序（终态断言发现不了顺序对调）。
+  DouyinAccountService? accounts;
+  String? cookieAtFetch;
+  String? cookieAtYield;
+  String? cookieAtSuspended;
   int enters = 0;
   int yields = 0;
   int suspended = 0;
@@ -47,6 +53,7 @@ class _FakeTarget implements PresenceApplyTarget {
   @override
   Future<LiveRoomDetail> fetchAccountDetail() async {
     detailCalls++;
+    cookieAtFetch = accounts?.loginCookie;
     if (detailThrows) throw StateError('limited');
     return detail;
   }
@@ -65,10 +72,16 @@ class _FakeTarget implements PresenceApplyTarget {
   }
 
   @override
-  Future<void> applyYieldToGuest() async => yields++;
+  Future<void> applyYieldToGuest() async {
+    cookieAtYield = accounts?.loginCookie;
+    yields++;
+  }
 
   @override
-  Future<void> applySuspended() async => suspended++;
+  Future<void> applySuspended() async {
+    cookieAtSuspended = accounts?.loginCookie;
+    suspended++;
+  }
 }
 
 LiveRoomDetail _detail(String webRid) => LiveRoomDetail(
@@ -124,7 +137,7 @@ void main() {
   test('apply_enter：写借用 cookie（logined 不翻转）→ 自取详情 → apply 透传',
       () async {
     final detail = _detail('1');
-    final target = _FakeTarget(detail);
+    final target = _FakeTarget(detail)..accounts = accounts;
     final c = coord({'t1': target});
 
     final result = await c.handleCall(
@@ -148,6 +161,8 @@ void main() {
     expect(site.loginCookie, 'sessionid=zzz');
     expect(accounts.logined.value, isFalse, reason: '借用不翻转 logined');
     expect(target.detailCalls, 1);
+    expect(target.cookieAtFetch, 'sessionid=zzz',
+        reason: 'fetchAccountDetail 被调当刻 cookie 已写入（先写后取）');
     expect(target.enters, 1);
     expect(identical(target.lastDetail, detail), isTrue,
         reason: '传入的是子端自取详情，不是下发对象');
@@ -160,7 +175,7 @@ void main() {
   });
 
   test('yield/suspended：先清 cookie 再调控制器；坏载荷 false', () async {
-    final target = _FakeTarget(_detail('1'));
+    final target = _FakeTarget(_detail('1'))..accounts = accounts;
     final c = coord({'t1': target});
 
     await c.handleCall(
@@ -184,6 +199,8 @@ void main() {
     );
     expect(accounts.loginCookie, '', reason: 'yield 先清 cookie');
     expect(site.loginCookie, '');
+    expect(target.cookieAtYield, '',
+        reason: 'applyYieldToGuest 被调当刻 cookie 已清空（先清后调）');
     expect(target.yields, 1);
     expect(target.suspended, 0);
 
@@ -205,9 +222,17 @@ void main() {
       isNull,
     );
     expect(accounts.loginCookie, '', reason: 'suspended 先清 cookie');
+    expect(target.cookieAtSuspended, '',
+        reason: 'applySuspended 被调当刻 cookie 已清空（先清后调）');
     expect(target.suspended, 1);
 
     expect(await c.handleCall(PresenceProtocol.mApplyYield, null), isFalse);
+
+    // nit-4：enter 坏载荷返 false；未知 method 默认 null
+    expect(await c.handleCall(PresenceProtocol.mApplyEnter, null), isFalse,
+        reason: 'enter 坏载荷返 false');
+    expect(await c.handleCall('pr_xxx', null), isNull,
+        reason: '未知 method 默认 null');
   });
 
   test('target 已销毁（查无控制器）：静默返回，不写 cookie、不抛', () async {
