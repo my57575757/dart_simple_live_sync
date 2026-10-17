@@ -944,4 +944,58 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
 
 ## 实施记录
 
-（执行结束后回填）
+回填人：Task 6 执行者；日期 2026-10-17；回填前 HEAD = 2892c49。
+
+### 任务与提交（6 个，含控制器文档勘误）
+
+| # | Commit | 一句话内容 |
+| --- | --- | --- |
+| Task 1 | `e645eb7` | fix：主端 `_scheduleReload` 与子端新增 `_safeReload`，外部 reload 回调异常 try/catch 隔离、落 `Log.d` 不上抛（3 新例，含 reconcile 回归锚点） |
+| Task 2 | `5a16976` | fix：主端新增 `_guardedWrite`，六个写方法落盘失败统一回执 `false`，且不扇出、不发 kUpdateFollow（1 新例） |
+| Task 3 | `9c52a8f` | refactor：子端 kindVolume 单三元式改为 clear / 删除·null / num 三显式分支，补表驱动表征用例，零行为变更（1 新例） |
+| Task 4 | `c5f5dbd` | feat：`SubDataPlaneClient.dispose` 取消防抖 Timer，消除 dispose 后回调（1 新例） |
+| Task 5 | `0d362c1` | test：真实 Hive temp-dir 下 dp_kv_set/delete 端到端回归，并修 clear 例 tempDir 夹具卫生（1 新例） |
+| 勘误 | `2892c49` | docs：控制器勘误 D3——畸形 volume 值现状即忽略、非行为修复，同步 spec + plan |
+
+**Task 3 裁决**：RED 实测不可达（旧代码对 `'junk'` 双重落空即 no-op），控制器裁决为语义保持重构——无 RED，表驱动用例（含 `'junk'` 后 9.0 存活锚点）作表征/回归锚点，以 `refactor` 而非 `fix` 提交。
+
+### 门禁 1：`flutter analyze`
+
+`22 issues found. (ran in 9.0s)`，**零新增**（exit 1 为 analyze 有存量 issue 的正常退出码）。分类：
+
+- **warning × 2（均存量）**：`follow_user_controller.dart:15:8` duplicate_import；`db_service.dart:10:8` unused_import。
+- **info × 20（均存量）**：follow_user_page 2、live_room_controller 1（unrelated_type_equality_checks）、player_controller 5（2 curly_braces + 3 deprecated scale/translate）、account_controller 2（implementation_imports/unnecessary_import 同点）、indexed_settings_page 2（onReorder deprecated）、play_settings_page 2（prefer_const）、sync_client_request 6（prefer_interpolation）。
+
+全部命中点均不在本分支改动的 `multiwindow/data/` 两个生产文件内，与基线一致。
+
+### 门禁 2：`flutter test`
+
+`+234: All tests passed!`，EXIT=0。全量 **234 例全绿** = 基线 227 + 本补丁 7 例（T1×3、T2×1、T3×1、T4×1、T5×1）。
+
+用例数交叉核对：`main_data_plane_service_test.dart` 15 例、`sub_data_plane_client_test.dart` 10 例，与各任务报告吻合。
+
+### 门禁 3：`flutter build windows --debug`
+
+成功：`√ Built build\windows\x64\runner\Debug\simple_live_app.exe`，EXIT=0。Flutter 自报构建 25.5s（命令墙钟约 27.8s）。仅有 `flutter_inappwebview_windows` 插件的存量 CMake CMP0175 dev warning，与本补丁无关。
+
+### 门禁 4：`git diff --stat my_dev...HEAD`
+
+```
+ docs/10_ai_workflows/superpowers/plans/2026-10-17-multiwindow-m4-2-dataplane-minors.md        | 947 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ docs/10_ai_workflows/superpowers/specs/2026-10-17-multiwindow-m4-2-dataplane-minors-design.md |  99 +++++++++++
+ simple_live_app/lib/app/multiwindow/data/main_data_plane_service.dart                         |  78 +++++---
+ simple_live_app/lib/app/multiwindow/data/sub_data_plane_client.dart                           |  31 +++-
+ simple_live_app/test/multiwindow/main_data_plane_service_test.dart                            | 202 ++++++++++++++++++++-
+ simple_live_app/test/multiwindow/sub_data_plane_client_test.dart                              | 130 ++++++++++++++
+ 6 files changed, 1452 insertions(+), 35 deletions(-)
+```
+
+恰为 2 生产文件 + 2 测试文件 + 2 docs（spec 与本计划）；无 Android/TV、无协议/注册点/bootstrap 越界路径。
+
+### 遗留项
+
+逐任务评审 park 的 Minor 级建议：Task 1 三条小项、Task 2 两条、Task 5 两条——均为可接受/既有模式，本期不修。Task 3 无行为变更、无遗留。
+
+### 结论
+
+四门禁全绿。未 merge、未 push、未切/删分支；交控制器（人）whole-branch 终审，合入方式与 M4-3 rebase 由用户决定。
