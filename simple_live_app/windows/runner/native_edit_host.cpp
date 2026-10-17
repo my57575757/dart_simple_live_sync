@@ -577,14 +577,13 @@ LRESULT CALLBACK NativeEditHost::OwnerSubclassProc(HWND hwnd, UINT message,
       break;
 
     case WM_NCDESTROY:
-      // 先放行原过程，再拆 subclass 并自释放。MethodChannel 析构不触碰
-      // messenger；owned popup 多半已被系统先销毁，析构 IsWindow 防踩。
+      // 按 Microsoft 子类示例：先 RemoveWindowSubclass（此时 hwnd 仍有效）
+      // 再 delete，最后把本条消息交给 DefSubclassProc。MethodChannel 析构
+      // 不触碰 messenger；owned popup 多半已被系统先销毁，析构 IsWindow 防踩。
       if (self) {
-        const LRESULT r = DefSubclassProc(hwnd, message, wparam, lparam);
         RemoveWindowSubclass(hwnd, OwnerSubclassProc, self->subclass_id_);
         self->subclass_id_ = 0;
         delete self;
-        return r;
       }
       break;
   }
