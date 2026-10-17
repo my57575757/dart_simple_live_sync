@@ -390,4 +390,46 @@ void main() {
       tempDir.deleteSync(recursive: true);
     }
   });
+
+  test('远程写 reload 回调抛异常被吞：不阻断后续防抖调度', () async {
+    storage = LocalStorageService()
+      ..settingsBox = MemoryKvBox<dynamic>()
+      ..shieldBox = MemoryKvBox<String>();
+    Get.put<LocalStorageService>(storage, permanent: true);
+    db = DBService()
+      ..historyBox = MemoryKvBox<History>()
+      ..followBox = MemoryKvBox<FollowUser>()
+      ..tagBox = MemoryKvBox<FollowUserTag>()
+      ..volumeBox = MemoryKvBox<double>();
+    Get.put<DBService>(db, permanent: true);
+    port = _FakePort();
+    registry = WindowRegistry(mainWindowId: 'main')
+      ..registerChild('w1', {'a'});
+    var reloadCalls = 0;
+    svc = MainDataPlaneService(
+      port: port,
+      registry: registry,
+      storage: storage,
+      db: db,
+      onSettingsChanged: () {
+        reloadCalls++;
+        if (reloadCalls == 1) throw StateError('reload boom');
+      },
+    );
+    svc.onInit();
+
+    await call(
+        DataPlaneProtocol.mKvSet,
+        DataPlaneProtocol.kvSet(
+            DataPlaneProtocol.boxSettings, 'DanmuSize', 1));
+    await flushReloadTimer();
+    expect(reloadCalls, 1, reason: '第一次回调抛错已被吞');
+
+    await call(
+        DataPlaneProtocol.mKvSet,
+        DataPlaneProtocol.kvSet(
+            DataPlaneProtocol.boxSettings, 'DanmuOpacity', 2));
+    await flushReloadTimer();
+    expect(reloadCalls, 2, reason: '后续远程写仍能调度 reload');
+  });
 }

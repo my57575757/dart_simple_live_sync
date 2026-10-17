@@ -47,7 +47,7 @@ class SubDataPlaneClient {
       // 否则播放器/弹幕等构建期一次性捕获的设置会整房陈旧。
       // 对账期间已挂起的事件防抖 Timer 合并进这一次（reload 幂等）。
       _reloadTimer?.cancel();
-      onSettingsChanged();
+      _safeReload();
     } catch (e) {
       // 主窗不可达时沿用启动快照（主窗关闭=整个应用退出，此路径实际不可达）
       Log.d('dp_ready 对账失败，沿用启动快照：$e');
@@ -56,7 +56,17 @@ class SubDataPlaneClient {
 
   void _scheduleReload() {
     _reloadTimer?.cancel();
-    _reloadTimer = Timer(_reloadDebounce, onSettingsChanged);
+    _reloadTimer = Timer(_reloadDebounce, _safeReload);
+  }
+
+  /// 外部注入回调（生产为 AppSettingsController.reloadFromStorage）：
+  /// 异常不得穿透 Timer/reconcile 成为未捕获 async 错误
+  void _safeReload() {
+    try {
+      onSettingsChanged();
+    } catch (e) {
+      Log.d('子窗设置 reload 回调异常：$e');
+    }
   }
 
   void _applySeed(SeedableKvBox<dynamic> box, ChangeEvent e) {

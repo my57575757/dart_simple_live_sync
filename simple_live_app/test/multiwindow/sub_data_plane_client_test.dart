@@ -250,4 +250,54 @@ void main() {
       expect(reloads, 1, reason: '防抖 Timer 已取消，无第二次 reload');
     });
   });
+
+  test('handleChanged 防抖 reload 回调抛异常不成为未捕获错误', () {
+    fakeAsync((async) {
+      final port = _FakePort();
+      final client = SubDataPlaneClient(
+        port: port,
+        settings:
+            RemoteKvBox<dynamic>(DataPlaneProtocol.boxSettings, port),
+        shield: RemoteKvBox<String>(DataPlaneProtocol.boxShield, port),
+        db: InMemoryDBService(),
+        registry: _FakeRegistry(),
+        onSettingsChanged: () => throw StateError('reload boom'),
+      );
+
+      client.handleChanged(DataPlaneProtocol.changed(
+          kind: DataPlaneProtocol.kindKv,
+          key: 'DanmuSize',
+          value: 18.0));
+      expect(() => async.elapse(const Duration(milliseconds: 120)),
+          returnsNormally);
+    });
+  });
+
+  test('reconcile：reload 回调抛异常不影响快照播种', () {
+    fakeAsync((async) {
+      final port = _FakePort()
+        ..readyResult = {
+          'settings': {'DanmuSize': 22.0},
+          'shield': <String>[],
+          'volumes': <String, double>{},
+          'followShareUrls': <String, String>{},
+        };
+      final settings =
+          RemoteKvBox<dynamic>(DataPlaneProtocol.boxSettings, port);
+      final client = SubDataPlaneClient(
+        port: port,
+        settings: settings,
+        shield: RemoteKvBox<String>(DataPlaneProtocol.boxShield, port),
+        db: InMemoryDBService(),
+        registry: _FakeRegistry(),
+        onSettingsChanged: () => throw StateError('reload boom'),
+      );
+
+      expect(client.reconcile(), completes);
+      async.flushMicrotasks();
+      expect(settings.get('DanmuSize'), 22.0, reason: '播种已完成');
+      expect(() => async.elapse(const Duration(milliseconds: 120)),
+          returnsNormally);
+    });
+  });
 }

@@ -102,7 +102,14 @@ class MainDataPlaneService extends GetxService {
   void _scheduleReload() {
     _reloadTimer?.cancel();
     _reloadTimer = Timer(_reloadDebounce, () {
-      if (!_closed) onSettingsChanged?.call();
+      if (_closed) return;
+      final callback = onSettingsChanged;
+      if (callback == null) return;
+      try {
+        callback();
+      } catch (e) {
+        Log.d('数据面设置 reload 回调异常：$e');
+      }
     });
   }
 
