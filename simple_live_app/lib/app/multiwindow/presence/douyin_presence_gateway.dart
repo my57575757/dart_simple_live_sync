@@ -42,6 +42,13 @@ class DouyinPresenceGateway extends GetxService
   /// 被外部端抢占 suspended），claim 必须重走完整进场序列而不能短路。
   final Set<String> _ready = <String>{};
 
+  /// 每次完整进场成功的 guard status：迁移复刻（applyReentered）用。
+  /// release/detach/batch 随 tab 清除；rehome 保留（tabId 延续）。
+  final Map<String, Map<String, Object?>> _lastEnterStatus = {};
+
+  /// rehome 后尚未在新端口复刻成功的 tab：claim 短路分支补放一次。
+  final Set<String> _pendingApplyReplay = <String>{};
+
   Timer? _heartbeatTimer;
 
   /// 心跳拍在途标志：heartbeat RTT 超过间隔时跳过重叠拍，杜绝并发续租（#5）
@@ -77,6 +84,10 @@ class DouyinPresenceGateway extends GetxService
   Future<PresenceClaimResult> _claim(DouyinPresenceTab tab) async {
     bindTab(tab);
     if (arbiter.holder == tab.tabId && _ready.contains(tab.tabId)) {
+      if (_pendingApplyReplay.remove(tab.tabId)) {
+        // best-effort，不阻塞 granted：失败由补放函数自行重新置位
+        unawaited(_replayEnter(tab));
+      }
       return const PresenceClaimResult.granted();
     }
     final previousHolder = _currentHolderTab();
@@ -107,6 +118,8 @@ class DouyinPresenceGateway extends GetxService
     // HTTP 成功后才迁移仲裁状态
     arbiter.claim(tab.tabId);
     _accountIds[tab.tabId] = entered.accountId;
+    _lastEnterStatus[tab.tabId] =
+        Map<String, Object?>.from(entered.status);
     if (previousHolder != null) {
       _ready.remove(previousHolder.tabId);
     }
@@ -155,6 +168,69 @@ class DouyinPresenceGateway extends GetxService
   Future<void> detach(String tabId) =>
       _serialized(() => _remove(tabId, emitExit: false));
 
+  /// tabId 是否在网关有端口（含栈中非 holder、suspended；非抖音/纯游客 false）
+  bool isTrackedTab(String tabId) => _tabs.containsKey(tabId);
+
+  /// 当前端口缓存的 guard 三元组（主→子迁移时复制给新 RemotePresenceTab）
+  ({String roomId, String webRid, Map<String, Object?> extra})?
+      currentGuardArgsFor(String tabId) {
+    final tab = _tabs[tabId];
+    if (tab == null) return null;
+    return (
+      roomId: tab.guardRoomId,
+      webRid: tab.guardWebRid,
+      extra: tab.guardExtraArgs(),
+    );
+  }
+
+  /// 跨窗迁移：仲裁栈/holder/accountId/_ready/服务端会话/心跳节奏全不动，
+  /// 仅把 tabId 的端口换成 [newPort]（null=端口已由 bindTab 换好的主窗路径），
+  /// 重挂心跳 Timer（cancel+periodic，零 HTTP）并在新端口复刻账号态。
+  Future<void> rehome(String tabId, {DouyinPresenceTab? newPort}) =>
+      _serialized(() => _rehome(tabId, newPort));
+
+  Future<void> _rehome(String tabId, DouyinPresenceTab? newPort) async {
+    // 必须先判定在跟踪：未知 tab 整体 no-op，不得借换端口绑定进网关
+    final existing = _tabs[tabId];
+    if (existing == null) return; // 非抖音/纯游客：网关无事可做
+    if (newPort != null) {
+      _tabs[tabId] = newPort;
+    }
+    final tab = _tabs[tabId]!;
+    final holderReady = arbiter.holder == tabId && _ready.contains(tabId);
+    if (!holderReady) return; // guest/suspended：新窗本就是游客态
+    final accountId = _accountIds[tabId];
+    if (accountId != null) {
+      _startHeartbeat(tab, accountId); // 零 HTTP：旧 Timer cancel、新 Timer 起
+    }
+    if (tab.isClosed) return;
+    final status = _lastEnterStatus[tabId];
+    if (status == null) return;
+    _pendingApplyReplay.add(tabId);
+    try {
+      await tab.applyReentered(Map<String, dynamic>.from(status));
+      _pendingApplyReplay.remove(tabId);
+    } catch (e) {
+      // 不回滚：会话/心跳仍健康；下次 claim 短路补放，再失败由用户写动作驱动
+      Log.logPrint('presence: 迁移复刻账号态失败: $e');
+    }
+  }
+
+  Future<void> _replayEnter(DouyinPresenceTab tab) async {
+    final status = _lastEnterStatus[tab.tabId];
+    if (status == null) {
+      _pendingApplyReplay.remove(tab.tabId);
+      return;
+    }
+    try {
+      await tab.applyReentered(Map<String, dynamic>.from(status));
+      _pendingApplyReplay.remove(tab.tabId);
+    } catch (e) {
+      _pendingApplyReplay.add(tab.tabId);
+      Log.logPrint('presence: claim 短路补放复刻失败: $e');
+    }
+  }
+
   Future<void> _remove(String tabId, {required bool emitExit}) async {
     final tab = _tabs[tabId];
     final accountId = _accountIds[tabId];
@@ -166,6 +242,8 @@ class DouyinPresenceGateway extends GetxService
     _tabs.remove(tabId);
     _accountIds.remove(tabId);
     _ready.remove(tabId);
+    _lastEnterStatus.remove(tabId);
+    _pendingApplyReplay.remove(tabId);
     if (wasHolder) {
       _heartbeatTimer?.cancel();
     }
@@ -210,6 +288,8 @@ class DouyinPresenceGateway extends GetxService
       _tabs.remove(id);
       _accountIds.remove(id);
       _ready.remove(id);
+      _lastEnterStatus.remove(id);
+      _pendingApplyReplay.remove(id);
     }
     if (transition.exits == null && transition.enters == null) {
       return; // 原 holder 不在批内：心跳归属不变
@@ -379,6 +459,8 @@ class DouyinPresenceGateway extends GetxService
       return;
     }
     _accountIds[fallbackId] = entered.accountId;
+    _lastEnterStatus[fallbackId] =
+        Map<String, Object?>.from(entered.status);
     _ready.add(fallbackId);
     if (fallback.isClosed) {
       Log.logPrint('presence: 回退接管时幸存者标签已关闭，跳过 apply: $fallbackId');

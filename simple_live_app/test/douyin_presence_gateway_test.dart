@@ -207,6 +207,8 @@ class FakeTab implements DouyinPresenceTab {
   int yields = 0;
   int suspended = 0;
   final reenteredCalls = <bool>[];
+  int reenteredOnlyCalls = 0;
+  final reenteredStatusCalls = <Map<String, dynamic>>[];
   Map<String, dynamic>? lastStatus;
   String? lastDetailCookie;
   bool closed = false;
@@ -244,6 +246,13 @@ class FakeTab implements DouyinPresenceTab {
     final args = accountDetail.danmakuData as DouyinDanmakuArgs;
     lastDetailCookie = args.cookie;
     if (applyThrows) throw StateError('danmaku restart failed');
+  }
+
+  @override
+  Future<void> applyReentered(Map<String, dynamic> guardStatus) async {
+    reenteredOnlyCalls++;
+    reenteredStatusCalls.add(Map<String, dynamic>.from(guardStatus));
+    if (applyThrows) throw StateError('reenter apply failed');
   }
 
   @override
@@ -1091,6 +1100,156 @@ void main() {
       expect(guard.reregisters, [Constant.kDouyin]);
       expect(guard.sentDanmaku, ['hi']);
       gw.stopHeartbeatForTesting();
+    });
+  });
+
+  group('rehome 跨窗换端口', () {
+    test('holder+ready：零 enter/exit、新端口收 applyReentered（=进场 status）、'
+        '心跳经新端口 guard 参数、holder/accountId 不变', () {
+      fakeAsync((async) {
+        final guard = FakeGuard();
+        final gw = DouyinPresenceGateway(guard);
+        addTearDown(gw.stopHeartbeatForTesting);
+        final a = FakeTab('A', '111');
+
+        expect(gw.isTrackedTab('A'), isFalse);
+        PresenceClaimResult? claimResult;
+        gw.claim(a).then((r) => claimResult = r);
+        // fakeAsync 中 Future 链全是微任务：显式推进
+        async.flushMicrotasks();
+        expect(claimResult, isA<PresenceClaimResult>());
+        expect(guard.enters, ['acct1@room_111']);
+        expect(gw.isTrackedTab('A'), isTrue);
+        expect(gw.currentGuardArgsFor('A')?.roomId, 'room_111');
+
+        final b = FakeTab('A', '222'); // 同 tabId、不同 guard 三元组
+        var rehomeDone = false;
+        gw.rehome('A', newPort: b).then((_) => rehomeDone = true);
+        async.flushMicrotasks();
+        expect(rehomeDone, isTrue);
+
+        expect(guard.enters, ['acct1@room_111'], reason: 'rehome 不重走进场');
+        expect(guard.exits, isEmpty, reason: 'rehome 不发 exit');
+        expect(b.reenteredOnlyCalls, 1);
+        expect(b.reenteredStatusCalls.single,
+            {'joined': false, 'starGuard': false, 'badgeActive': true});
+        expect(a.reenteredOnlyCalls, 0, reason: '旧端口不接收复刻');
+
+        async.elapse(const Duration(seconds: 21));
+        expect(guard.beats, ['acct1@room_222'],
+            reason: '心跳 Timer 重挂到新端口，guard 参数取自新端口');
+        expect(gw.holderTabId, 'A');
+        expect(gw.currentGuardArgsFor('A')?.roomId, 'room_222');
+        gw.stopHeartbeatForTesting();
+        expect(async.periodicTimerCount, 0, reason: '用例结束无残留心跳 Timer');
+      });
+    });
+
+    test('栈中非 holder：只换端口，不 apply、不动心跳', () async {
+      final guard = FakeGuard();
+      final gw = DouyinPresenceGateway(guard);
+      addTearDown(gw.stopHeartbeatForTesting);
+      final a = FakeTab('A', '111');
+      final b = FakeTab('B', '222');
+      await gw.claim(a);
+      await gw.claim(b); // b 成为 holder，a 在栈中非 holder
+      final a2 = FakeTab('A', '111');
+
+      await gw.rehome('A', newPort: a2);
+
+      expect(a2.reenteredOnlyCalls, 0);
+      expect(guard.enters.length, 2);
+    });
+
+    test('suspended：换端口但不 apply，suspended 语义保留', () async {
+      final guard = FakeGuard();
+      final gw = DouyinPresenceGateway(guard);
+      addTearDown(gw.stopHeartbeatForTesting);
+      final a = FakeTab('A', '111');
+      await gw.claim(a);
+      guard.inRoomFalseBeats = 1;
+      await Future<void>.delayed(const Duration(seconds: 21));
+      expect(a.suspended, 1);
+
+      final a2 = FakeTab('A', '111');
+      await gw.rehome('A', newPort: a2);
+      expect(a2.reenteredOnlyCalls, 0);
+    });
+
+    test('网关不跟踪的 tab：no-op，不绑定新端口', () async {
+      final guard = FakeGuard();
+      final gw = DouyinPresenceGateway(guard);
+      addTearDown(gw.stopHeartbeatForTesting);
+      final z = FakeTab('Z', '999');
+
+      await gw.rehome('Z', newPort: z);
+
+      expect(gw.isTrackedTab('Z'), isFalse);
+      expect(z.reenteredOnlyCalls, 0);
+    });
+
+    test('newPort=null：不换端口，仅对现有 holder 重挂心跳+复刻', () async {
+      final guard = FakeGuard();
+      final gw = DouyinPresenceGateway(guard);
+      addTearDown(gw.stopHeartbeatForTesting);
+      final a = FakeTab('A', '111');
+      await gw.claim(a);
+      a.reenteredOnlyCalls = 0; // 清掉 claim 路径可能的计数（claim 不调它）
+
+      await gw.rehome('A');
+
+      expect(a.reenteredOnlyCalls, 1, reason: '主窗落地路径复刻一次');
+      expect(guard.enters, ['acct1@room_111']);
+      expect(guard.exits, isEmpty);
+    });
+
+    test('applyReentered 抛错：rehome 不抛、心跳已重挂；下次 claim 短路补放，'
+        '成功后不再补', () async {
+      final guard = FakeGuard();
+      final gw = DouyinPresenceGateway(guard);
+      addTearDown(gw.stopHeartbeatForTesting);
+      final a = FakeTab('A', '111');
+      await gw.claim(a);
+
+      final b = FakeTab('A', '222');
+      b.applyThrows = true;
+      await gw.rehome('A', newPort: b); // 吞异常
+      expect(b.reenteredOnlyCalls, 1);
+
+      // claim 短路 granted + 补放一次（仍失败，保留待补）
+      final r1 = await gw.claim(b);
+      expect(r1.granted, isTrue, reason: 'holder+ready 短路，不重走进场');
+      await Future<void>.delayed(Duration.zero);
+      expect(b.reenteredOnlyCalls, 2);
+
+      // 恢复后再 claim：补放成功
+      b.applyThrows = false;
+      await gw.claim(b);
+      await Future<void>.delayed(Duration.zero);
+      expect(b.reenteredOnlyCalls, 3);
+
+      // 之后 claim 不再补放
+      await gw.claim(b);
+      await Future<void>.delayed(Duration.zero);
+      expect(b.reenteredOnlyCalls, 3);
+      expect(guard.enters, ['acct1@room_111'], reason: '全程无额外进场');
+    });
+
+    test('release 后 _lastEnterStatus 清除：同 tab 再 claim 为完整进场且再 rehome '
+        '能复刻新 status', () async {
+      final guard = FakeGuard();
+      final gw = DouyinPresenceGateway(guard);
+      addTearDown(gw.stopHeartbeatForTesting);
+      final a = FakeTab('A', '111');
+      await gw.claim(a);
+      await gw.release('A');
+
+      final a2 = FakeTab('A', '111');
+      await gw.claim(a2); // release 后 ready 已清：完整进场
+      expect(guard.enters.length, 2);
+      a2.reenteredOnlyCalls = 0;
+      await gw.rehome('A');
+      expect(a2.reenteredOnlyCalls, 1, reason: '新进场 status 已重新缓存');
     });
   });
 }

@@ -670,6 +670,16 @@ class LiveRoomController extends PlayerController
     addSysMsg(reentered ? "已自动在本标签恢复登录进入" : "已进入直播间");
   }
 
+  /// 跨窗迁入主窗：自取账号详情后复用进场复刻流程（网关 rehome 本地路径调用）
+  Future<void> applyReentered(Map<String, dynamic> guardStatus) async {
+    final accountDetail = await fetchAccountDetail();
+    await applyAccountEnter(
+      accountDetail: accountDetail,
+      guardStatus: guardStatus,
+      reentered: true,
+    );
+  }
+
   /// 被更新打开的标签让位：播放不中断，游客详情重连弹幕（best-effort）
   @override
   Future<void> applyYieldToGuest() async {
@@ -2673,6 +2683,10 @@ class _ControllerPresenceTab implements DouyinPresenceTab {
       reentered: reentered,
     );
   }
+
+  @override
+  Future<void> applyReentered(Map<String, dynamic> guardStatus) =>
+      _c.applyReentered(guardStatus);
 
   @override
   Future<void> applyYieldToGuest() => _c.applyYieldToGuest();

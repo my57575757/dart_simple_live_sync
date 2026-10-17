@@ -106,6 +106,22 @@ class RemotePresenceTab implements DouyinPresenceTab {
   }
 
   @override
+  Future<void> applyReentered(Map<String, dynamic> guardStatus) async {
+    await _port.invoke(
+      windowId,
+      PresenceProtocol.mApplyEnter,
+      PresenceProtocol.encodeApplyEnter(
+        PresenceApplyEnterCall(
+          tabId: tabId,
+          cookie: _readCookie(),
+          status: Map<String, Object?>.from(guardStatus),
+          reentered: true,
+        ),
+      ),
+    );
+  }
+
+  @override
   Future<void> applyYieldToGuest() => _port.invoke(
         windowId,
         PresenceProtocol.mApplyYield,

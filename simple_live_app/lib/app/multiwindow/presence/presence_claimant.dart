@@ -32,6 +32,11 @@ abstract class DouyinPresenceTab {
     required bool reentered,
   });
 
+  /// 跨窗迁移落地：以最近一次进场 status 在新引擎复刻账号态（reentered:true）。
+  /// 远端实现下发 pr_apply_enter（cookie 当刻读、不下发 accountDetail）；
+  /// 本地实现自取账号详情后复用 applyAccountEnter。
+  Future<void> applyReentered(Map<String, dynamic> guardStatus);
+
   /// 被更新打开的标签让位：播放不中断，降级游客详情与弹幕（best-effort，
   /// 实现方内部吞异常）并发系统提示。
   Future<void> applyYieldToGuest();
