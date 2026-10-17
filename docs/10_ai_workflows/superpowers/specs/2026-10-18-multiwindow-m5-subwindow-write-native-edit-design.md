@@ -129,27 +129,37 @@ if (call 无 siteId || siteId == douyin) {
 
 ### 5.1 通道
 
-沿用唯一 cookie 通道 `pr_apply_enter`。非抖音场景载荷：`{tabId, cookie, status:{}, reentered:false}`——status 为空 map，语义退化为「凭据下发」。
+沿用唯一凭据通道 `pr_apply_enter`。载荷扩展可选 `creds`（多键凭据）：
 
-主端 register 成功后触发一次（房间进入/refresh 后）；子端 `refreshRemoteTab` 仍先清借用 cookie 再 register。
+```
+{ tabId, cookie: String,   // 单串凭据：抖音/斗鱼/虎牙/B站（可为 ''）
+  creds: Map<String,String>?,  // 多键凭据：twitch {oauthToken,userLogin,clientId}
+  status: Map, reentered: bool }
+```
+
+非抖音场景 `status` 为空 map，语义退化为「凭据下发」。cookie 仍必填 String（可空）；`creds` 可省。**凭据值只出现在此方法**，`cookie` 与 `creds` 同级同等敏感，不进日志/其他通道。
+
+主端 register 成功后触发一次（房间进入/refresh 后）；子端 `refreshRemoteTab` 仍先清借用凭据再 register。
 
 ### 5.2 子端内存单点
 
-新增（或泛化）纯内存写入，**不写 KV、不翻 logined 持久态**：
+新增纯内存写入，**不写 KV、不翻 logined 持久态**：
 
-- `DouyuAccountService.setBorrowedLoginCookie(String?)` — 写 `cookie` 字段 + `DouyuSite.loginCookie`
-- `TwitchAccountService.setBorrowedLoginCookie(String?)` — 同构
+| 站点 | 方法 | 写入 |
+|------|------|------|
+| douyu | `setBorrowedLoginCookie(String?)` | `cookie` 字段 |
+| twitch | `setBorrowedLoginCreds(Map<String,String>?)` | `oauthToken`/`userLogin`/`clientId`（缺省 clientId 回落 `TwitchSite.kWebClientId`） |
 
 失效点与抖音一致三处 + refresh：yield/suspended/onClose/refreshRemoteTab。
 
 ### 5.3 弹幕升级时序
 
-1. 进房 Guest 起步（cookie 空）连接弹幕；
-2. `pr_apply_enter` 到达 → 写借用 cookie；
-3. **重启该站 `liveDanmaku`**（复用 `reloginDouyu` 式重建：`site.liveSite.getDanmaku()` + 新 args 带 cookie）；
-4. 之后 `sendMessage` 读 `danmakuArgs.cookie` 即有登录态。
+1. 进房 Guest 起步（凭据空）连接弹幕；
+2. `pr_apply_enter` 到达 → 写借用凭据；
+3. **重启该站 `liveDanmaku`**（复用 `reloginDouyu` 式重建：`site.liveSite.getDanmaku()` + 新 args 带凭据）；
+4. 之后 `sendMessage` 读 `danmakuArgs` 凭据即有登录态。
 
-未登录用户 cookie 为空串：不重启，保持 Guest，发送报 `not_login`（现有文案）。
+未登录用户凭据为空：不重启，保持 Guest，发送报 `not_login`（现有文案）。
 
 ---
 
@@ -198,11 +208,11 @@ if (!bindSubWindowPresence()) {
 
 | 面 | 约束 |
 |----|------|
-| `pr_apply_enter` | **唯一** cookie 值流；仅内存载荷；空 cookie 亦走此通道（语义一致） |
-| `pr_guard_send` | 新增 siteId/roomId/webRid/extra 均为公开房间参数，**无** cookie/token |
+| `pr_apply_enter` | **唯一**凭据值流（`cookie` 单串 + `creds` 多键）；仅内存载荷；空值亦走此通道 |
+| `pr_guard_send` | 新增 siteId/roomId/webRid/extra 均为公开房间参数，**无**凭据 |
 | `mw_` / `dp_` / 开窗快照 | 一律不改，仍无凭据字段 |
-| 日志 | 不打 cookie；IPC 异常固定文案 |
-| 失效点 | yield / suspended / onClose / refreshRemoteTab 四处清借用 cookie |
+| 日志 | 不打 cookie/oauthToken；IPC 异常固定文案 |
+| 失效点 | yield / suspended / onClose / refreshRemoteTab 四处清借用凭据 |
 
 ---
 

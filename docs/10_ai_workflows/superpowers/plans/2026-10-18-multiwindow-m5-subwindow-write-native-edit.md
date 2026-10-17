@@ -103,49 +103,64 @@
 
 ---
 
-### Task 3: Cookie 借用扩展（douyu/twitch）+ 弹幕升级
+### Task 3: Cookie/凭据借用扩展（douyu/twitch）+ 弹幕升级
 
 **Files:**
 - Modify: `simple_live_app/lib/services/douyu_account_service.dart`
 - Modify: `simple_live_app/lib/services/twitch_account_service.dart`
-- Modify: `simple_live_app/lib/app/multiwindow/presence/ipc/presence_protocol.dart`（pr_apply_enter 空 status 兼容）
+- Modify: `simple_live_app/lib/app/multiwindow/presence/ipc/presence_protocol.dart`（pr_apply_enter 空 status + creds）
 - Modify: `simple_live_app/lib/app/multiwindow/presence/ipc/main_presence_service.dart`（register 非抖音后回推 apply_enter）
-- Modify: `simple_live_app/lib/app/multiwindow/presence/ipc/ipc_presence_coordinator.dart`（非抖音 apply_enter 只写 cookie）
+- Modify: `simple_live_app/lib/app/multiwindow/presence/ipc/ipc_presence_coordinator.dart`（非抖音 apply_enter 只写凭据）
 - Test: `simple_live_app/test/services/douyu_account_service_test.dart`（新建或扩展）、`test/multiwindow/...`
 
 **Interfaces:**
 - Produces:
-  - `void setBorrowedLoginCookie(String? cookie)` on DouyuAccountService / TwitchAccountService（纯内存：写 cookie 字段 + 对应 Site.loginCookie，不写 KV、不翻 logined 持久态）。
-  - 非抖音 `pr_apply_enter`：`{tabId, cookie, status:{}, reentered:false}`，子端只调 setBorrowed + 触发弹幕重启回调。
-- Consumes: 既有 `DouyinAccountService.setBorrowedLoginCookie` 作同构参照。
+  - `DouyuAccountService.setBorrowedLoginCookie(String? cookie)` — 纯内存写 `cookie` 字段，不写 KV、不翻 logined。
+  - `TwitchAccountService.setBorrowedLoginCreds(Map<String,String>? creds)` — 纯内存写 `oauthToken`/`userLogin`/`clientId`（clientId 缺省 `TwitchSite.kWebClientId`），不写 KV。
+  - `PresenceApplyEnterCall` 增可选 `creds: Map<String,String>?`；`status` 允许空 Map/缺失（默认 `{}`）。
+- Consumes: 既有 `DouyinAccountService.setBorrowedLoginCookie` 作同构参照（`douyin_account_service.dart:104-116`）。
 
 **Steps:**
-- [ ] 两个 account service 各加 `setBorrowedLoginCookie`（对照 `douyin_account_service.dart:106-115`）：
+- [ ] 两个 account service 各加纯内存 setter：
   ```dart
-  /// 纯内存单点：只写 cookie 字段与 Site.loginCookie，不写 KV、不翻 logined。
+  /// Douyu：纯内存单点，只写 cookie 字段，不写 KV、不翻 logined。
   void setBorrowedLoginCookie(String? cookie) {
     this.cookie = cookie ?? '';
-    site.loginCookie = this.cookie;
+  }
+
+  /// Twitch：纯内存单点，OAuth 三元组，不写 KV、不翻 configured。
+  void setBorrowedLoginCreds(Map<String, String>? creds) {
+    oauthToken = creds?['oauthToken'] ?? '';
+    userLogin = creds?['userLogin'] ?? '';
+    clientId = (creds?['clientId'] ?? '').isNotEmpty
+        ? creds!['clientId']!
+        : TwitchSite.kWebClientId;
+    // 注意：不调 setSite()——那会把值写进 Site 并可能触发持久化路径；
+    // 若 TwitchDanmakuArgs 构造直接读 service 字段（如 live_room 构 args），
+    // 只写字段即可；若必须写 site.oauthToken 则与 setSite 拆开只赋值。
   }
   ```
-  字段名按各服务现有 cookie 字段名对齐（DouyuAccountService 用 `cookie`；Twitch 同理读代码确认）。
-- [ ] `presence_protocol.dart`：`decodeApplyEnter` 允许 `status` 为空 Map 或缺失（默认 `{}`）；`reentered` 默认 false。保持 cookie 仍必填 String（可为 `''`）。
+  **实现前先读** `TwitchSite`/`TwitchDanmakuArgs` 与 `live_room_controller` 构 args 处，确认 send/start 读的是 service 字段还是 args 快照，按实际读取点写入。
+- [ ] `presence_protocol.dart`：
+  - `PresenceApplyEnterCall` 加 `final Map<String, String>? creds;`
+  - encode 带上非空 `creds`；decode 允许 `status` 空 Map/缺失、`creds` 缺失。
+  - cookie 仍必填 String（可为 `''`）。
 - [ ] `main_presence_service.dart` `_register`：
-  - 删除 `call.siteId != Constant.kDouyin` 拒绝；改为所有站点 `_tabWindow[call.tabId] = call.windowId`。
-  - 仅 `siteId == kDouyin` 走既有 handoff/RemotePresenceTab。
-  - 非抖音：读 `cookieReader`（或按 siteId 读对应账号服务 cookie），构造 `PresenceApplyEnterCall(tabId, cookie, status: {}, reentered: false)` 经 `port.invoke(windowId, pr_apply_enter, ...)` 回推；best-effort 吞错。
-  - cookieReader 现为抖音专用签名，需扩为 `(siteId) => String` 或新增 `cookieReaderFor(String siteId)`。**实现时以最小改动为准**：可直接 `switch (siteId)` 读四个账号服务的 cookie 字段。
-- [ ] `ipc_presence_coordinator.dart` `handleCall` 的 `mApplyEnter`：
-  - 现逻辑只写抖音 borrowed cookie。改为按 `call` 或本地 tab 的 siteId 分发到对应 `setBorrowedLoginCookie`。
-  - **简化**：在子端 register 时记住 `tabId → siteId`（coordinator 已有 `registerRemoteTab` 的 siteId 参数，存 Map）。apply_enter 到达时按 tabId 查 siteId，分发到 Douyin/Douyu/Twitch/Bilibili/Huya 的 setBorrowed（bili/huya 可暂不实现 setter，仅 douyu/twitch 必须）。
-  - 非抖音分支：只 `setBorrowedLoginCookie(call.cookie)`，**不** fetchAccountDetail / applyAccountEnter；随后通知已绑定的控制器「凭据已到，重启弹幕」（回调或控制器轮询——推荐 coordinator 持 `void Function(String tabId, String siteId)? onCredentialsApplied` 接线到 live_room_controller）。
-- [ ] 弹幕升级：`live_room_controller` 在凭据到达回调里（仅 douyu/twitch）：若 `cookie` 非空且 `liveDanmaku` 已连接，调用既有重建路径（同 `reloginDouyu` 结构：stop → `site.liveSite.getDanmaku()` → `start(newArgs with cookie)`）。cookie 空则不重启。
-- [ ] `refreshRemoteTab`：清 cookie 时也清 douyu/twitch borrowed（不止抖音）。
+  - 删除 `call.siteId != Constant.kDouyin` 拒绝；所有站点 `_tabWindow[call.tabId] = call.windowId`。
+  - 仅抖音走既有 handoff/RemotePresenceTab。
+  - 非抖音：按 siteId 读对应账号服务凭据，构造 `PresenceApplyEnterCall`（douyu→cookie 字段；twitch→creds 三键；cookie 可 `''`）经 `port.invoke(windowId, pr_apply_enter, ...)` 回推；best-effort 吞错。
+  - cookieReader 现为抖音专用；扩为 `String Function(String siteId)` 或新增 `cookieReaderFor`；twitch 另需 `credsReaderFor`。**最小改动**：`switch (siteId)` 直读四个账号服务字段。
+- [ ] `ipc_presence_coordinator.dart`：
+  - `registerRemoteTab` 存 `tabId → siteId`。
+  - `handleCall` `mApplyEnter`：按 tabId 查 siteId 分发——抖音→既有 `setBorrowedLoginCookie`；douyu→`setBorrowedLoginCookie`；twitch→`setBorrowedLoginCreds`。**不** fetchAccountDetail / applyAccountEnter。
+  - 非抖音分支随后调用已绑定回调 `onCredentialsApplied?.call(tabId, siteId)`（coordinator 新增接线点，live_room_controller 注册）。
+  - `refreshRemoteTab`：清凭据时三站 setter 传 null/空。
+- [ ] 弹幕升级：`live_room_controller` 在 `onCredentialsApplied` 回调里（仅 douyu/twitch）：凭据非空且 `liveDanmaku` 已连接则 stop → `site.liveSite.getDanmaku()` → `start(newArgs 带凭据)`（同 `reloginDouyu` 结构）；凭据空则不重启。
 - [ ] Tests：
-  - setBorrowed 纯内存（不写 LocalStorage）；null 清空 site.loginCookie。
-  - decodeApplyEnter 空 status 合法；缺 status 合法；cookie 仍必填。
-  - 非抖音 register 回推 apply_enter 一次；cookie 内容与账号服务一致；**载荷无其他字段**。
-  - apply_enter 后 douyu cookie 字段正确；yield/suspended/refresh 清零。
+  - setBorrowed 纯内存（不写 LocalStorage）；null 清空。
+  - decodeApplyEnter 空 status / 缺 status / 带 creds 合法；cookie 仍必填。
+  - 非抖音 register 回推 apply_enter 一次；douyu 走 cookie 字段、twitch 走 creds；**载荷无其他字段**。
+  - apply_enter 后 douyu.cookie / twitch.oauthToken 正确；yield/suspended/refresh 清零。
 - [ ] analyze + 相关 test。
 - [ ] Commit。
 
