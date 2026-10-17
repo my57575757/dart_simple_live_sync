@@ -30,6 +30,9 @@ class FakeRegistry implements RoomControllerRegistry {
 
   @override
   LiveRoomController? controllerForRoomKey(String roomKey) => null;
+
+  @override
+  LiveRoomController? controllerForTabId(String tabId) => null;
 }
 
 class FakeSubWindowPort implements SubWindowPort {

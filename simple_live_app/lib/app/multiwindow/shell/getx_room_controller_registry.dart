@@ -51,4 +51,10 @@ class GetxRoomControllerRegistry implements RoomControllerRegistry {
     }
     return Get.find<LiveRoomController>(tag: tabId);
   }
+
+  @override
+  LiveRoomController? controllerForTabId(String tabId) {
+    if (!Get.isRegistered<LiveRoomController>(tag: tabId)) return null;
+    return Get.find<LiveRoomController>(tag: tabId);
+  }
 }

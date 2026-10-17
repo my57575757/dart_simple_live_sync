@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:media_kit/media_kit.dart';
@@ -12,6 +13,9 @@ import 'package:simple_live_app/app/multiwindow/data/data_plane_protocol.dart';
 import 'package:simple_live_app/app/multiwindow/data/remote_kv_box.dart';
 import 'package:simple_live_app/app/multiwindow/data/sub_data_plane_client.dart';
 import 'package:simple_live_app/app/multiwindow/data/sub_data_plane_port.dart';
+import 'package:simple_live_app/app/multiwindow/presence/ipc/ipc_presence_coordinator.dart';
+import 'package:simple_live_app/app/multiwindow/presence/ipc/presence_protocol.dart';
+import 'package:simple_live_app/app/multiwindow/presence/ipc/sub_presence_port.dart';
 import 'package:simple_live_app/app/multiwindow/shell/getx_room_controller_registry.dart';
 import 'package:simple_live_app/app/multiwindow/shell/room_controller_registry.dart';
 import 'package:simple_live_app/app/multiwindow/shell/tab_open_request.dart';
@@ -28,6 +32,7 @@ import 'package:simple_live_app/services/guard_server_service.dart';
 import 'package:simple_live_app/services/huya_account_service.dart';
 import 'package:simple_live_app/services/local_storage_service.dart';
 import 'package:simple_live_app/services/twitch_account_service.dart';
+import 'package:simple_live_core/simple_live_core.dart';
 
 import 'in_memory_services.dart';
 
@@ -68,6 +73,11 @@ Future<void> runSubEngine(WindowController self) async {
       ? null
       : DmwSubDataPlanePort(args.mainWindowId);
 
+  // 账号面 presence 通道与数据面同生命周期：仅在有主窗 id 时启用
+  final SubPresencePort? presencePort = dataPort == null
+      ? null
+      : DmwSubPresencePort(args.mainWindowId);
+
   RemoteKvBox<dynamic>? settingsKv;
   RemoteKvBox<String>? shieldKv;
   final InMemoryLocalStorageService storage;
@@ -92,6 +102,12 @@ Future<void> runSubEngine(WindowController self) async {
 
   // —— 最小服务集 ——
   Get.put(AppSettingsController(), permanent: true);
+  // 与主引擎 initCoreLog 对齐：子引擎借用主窗 cookie 取账号详情后，dio
+  // 拦截器默认 requestLogType=all 会把含 Cookie 的请求头打控制台；short
+  // 只打 URL/状态码。不接 onPrintLog：子引擎 CoreLog 仅静控制台、不路由文件。
+  CoreLog.enableLog =
+      !kReleaseMode || AppSettingsController.instance.logEnable.value;
+  CoreLog.requestLogType = RequestLogType.short;
   // configured=false：不联网、不 rehydrate、不绑 htmlFetcher
   Get.put(GuardServerService(), permanent: true);
   // 空 cookie：logined=false，纯游客
@@ -110,10 +126,27 @@ Future<void> runSubEngine(WindowController self) async {
   // —— 标签壳（无首页、无 presence 网关）——
   Get.put<RoomControllerRegistry>(GetxRoomControllerRegistry(),
       permanent: true);
+
+  // 子端 presence 协调者：必须先于 TabStore（批量关闭经它整批释放）、
+  // 先于 store.open（控制器 onInit 即发 pr_register，T11）就位
+  final IpcPresenceCoordinator? presenceCoordinator = presencePort == null
+      ? null
+      : Get.put(
+          IpcPresenceCoordinator(
+            windowId: self.windowId,
+            port: presencePort,
+            resolveTarget: (tabId) => Get.find<RoomControllerRegistry>()
+                .controllerForTabId(tabId),
+            accounts: Get.find<DouyinAccountService>(),
+          ),
+          permanent: true,
+        );
+
   final store = Get.put<TabStore>(
     TabStore(
       registry: Get.find<RoomControllerRegistry>(),
       hasHome: false,
+      presenceGateway: presenceCoordinator,
     ),
     permanent: true,
   );
@@ -136,6 +169,12 @@ Future<void> runSubEngine(WindowController self) async {
       case DataPlaneProtocol.mChanged:
         dataClient?.handleChanged(call.arguments);
         return true;
+      case PresenceProtocol.mApplyEnter:
+      case PresenceProtocol.mApplyYield:
+      case PresenceProtocol.mApplySuspended:
+        // coordinator 为 null（无主窗的独立子窗）时 await null → 返回 null
+        return await presenceCoordinator?.handleCall(
+            call.method, call.arguments);
       case 'focus_tab':
         await windowManager.show();
         await windowManager.focus();

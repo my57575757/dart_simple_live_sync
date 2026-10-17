@@ -11,4 +11,7 @@ abstract class RoomControllerRegistry {
 
   /// 按跨窗去重键（siteId_roomId）找本引擎现存房间控制器，无则 null
   LiveRoomController? controllerForRoomKey(String roomKey);
+
+  /// 按 tabId 找本引擎现存房间控制器（子端 presence apply 回调解析用），无则 null
+  LiveRoomController? controllerForTabId(String tabId);
 }

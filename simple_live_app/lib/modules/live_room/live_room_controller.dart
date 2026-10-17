@@ -17,6 +17,7 @@ import 'package:simple_live_app/app/controller/app_settings_controller.dart';
 import 'package:simple_live_app/app/event_bus.dart';
 import 'package:simple_live_app/app/log.dart';
 import 'package:simple_live_app/app/multiwindow/presence/douyin_presence_gateway.dart';
+import 'package:simple_live_app/app/multiwindow/presence/ipc/presence_apply_target.dart';
 import 'package:simple_live_app/app/multiwindow/presence/local_presence_client.dart';
 import 'package:simple_live_app/app/multiwindow/presence/presence_claimant.dart';
 import 'package:simple_live_app/app/multiwindow/presence/presence_client.dart';
@@ -50,7 +51,9 @@ import 'package:simple_live_app/modules//sync/local_sync/local_sync_controller.d
 /// 抖音房间在场状态：游客 / 进入中 / 账号已进入
 enum RoomPresence { guest, entering, account }
 
-class LiveRoomController extends PlayerController with WidgetsBindingObserver {
+class LiveRoomController extends PlayerController
+    with WidgetsBindingObserver
+    implements PresenceApplyTarget {
   final syncController = LocalSyncController("localhost");
 
   final Site pSite;
@@ -563,6 +566,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   }
 
   /// 账号详情（网关端口与旧路径共用）
+  @override
   Future<LiveRoomDetail> fetchAccountDetail() {
     return (site.liveSite as DouyinSite).getRoomDetail(
       roomId: "$roomId;$shareUrl",
@@ -571,6 +575,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   }
 
   /// 账号进场成功后的弹幕/详情/状态切换（旧路径与网关 applyAccountEnter 共用）
+  @override
   Future<void> applyAccountEnter({
     required LiveRoomDetail accountDetail,
     required Map<String, dynamic> guardStatus,
@@ -591,6 +596,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   }
 
   /// 被更新打开的标签让位：播放不中断，游客详情重连弹幕（best-effort）
+  @override
   Future<void> applyYieldToGuest() async {
     final generation = ++_presenceGeneration;
     guardJoined.value = false;
@@ -619,6 +625,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   }
 
   /// 外部端抢占：不切弹幕、不抢回；置 guest 使后续写动作走 claim 重进
+  @override
   Future<void> applySuspended() async {
     // 不切弹幕、不抢回；使在途的让位/进场续体失效
     ++_presenceGeneration;

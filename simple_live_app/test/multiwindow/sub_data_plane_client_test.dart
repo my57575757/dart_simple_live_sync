@@ -34,6 +34,8 @@ class _FakeRegistry implements RoomControllerRegistry {
   @override
   LiveRoomController? controllerForRoomKey(String roomKey) => controller;
   @override
+  LiveRoomController? controllerForTabId(String tabId) => null;
+  @override
   void register(String tabId, TabOpenRequest request) {}
   @override
   void unregister(String tabId) {}

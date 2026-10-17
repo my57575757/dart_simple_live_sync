@@ -22,6 +22,9 @@ class FakeRegistry implements RoomControllerRegistry {
 
   @override
   LiveRoomController? controllerForRoomKey(String roomKey) => null;
+
+  @override
+  LiveRoomController? controllerForTabId(String tabId) => null;
 }
 
 /// register 同步抛错（模拟未知 site），用于验证 open 的激活态回滚
@@ -36,6 +39,9 @@ class ThrowingRegistry implements RoomControllerRegistry {
 
   @override
   LiveRoomController? controllerForRoomKey(String roomKey) => null;
+
+  @override
+  LiveRoomController? controllerForTabId(String tabId) => null;
 }
 
 /// 首次 register 成功、其后抛错，模拟打开第二个标签时控制器初始化失败

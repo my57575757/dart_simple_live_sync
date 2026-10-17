@@ -23,6 +23,8 @@ class _Registry implements RoomControllerRegistry {
   bool isRegistered(String tabId) => false;
   @override
   LiveRoomController? controllerForRoomKey(String roomKey) => null;
+  @override
+  LiveRoomController? controllerForTabId(String tabId) => null;
 }
 
 class _FakeSubWindowPort implements SubWindowPort {
