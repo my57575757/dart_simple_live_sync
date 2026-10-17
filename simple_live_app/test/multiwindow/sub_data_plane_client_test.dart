@@ -300,4 +300,54 @@ void main() {
           returnsNormally);
     });
   });
+
+  test('handleChanged：kindVolume 数值/删除/null 表驱动；clear 与畸形忽略',
+      () {
+    final port = _FakePort();
+    final db = InMemoryDBService();
+    final client = SubDataPlaneClient(
+      port: port,
+      settings:
+          RemoteKvBox<dynamic>(DataPlaneProtocol.boxSettings, port),
+      shield: RemoteKvBox<String>(DataPlaneProtocol.boxShield, port),
+      db: db,
+      registry: _FakeRegistry(),
+      onSettingsChanged: () {},
+    );
+
+    final cases = <(String, Object?, bool, Map<String, double>)>[
+      // key, value, deleted, 期望 exportVolumes
+      ('douyin_1', 33.0, false, {'douyin_1': 33.0}),
+      ('douyin_2', 42, false, {'douyin_1': 33.0, 'douyin_2': 42.0}),
+      ('douyin_1', 1.0, true, {'douyin_2': 42.0}),
+      ('douyin_2', null, false, <String, double>{}),
+    ];
+    for (final (key, value, deleted, expected) in cases) {
+      client.handleChanged(DataPlaneProtocol.changed(
+          kind: DataPlaneProtocol.kindVolume,
+          key: key,
+          value: value,
+          deleted: deleted));
+      expect(db.exportVolumes(), expected,
+          reason: 'key=$key value=$value deleted=$deleted');
+    }
+
+    client.handleChanged(DataPlaneProtocol.changed(
+        kind: DataPlaneProtocol.kindVolume, key: '', clear: true));
+    expect(db.exportVolumes(), isEmpty);
+
+    // 非 null 非 num 畸形值：忽略（不按删除处理），既有值不动
+    // 注：本用例为现状行为锚点（characterization anchor），修复前后均绿，
+    // 非 TDD 红测——现状 seedVolume(null, deleted:false) 双 fallthrough
+    // 本就是 no-op，重构仅将隐式正确改为显式三分支。
+    client.handleChanged(DataPlaneProtocol.changed(
+        kind: DataPlaneProtocol.kindVolume,
+        key: 'douyin_9',
+        value: 9.0));
+    client.handleChanged(DataPlaneProtocol.changed(
+        kind: DataPlaneProtocol.kindVolume,
+        key: 'douyin_9',
+        value: 'junk'));
+    expect(db.exportVolumes(), {'douyin_9': 9.0});
+  });
 }

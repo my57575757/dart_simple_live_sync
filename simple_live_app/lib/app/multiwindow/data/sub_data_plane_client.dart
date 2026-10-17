@@ -99,11 +99,13 @@ class SubDataPlaneClient {
       case DataPlaneProtocol.kindVolume:
         if (e.clear) {
           db.seedVolumesClear();
-        } else {
-          final value = e.value;
-          db.seedVolume(e.key, value is num ? value.toDouble() : null,
-              deleted: e.deleted || value == null);
+        } else if (e.deleted || e.value == null) {
+          db.seedVolume(e.key, null, deleted: true);
+        } else if (e.value is num) {
+          db.seedVolume(e.key, (e.value as num).toDouble());
         }
+        // 非 null 非 num 畸形值忽略（与 shield 非 String 忽略对称；
+        // 输入只来自受信主端，正常不可达）
       case DataPlaneProtocol.kindFollow:
         if (e.deleted) {
           db.seedFollowRemove(e.key);
