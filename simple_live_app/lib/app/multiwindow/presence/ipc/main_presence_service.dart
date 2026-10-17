@@ -34,7 +34,8 @@ class MainPresenceService extends GetxService {
   /// 测试接缝：生产为 null，apply 当刻读 DouyinAccountService.loginCookie
   final String Function()? cookieReader;
 
-  /// tabId → windowId，register/claim 时建，release/batch/死亡时摘
+  /// tabId → windowId 死亡对账索引：pr_register 时建立，pr_release/
+  /// pr_batch_release/子窗死亡对账时摘除；claim 仅读取校验，不写索引。
   final Map<String, String> _tabWindow = {};
 
   /// tabId → 远端标签，首次 claim 时建（与 _tabWindow 分离：register
