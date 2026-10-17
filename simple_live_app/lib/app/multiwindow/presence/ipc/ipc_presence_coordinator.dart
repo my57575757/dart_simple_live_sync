@@ -120,7 +120,7 @@ class IpcPresenceCoordinator extends GetxService
         if (call == null) return false;
         final target = _resolveTarget(call.tabId);
         if (target == null) return null;
-        // 先写借用 cookie，自取详情才会带 sessionid
+        // 先写借用 cookie，自取详情才会携带登录凭据
         _accounts.setBorrowedLoginCookie(call.cookie);
         final LiveRoomDetail detail;
         try {
