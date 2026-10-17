@@ -100,6 +100,7 @@ void main() {
       expect(service.loginName.value, '未登录');
       expect(service.hasCookie.value, isFalse);
       expect(service.cookie, '', reason: '设备 ttwid 不受借用影响');
+      expect(site.cookie, '', reason: '设备 site.cookie 不受借用影响');
 
       service.setBorrowedLoginCookie(null);
       expect(service.loginCookie, '');
