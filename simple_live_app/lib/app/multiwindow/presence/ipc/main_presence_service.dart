@@ -11,6 +11,33 @@ import '../presence_client.dart';
 import 'presence_protocol.dart';
 import 'remote_presence_tab.dart';
 
+class HandoffTimeoutException implements Exception {
+  const HandoffTimeoutException();
+  @override
+  String toString() => 'HandoffTimeoutException';
+}
+
+class HandoffSupersededException implements Exception {
+  const HandoffSupersededException();
+  @override
+  String toString() => 'HandoffSupersededException';
+}
+
+class HandoffSourceClosedException implements Exception {
+  const HandoffSourceClosedException();
+  @override
+  String toString() => 'HandoffSourceClosedException';
+}
+
+class _Handoff {
+  _Handoff(this.destWindowId) : completer = Completer<void>();
+
+  final String destWindowId;
+  final Completer<void> completer;
+  Timer? timer;
+  bool settled = false;
+}
+
 /// 主引擎账号面 presence 服务：解析 pr_ 方法，把远端标签混入唯一网关
 /// 仲裁栈；维护 tabId→windowId 死亡对账索引（register 只建索引，
 /// 不进栈）；订阅子窗死亡流批量释放。dp_/pr_ 互不解析对方方法。
@@ -41,6 +68,9 @@ class MainPresenceService extends GetxService {
   /// tabId → 远端标签，首次 claim 时建（与 _tabWindow 分离：register
   /// 不建标签、不碰仲裁栈）
   final Map<String, RemotePresenceTab> _remoteTabs = {};
+
+  static const Duration handoffTimeout = Duration(seconds: 10);
+  final Map<String, _Handoff> _handoffs = {};
 
   StreamSubscription<Set<String>>? _closedSub;
 
@@ -81,8 +111,51 @@ class MainPresenceService extends GetxService {
   Future<Object?> _register(Object? arguments) async {
     final call = PresenceProtocol.decodeRegister(arguments);
     if (call == null || call.siteId != Constant.kDouyin) return false;
-    // 只建死亡对账索引：不建 RemotePresenceTab、不碰仲裁栈
+    // 索引先于一切（既有改挂语义；迁移在途旧窗迟到消息由归属门天然过滤）
     _tabWindow[call.tabId] = call.windowId;
+
+    final handoff = _handoffs[call.tabId];
+    if (handoff != null) {
+      if (call.windowId != _windowOpenService.registry.mainWindowId) {
+        // 目标必为子窗：无条件换新 RemotePresenceTab。
+        // guard 双来源：子→子复制旧 RemoteTab；主→子问网关当前端口要。
+        final old = _remoteTabs.remove(call.tabId);
+        final guard = old != null
+            ? (
+                roomId: old.guardRoomId,
+                webRid: old.guardWebRid,
+                extra: old.guardExtraArgs(),
+              )
+            : gateway.currentGuardArgsFor(call.tabId);
+        old?.markClosed();
+        final fresh = RemotePresenceTab(
+          tabId: call.tabId,
+          windowId: call.windowId,
+          roomId: call.roomId,
+          shareUrl: call.shareUrl,
+          port: port,
+          accountDetailFetcher: accountDetailFetcher,
+          cookieReader: cookieReader,
+        );
+        if (guard != null) {
+          fresh.updateGuardArgs(
+            guardRoomId: guard.roomId,
+            guardWebRid: guard.webRid,
+            guardExtra: guard.extra,
+          );
+        }
+        _remoteTabs[call.tabId] = fresh;
+        unawaited(
+          gateway.rehome(call.tabId, newPort: fresh).then(
+            (_) => _settleHandoff(call.tabId),
+            onError: (Object e) => _failHandoff(call.tabId, e),
+          ),
+        );
+      } else {
+        // 主窗不发 register，此路不可达；防御性直接结算
+        _settleHandoff(call.tabId);
+      }
+    }
     return true;
   }
 
@@ -178,6 +251,69 @@ class MainPresenceService extends GetxService {
     return PresenceProtocol.encodeSendResult(result);
   }
 
+  /// 编排层迁移前置：网关跟踪该 tab 时建 10s handoff 并返回其 future；
+  /// 非跟踪（非抖音/纯游客）返回 null，编排层按纯壳迁移处理。
+  Future<void>? prepareHandoff(String tabId, String destWindowId) {
+    if (!gateway.isTrackedTab(tabId)) return null;
+    final previous = _handoffs.remove(tabId);
+    if (previous != null && !previous.settled) {
+      previous.settled = true;
+      previous.timer?.cancel();
+      if (!previous.completer.isCompleted) {
+        previous.completer
+            .completeError(const HandoffSupersededException());
+      }
+    }
+    final handoff = _Handoff(destWindowId);
+    handoff.timer = Timer(handoffTimeout, () {
+      if (!handoff.settled) {
+        handoff.settled = true;
+        _handoffs.remove(tabId);
+        if (!handoff.completer.isCompleted) {
+          handoff.completer.completeError(
+            const HandoffTimeoutException(),
+          );
+        }
+      }
+    });
+    _handoffs[tabId] = handoff;
+    return handoff.completer.future;
+  }
+
+  /// 子→主：主窗 store.open 后控制器已 bindTab 本地端口。摘远端索引/
+  /// RemoteTab，网关 rehome(newPort:null) 换到本地端口并复刻；幂等。
+  Future<void> rehomeLocal(String tabId) async {
+    final old = _remoteTabs.remove(tabId);
+    old?.markClosed();
+    _tabWindow.remove(tabId);
+    if (gateway.isTrackedTab(tabId)) {
+      await gateway.rehome(tabId);
+    }
+    _settleHandoff(tabId);
+  }
+
+  void _settleHandoff(String tabId) {
+    final handoff = _handoffs[tabId];
+    if (handoff == null || handoff.settled) return;
+    handoff.settled = true;
+    handoff.timer?.cancel();
+    _handoffs.remove(tabId);
+    if (!handoff.completer.isCompleted) {
+      handoff.completer.complete();
+    }
+  }
+
+  void _failHandoff(String tabId, Object error) {
+    final handoff = _handoffs[tabId];
+    if (handoff == null || handoff.settled) return;
+    handoff.settled = true;
+    handoff.timer?.cancel();
+    _handoffs.remove(tabId);
+    if (!handoff.completer.isCompleted) {
+      handoff.completer.completeError(error);
+    }
+  }
+
   /// 子窗进程被杀（无临终消息）：汇总已死窗名下登记的全部 tab，
   /// 整批一次摘栈释放，然后清自身索引。
   Future<void> _onChildWindowsClosed(Set<String> windowIds) async {
@@ -189,6 +325,9 @@ class MainPresenceService extends GetxService {
     });
     for (final tabId in tabIds) {
       _remoteTabs.remove(tabId)?.markClosed();
+    }
+    for (final tabId in tabIds) {
+      _failHandoff(tabId, const HandoffSourceClosedException());
     }
     if (tabIds.isNotEmpty) {
       await gateway.batchRelease(tabIds);
