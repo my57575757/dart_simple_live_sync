@@ -9,6 +9,7 @@ import 'package:simple_live_core/simple_live_core.dart';
 
 import 'presence_arbiter.dart';
 import 'presence_claimant.dart';
+import 'presence_client.dart';
 
 /// 抖音登录心跳全局仲裁者（每引擎一个；M3 仅主引擎在 kShell binding 实例化）。
 ///
@@ -90,7 +91,11 @@ class DouyinPresenceGateway {
           _startHeartbeat(previousHolder, id);
         }
       }
-      return PresenceClaimResult.failure(detailFailed: result.detailFailed);
+      return PresenceClaimResult.failure(
+        reason: result.detailFailed
+            ? PresenceFailureReason.detailFailed
+            : PresenceFailureReason.enterFailed,
+      );
     }
 
     // HTTP 成功后才迁移仲裁状态
@@ -203,6 +208,147 @@ class DouyinPresenceGateway {
       await _applyFallback(transition.enters!);
     }
   }
+
+  // —— 写动作进入同一串行域（spec §6.5，M3 记账 #2）——
+
+  Future<PresenceSendResult> sendDanmakuAsHolder({
+    required String tabId,
+    required String content,
+  }) =>
+      _serialized(() => _sendDanmakuAsHolder(tabId, content));
+
+  Future<PresenceSendResult> sendActionAsHolder({
+    required String tabId,
+    required String action,
+  }) =>
+      _serialized(() => _sendActionAsHolder(tabId, action));
+
+  /// 非 holder / 不在 _ready：零 HTTP 直接 not_holder；
+  /// accountId 缺失：not_login。404 重注册一次（与控制器旧策略一致）。
+  Future<PresenceSendResult> _sendDanmakuAsHolder(
+    String tabId,
+    String content,
+  ) async {
+    final tab = _tabs[tabId];
+    if (tab == null ||
+        arbiter.holder != tabId ||
+        !_ready.contains(tabId)) {
+      return PresenceSendResult.notHolder;
+    }
+    final accountId = _accountIds[tabId];
+    if (accountId == null) {
+      return const PresenceSendResult(
+        success: false,
+        code: kPresenceCodeNotLogin,
+      );
+    }
+    try {
+      Future<Map<String, dynamic>> once(String id,
+          {bool retried = false}) async {
+        try {
+          return await _guard.sendDanmaku(
+            platform: Constant.kDouyin,
+            accountId: id,
+            roomId: tab.guardRoomId,
+            webRid: tab.guardWebRid,
+            content: content,
+            extra: tab.guardExtraArgs(),
+          );
+        } on DioException catch (e) {
+          if (e.response?.statusCode == 404 && !retried) {
+            final newId = await _guard.reregister(Constant.kDouyin);
+            if (newId != null) {
+              _accountIds[tabId] = newId;
+              return once(newId, retried: true);
+            }
+          }
+          rethrow;
+        }
+      }
+
+      final data = await once(accountId);
+      return PresenceSendResult(
+        success: data['success'] == true,
+        code: data['platformCode']?.toString(),
+        message: data['message']?.toString(),
+      );
+    } on DioException catch (e) {
+      final body = e.response?.data;
+      final msg = body is Map ? body['message'] : null;
+      return PresenceSendResult(
+        success: false,
+        message: msg is String && msg.isNotEmpty ? msg : '网络请求失败',
+      );
+    } catch (e) {
+      Log.logPrint('presence: holder 弹幕发送失败: $e');
+      return const PresenceSendResult(success: false, message: '网络请求失败');
+    }
+  }
+
+  /// 互动动作（like/fans_badge/join_club/light_up）。guard.sendAction
+  /// 不带 platform/extra（与 sendDanmaku 区别，勿补参数）。
+  Future<PresenceSendResult> _sendActionAsHolder(
+    String tabId,
+    String action,
+  ) async {
+    final tab = _tabs[tabId];
+    if (tab == null ||
+        arbiter.holder != tabId ||
+        !_ready.contains(tabId)) {
+      return PresenceSendResult.notHolder;
+    }
+    final accountId = _accountIds[tabId];
+    if (accountId == null) {
+      return const PresenceSendResult(
+        success: false,
+        code: kPresenceCodeNotLogin,
+      );
+    }
+    try {
+      Future<Map<String, dynamic>> once(String id,
+          {bool retried = false}) async {
+        try {
+          return await _guard.sendAction(
+            accountId: id,
+            roomId: tab.guardRoomId,
+            webRid: tab.guardWebRid,
+            action: action,
+          );
+        } on DioException catch (e) {
+          if (e.response?.statusCode == 404 && !retried) {
+            final newId = await _guard.reregister(Constant.kDouyin);
+            if (newId != null) {
+              _accountIds[tabId] = newId;
+              return once(newId, retried: true);
+            }
+          }
+          rethrow;
+        }
+      }
+
+      final data = await once(accountId);
+      return PresenceSendResult(
+        success: data['success'] == true,
+        code: data['platformCode']?.toString(),
+        message: data['message']?.toString(),
+      );
+    } on DioException catch (e) {
+      final body = e.response?.data;
+      final msg = body is Map ? body['message'] : null;
+      return PresenceSendResult(
+        success: false,
+        message: msg is String && msg.isNotEmpty ? msg : '网络请求失败',
+      );
+    } catch (e) {
+      Log.logPrint('presence: holder 互动动作失败: $e');
+      return const PresenceSendResult(success: false, message: '操作失败');
+    }
+  }
+
+  /// 测试接缝：构造 holder+ready 但 accountId 缺失的 not_login 分支
+  /// （生产中 ready 与 accountId 同置，该分支为防御性不可达，靠接缝验证）。
+  @visibleForTesting
+  void debugDropAccountId(String tabId) => _accountIds.remove(tabId);
 
   /// 幸存者重新进场并接管唯一心跳；进场失败时 holder 已迁移但不在 _ready
   /// 中、心跳暂停，用户在该标签的下一次写动作经 claim 重走完整进场序列。

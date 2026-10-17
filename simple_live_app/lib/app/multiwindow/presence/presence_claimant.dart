@@ -40,17 +40,3 @@ abstract class DouyinPresenceTab {
   /// 不自动抢回；用户后续写动作经 claim 重新进入。
   void applySuspended();
 }
-
-/// claim 结果。[detailFailed]=true 表示账号详情读取失败（被限制等），
-/// false 表示 guard 未配置 / 进场网络失败；控制器据此选 toast 文案。
-class PresenceClaimResult {
-  const PresenceClaimResult._(this.granted, this.detailFailed);
-
-  const PresenceClaimResult.granted() : this._(true, false);
-
-  const PresenceClaimResult.failure({required bool detailFailed})
-      : this._(false, detailFailed);
-
-  final bool granted;
-  final bool detailFailed;
-}

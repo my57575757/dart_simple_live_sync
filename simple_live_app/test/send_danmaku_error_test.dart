@@ -42,6 +42,12 @@ void main() {
         "未登录或登录已失效",
       );
     });
+    test("抖音 not_holder（登录态切换）", () {
+      expect(
+        LiveRoomController.danmakuErrorText("douyin", result("not_holder")),
+        "登录状态已切换，请重试",
+      );
+    });
     test("兜底文案", () {
       expect(
         LiveRoomController.danmakuErrorText("bilibili", result("999")),

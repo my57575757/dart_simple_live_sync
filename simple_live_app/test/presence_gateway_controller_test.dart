@@ -34,8 +34,11 @@ class FakeDanmaku extends LiveDanmaku {
     stops++;
   }
 
+  int sendMessageCount = 0;
+
   @override
   Future<DanmakuSendResult> sendMessage(String message) async {
+    sendMessageCount++;
     return DanmakuSendResult(success: true);
   }
 }
@@ -89,6 +92,8 @@ class FakeDouyinSite extends DouyinSite {
 class FakeGuard extends GuardServerService {
   final enters = <String>[];
   final exits = <String>[];
+  final sentDanmaku = <String>[];
+  final sentActions = <String>[];
 
   @override
   // ignore: must_call_super
@@ -135,6 +140,30 @@ class FakeGuard extends GuardServerService {
     Map<String, dynamic>? extra,
   }) async {
     exits.add(roomId);
+  }
+
+  @override
+  Future<Map<String, dynamic>> sendDanmaku({
+    required String platform,
+    required String accountId,
+    required String roomId,
+    String webRid = '',
+    required String content,
+    Map<String, dynamic>? extra,
+  }) async {
+    sentDanmaku.add(content);
+    return {'success': true};
+  }
+
+  @override
+  Future<Map<String, dynamic>> sendAction({
+    required String accountId,
+    required String roomId,
+    String webRid = '',
+    required String action,
+  }) async {
+    sentActions.add(action);
+    return {'success': true};
   }
 }
 
@@ -226,6 +255,34 @@ void main() {
     expect(siteA.danmaku.cookies.last, 'sessionid=abc');
 
     // 唯一心跳由网关维护；body 结束前取消，避免残留 periodic Timer
+    gateway.stopHeartbeatForTesting();
+  });
+
+  testWidgets('主窗标签抖音发送/点赞：经 PresenceClient 走网关，不直连本地弹幕',
+      (tester) async {
+    final gateway = DouyinPresenceGateway(guard);
+    await tester.pumpWidget(
+      GetMaterialApp(
+        navigatorObservers: [FlutterSmartDialog.observer],
+        builder: FlutterSmartDialog.init(),
+        home: const Scaffold(body: SizedBox()),
+      ),
+    );
+    Get.put<GuardServerService>(guard);
+    Get.put<DouyinAccountService>(FakeDouyinAccount());
+    final a = makeController(tabId: 'tabA', site: siteA, gateway: gateway);
+
+    await a.enterAsAccount();
+    await tester.pump();
+    await a.sendDanmaku('hello');
+    await tester.pump();
+    await a.like();
+    await tester.pump();
+
+    expect(guard.sentDanmaku, ['hello']);
+    expect(guard.sentActions, ['like']);
+    expect(siteA.danmaku.sendMessageCount, 0,
+        reason: '抖音弹幕必须走网关串行域，不落本地弹幕 sendMessage');
     gateway.stopHeartbeatForTesting();
   });
 

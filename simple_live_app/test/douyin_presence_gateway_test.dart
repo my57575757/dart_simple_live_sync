@@ -7,6 +7,7 @@ import 'package:simple_live_app/app/constant.dart';
 import 'package:simple_live_app/app/multiwindow/presence/douyin_presence_gateway.dart';
 import 'package:simple_live_app/app/multiwindow/presence/local_presence_client.dart';
 import 'package:simple_live_app/app/multiwindow/presence/presence_claimant.dart';
+import 'package:simple_live_app/app/multiwindow/presence/presence_client.dart';
 import 'package:simple_live_app/services/guard_server_service.dart';
 import 'package:simple_live_core/simple_live_core.dart';
 
@@ -28,6 +29,10 @@ class FakeGuard extends GuardServerService {
   Object? heartbeatThrowOnce;
   Map<String, dynamic> heartbeatResult = {'inRoom': true};
   int inRoomFalseBeats = 0;
+
+  final sentDanmaku = <String>[];
+  final sentActions = <String>[];
+  bool sendDanmakuThrow404Once = false;
 
   @override
   // ignore: must_call_super
@@ -106,6 +111,40 @@ class FakeGuard extends GuardServerService {
   }) async {
     exits.add('$accountId@$roomId');
     events.add('exit:$roomId');
+  }
+
+  @override
+  Future<Map<String, dynamic>> sendDanmaku({
+    required String platform,
+    required String accountId,
+    required String roomId,
+    String webRid = '',
+    required String content,
+    Map<String, dynamic>? extra,
+  }) async {
+    if (sendDanmakuThrow404Once) {
+      sendDanmakuThrow404Once = false;
+      throw DioException(
+        requestOptions: RequestOptions(path: '/api/send'),
+        response: Response<dynamic>(
+          requestOptions: RequestOptions(path: '/api/send'),
+          statusCode: 404,
+        ),
+      );
+    }
+    sentDanmaku.add(content);
+    return {'success': true};
+  }
+
+  @override
+  Future<Map<String, dynamic>> sendAction({
+    required String accountId,
+    required String roomId,
+    String webRid = '',
+    required String action,
+  }) async {
+    sentActions.add(action);
+    return {'success': true};
   }
 }
 
@@ -246,7 +285,7 @@ void main() {
       final r = await gw.claim(b);
 
       expect(r.granted, isFalse);
-      expect(r.detailFailed, isTrue);
+      expect(r.reason, PresenceFailureReason.detailFailed);
       expect(gw.holderTabId, 'A');
       expect(guard.enters, ['acct1@room_111']);
       expect(a.yields, 0);
@@ -260,7 +299,7 @@ void main() {
       final a = FakeTab('A', '111');
       final r = await gw.claim(a);
       expect(r.granted, isFalse);
-      expect(r.detailFailed, isFalse);
+      expect(r.reason, PresenceFailureReason.enterFailed);
       expect(gw.holderTabId, isNull);
       gw.stopHeartbeatForTesting();
     });
@@ -735,6 +774,92 @@ void main() {
       await gw.batchRelease(<String>{});
       await gw.batchRelease({'X'});
       expect(gw.holderTabId, 'A');
+      gw.stopHeartbeatForTesting();
+    });
+  });
+
+  group('holder 写动作串行域', () {
+    test('holder 发弹幕：走 guard.sendDanmaku，带 platform=douyin 与 extra',
+        () async {
+      final guard = FakeGuard();
+      final gw = DouyinPresenceGateway(guard);
+      final a = FakeTab('A', '111');
+      await gw.claim(a);
+
+      final r = await gw.sendDanmakuAsHolder(tabId: 'A', content: 'hello');
+
+      expect(r.success, isTrue);
+      expect(guard.sentDanmaku, ['hello']);
+      gw.stopHeartbeatForTesting();
+    });
+
+    test('holder 点赞：走 guard.sendAction（无 platform 参数）', () async {
+      final guard = FakeGuard();
+      final gw = DouyinPresenceGateway(guard);
+      final a = FakeTab('A', '111');
+      await gw.claim(a);
+
+      final r = await gw.sendActionAsHolder(tabId: 'A', action: 'like');
+
+      expect(r.success, isTrue);
+      expect(guard.sentActions, ['like']);
+      gw.stopHeartbeatForTesting();
+    });
+
+    test('非 holder：not_holder 且零 HTTP', () async {
+      final guard = FakeGuard();
+      final gw = DouyinPresenceGateway(guard);
+      final a = FakeTab('A', '111');
+      final b = FakeTab('B', '222');
+      await gw.claim(a);
+      await gw.claim(b); // B 持有，A 让位
+      await Future<void>.value();
+
+      final r = await gw.sendDanmakuAsHolder(tabId: 'A', content: 'x');
+
+      expect(r.success, isFalse);
+      expect(r.code, kPresenceCodeNotHolder);
+      expect(guard.sentDanmaku, isEmpty);
+      gw.stopHeartbeatForTesting();
+    });
+
+    test('未知 tab：not_holder 且零 HTTP', () async {
+      final guard = FakeGuard();
+      final gw = DouyinPresenceGateway(guard);
+
+      final r = await gw.sendActionAsHolder(tabId: 'ZZ', action: 'like');
+
+      expect(r.success, isFalse);
+      expect(r.code, kPresenceCodeNotHolder);
+      expect(guard.sentActions, isEmpty);
+    });
+
+    test('holder+ready 但 accountId 缺失：not_login 且零 HTTP', () async {
+      final guard = FakeGuard();
+      final gw = DouyinPresenceGateway(guard);
+      final a = FakeTab('A', '111');
+      await gw.claim(a);
+      gw.debugDropAccountId('A');
+
+      final r = await gw.sendDanmakuAsHolder(tabId: 'A', content: 'x');
+
+      expect(r.success, isFalse);
+      expect(r.code, kPresenceCodeNotLogin);
+      expect(guard.sentDanmaku, isEmpty);
+      gw.stopHeartbeatForTesting();
+    });
+
+    test('发弹幕 404：reregister 后重试一次成功', () async {
+      final guard = FakeGuard()..sendDanmakuThrow404Once = true;
+      final gw = DouyinPresenceGateway(guard);
+      final a = FakeTab('A', '111');
+      await gw.claim(a);
+
+      final r = await gw.sendDanmakuAsHolder(tabId: 'A', content: 'hi');
+
+      expect(r.success, isTrue);
+      expect(guard.reregisters, [Constant.kDouyin]);
+      expect(guard.sentDanmaku, ['hi']);
       gw.stopHeartbeatForTesting();
     });
   });

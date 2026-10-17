@@ -19,6 +19,7 @@ import 'package:simple_live_app/app/log.dart';
 import 'package:simple_live_app/app/multiwindow/presence/douyin_presence_gateway.dart';
 import 'package:simple_live_app/app/multiwindow/presence/local_presence_client.dart';
 import 'package:simple_live_app/app/multiwindow/presence/presence_claimant.dart';
+import 'package:simple_live_app/app/multiwindow/presence/presence_client.dart';
 import 'package:simple_live_app/app/multiwindow/shell/tab_store.dart';
 import 'package:simple_live_app/app/sites.dart';
 import 'package:simple_live_app/app/utils.dart';
@@ -161,7 +162,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   Future<bool>? _enteringFuture;
 
   /// Windows 标签壳下抖音账号态走全局网关；Android / 路由模式为 null
-  LocalPresenceClient? _presenceClient;
+  PresenceClient? _presenceClient;
   DouyinPresenceTab? _presenceTab;
 
   /// presence 状态切换世代：每次 apply* 切换递增；续体在每个 await 后发现
@@ -187,6 +188,12 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     _presenceTab = _ControllerPresenceTab(this);
     gateway.bindTab(_presenceTab!);
     _presenceClient = LocalPresenceClient(gateway, _presenceTab!);
+  }
+
+  /// 测试用：注入假 PresenceClient 验证 not_holder 重发等控制器逻辑。
+  @visibleForTesting
+  void debugBindPresenceClient(PresenceClient client) {
+    _presenceClient = client;
   }
 
   @visibleForTesting
@@ -478,7 +485,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     }
   }
 
-  Future<bool> _doEnterViaGateway(LocalPresenceClient client) async {
+  Future<bool> _doEnterViaGateway(PresenceClient client) async {
     presence.value = RoomPresence.entering;
     final result = await client.claim();
     if (result.granted) {
@@ -489,12 +496,27 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       return true;
     }
     presence.value = RoomPresence.guest;
-    SmartDialog.showToast(
-      result.detailFailed
-          ? "无法以账号身份读取该房间（可能被主播限制）"
-          : "进入直播间失败，已保持游客观看",
-    );
+    SmartDialog.showToast(presenceFailureText(result.reason));
     return false;
+  }
+
+  /// claim/IPC 失败原因 → toast 文案（spec §5.1 逐字）。
+  /// 主窗本地只会见到 detailFailed/enterFailed；其余为子窗 IPC 路径。
+  String presenceFailureText(PresenceFailureReason? reason) {
+    switch (reason) {
+      case PresenceFailureReason.notLoggedIn:
+        return '主窗口未登录抖音，请先在主窗口登录';
+      case PresenceFailureReason.notConfigured:
+        return '主窗口未配置弹幕签名服务，请在主窗口完成配置';
+      case PresenceFailureReason.detailFailed:
+        return '无法以账号身份读取该房间（可能被主播限制）';
+      case PresenceFailureReason.enterFailed:
+        return '进入直播间失败，已保持游客观看';
+      case PresenceFailureReason.ipcFailed:
+        return '主窗口服务无响应，请重试';
+      case null:
+        return '进入直播间失败，已保持游客观看';
+    }
   }
 
   /// 抖音写动作（发弹幕/点赞/灯牌/入团）前确保账号在场
@@ -678,8 +700,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   Future<void> _leaveDouyinPresence({required bool unconditional}) async {
     final client = _presenceClient;
     if (client != null) {
-      final gateway = _resolveGateway();
-      final inStack = gateway?.hasClaim(tabId!) ?? false;
+      final inStack = client.isClaimed;
       if (unconditional ||
           presence.value == RoomPresence.account ||
           inStack) {
@@ -712,60 +733,68 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     sendingDanmaku.value = true;
     try {
       DanmakuSendResult result;
+      final presenceClient = _presenceClient;
       final guard = GuardServerService.instance;
 
-      String? accountId;
-      if (guard.configured && _guardPlatforms.contains(site.id)) {
-        // 发送时按需注册：未注册则用本地保存的登录 cookie 自动注册
-        accountId = await guard.ensureAccount(site.id);
-      }
-
-      if (accountId != null) {
-        Future<DanmakuSendResult> sendOnce(String id,
-            {bool retried = false}) async {
-          try {
-            final data = await guard.sendDanmaku(
-              platform: site.id,
-              accountId: id,
-              roomId: _guardRoomId,
-              webRid: _guardWebRid,
-              content: content,
-              extra: _guardExtraArgs(),
-            );
-            return DanmakuSendResult(
-              success: data["success"] == true,
-              errorCode: data["platformCode"] != null
-                  ? data["platformCode"].toString()
-                  : "guard",
-              errorMessage: data["message"]?.toString() ?? "",
-            );
-          } on DioException catch (e) {
-            if (e.response?.statusCode == 404 && !retried) {
-              // 服务端会话丢失（如容器重启）：accountId 由 cookie 哈希决定，
-              // 重新注册得到的 ID 与原 ID 相同，故不能比较 ID，注册成功即重试一次
-              final newId = await guard.reregister(site.id);
-              if (newId != null) {
-                return sendOnce(newId, retried: true);
-              }
-            }
-            final data = e.response?.data;
-            final msg = data is Map ? data["message"] : null;
-            return DanmakuSendResult(
-              success: false,
-              errorCode: "guard",
-              errorMessage: msg is String && msg.isNotEmpty ? msg : "网络请求失败",
-            );
-          }
-        }
-
-        result = await sendOnce(accountId);
-        if (result.success && _presenceClient == null) {
-          // 网关模式下：发送前 ensureAccountPresence 已使本标签成为 holder，
-          // 唯一心跳由网关维护，控制器不再起 Timer
-          _startGuardHeartbeat(accountId);
-        }
+      if (site.id == Constant.kDouyin && presenceClient != null) {
+        // 主窗标签 / 子窗标签抖音发送统一走 presence 串行域，不再直连
+        // GuardServerService、不在控制器起心跳（消除发送瞬间 holder 切换）。
+        result = await _sendDanmakuViaPresence(presenceClient, content);
       } else {
-        result = await liveDanmaku.sendMessage(content);
+        String? accountId;
+        if (guard.configured && _guardPlatforms.contains(site.id)) {
+          // 发送时按需注册：未注册则用本地保存的登录 cookie 自动注册
+          accountId = await guard.ensureAccount(site.id);
+        }
+
+        if (accountId != null) {
+          Future<DanmakuSendResult> sendOnce(String id,
+              {bool retried = false}) async {
+            try {
+              final data = await guard.sendDanmaku(
+                platform: site.id,
+                accountId: id,
+                roomId: _guardRoomId,
+                webRid: _guardWebRid,
+                content: content,
+                extra: _guardExtraArgs(),
+              );
+              return DanmakuSendResult(
+                success: data["success"] == true,
+                errorCode: data["platformCode"] != null
+                    ? data["platformCode"].toString()
+                    : "guard",
+                errorMessage: data["message"]?.toString() ?? "",
+              );
+            } on DioException catch (e) {
+              if (e.response?.statusCode == 404 && !retried) {
+                // 服务端会话丢失（如容器重启）：accountId 由 cookie 哈希决定，
+                // 重新注册得到的 ID 与原 ID 相同，故不能比较 ID，注册成功即重试一次
+                final newId = await guard.reregister(site.id);
+                if (newId != null) {
+                  return sendOnce(newId, retried: true);
+                }
+              }
+              final data = e.response?.data;
+              final msg = data is Map ? data["message"] : null;
+              return DanmakuSendResult(
+                success: false,
+                errorCode: "guard",
+                errorMessage:
+                    msg is String && msg.isNotEmpty ? msg : "网络请求失败",
+              );
+            }
+          }
+
+          result = await sendOnce(accountId);
+          if (result.success && _presenceClient == null) {
+            // 网关模式下唯一心跳由网关维护；仅 Android / bili/huya 直连路径
+            // 才在控制器起 Timer。
+            _startGuardHeartbeat(accountId);
+          }
+        } else {
+          result = await liveDanmaku.sendMessage(content);
+        }
       }
       if (!result.success) {
         if (site.id == Constant.kDouyu &&
@@ -789,6 +818,26 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     } finally {
       sendingDanmaku.value = false;
     }
+  }
+
+  /// 抖音 presence 通道发送：not_holder（持有者在他端切换/挂起）时
+  /// 先强制回 guest 再重新 claim，重发**一次**；仍失败由文案层提示。
+  Future<DanmakuSendResult> _sendDanmakuViaPresence(
+    PresenceClient client,
+    String content,
+  ) async {
+    var r = await client.sendDanmaku(content);
+    if (!r.success && r.code == kPresenceCodeNotHolder) {
+      presence.value = RoomPresence.guest;
+      if (await ensureAccountPresence()) {
+        r = await client.sendDanmaku(content);
+      }
+    }
+    return DanmakuSendResult(
+      success: r.success,
+      errorCode: r.success ? '' : (r.code ?? 'guard'),
+      errorMessage: r.message ?? '',
+    );
   }
 
   /// 斗鱼弹幕登录态（7 天）过期：弹窗引导重新登录，成功后用新 cookie 重启弹幕
@@ -847,6 +896,11 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     final guard = GuardServerService.instance;
     sendingAction.value = true;
     try {
+      final presenceClient = _presenceClient;
+      if (site.id == Constant.kDouyin && presenceClient != null) {
+        await _sendActionViaPresence(presenceClient, action);
+        return;
+      }
       var accountId = await guard.ensureAccount(site.id);
       if (accountId == null) {
         SmartDialog.showToast("请先登录并配置弹幕签名服务");
@@ -875,11 +929,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       if (data["success"] != true) {
         SmartDialog.showToast(data["message"]?.toString() ?? "操作失败");
       } else {
-        if (action == "join_club") {
-          guardJoined.value = true;
-          guardBadgeActive.value = true;
-        }
-        if (action == "light_up") guardBadgeActive.value = true;
+        _applyGuardActionSuccessFlags(action);
         // 主动操作已在服务端抢占房间，恢复本端心跳保活
         if (_presenceClient == null) {
           _startGuardHeartbeat(accountId);
@@ -897,6 +947,36 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     } finally {
       sendingAction.value = false;
     }
+  }
+
+  /// 抖音 presence 通道互动动作 + not_holder 一次重claim重发。
+  Future<void> _sendActionViaPresence(
+    PresenceClient client,
+    String action,
+  ) async {
+    var r = await client.sendAction(action);
+    if (!r.success && r.code == kPresenceCodeNotHolder) {
+      presence.value = RoomPresence.guest;
+      if (await ensureAccountPresence()) {
+        r = await client.sendAction(action);
+      }
+    }
+    if (r.success) {
+      _applyGuardActionSuccessFlags(action);
+    } else {
+      SmartDialog.showToast(
+        r.message ??
+            (r.code == kPresenceCodeNotHolder ? '登录状态已切换，请重试' : '操作失败'),
+      );
+    }
+  }
+
+  void _applyGuardActionSuccessFlags(String action) {
+    if (action == 'join_club') {
+      guardJoined.value = true;
+      guardBadgeActive.value = true;
+    }
+    if (action == 'light_up') guardBadgeActive.value = true;
   }
 
   Future<void> like() => _sendGuardAction("like");
@@ -1267,6 +1347,9 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     var code = result.errorCode;
     if (code == "not_login") {
       return "未登录，请先在账号管理中登录";
+    }
+    if (code == kPresenceCodeNotHolder) {
+      return "登录状态已切换，请重试";
     }
     if (code == "rate_limit") {
       return "发言太快，请稍后再试";
