@@ -31,6 +31,32 @@ class WindowRegistry {
     return null;
   }
 
+  /// 子窗新增一个标签 key（跨窗落地）。窗必须先 registerChild，否则 StateError。
+  void addChildTab(String windowId, String tabKey) {
+    final set = _childTabs[windowId];
+    if (set == null) {
+      throw StateError('window not registered: $windowId');
+    }
+    set.add(tabKey);
+  }
+
+  /// 摘除单个标签 key；空 set 保留，窗进程死活由 reconcile 对账。
+  void removeChildTab(String windowId, String tabKey) {
+    _childTabs[windowId]?.remove(tabKey);
+  }
+
+  /// 标签在两个子窗之间挪动（源空窗保留待 reconcile/自动关闭）。
+  void moveChildTab(String fromWindowId, String toWindowId, String tabKey) {
+    removeChildTab(fromWindowId, tabKey);
+    addChildTab(toWindowId, tabKey);
+  }
+
+  /// 开窗序列（1 起 ordinal）：窗口列表菜单编号用。
+  List<({String id, int ordinal})> childWindowOrder() => [
+        for (var i = 0; i < _order.length; i++)
+          (id: _order[i], ordinal: i + 1),
+      ];
+
   /// onWindowsChanged 后按存活窗口列表对账，摘除已关闭窗口。
   /// 返回本次被摘除的 windowId 集合（无变化为空集），供订阅者
   /// （MainPresenceService）批量释放该窗名下的远端 presence 标签。
