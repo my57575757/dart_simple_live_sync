@@ -1,6 +1,9 @@
 import 'package:get/get.dart';
+import 'package:simple_live_app/app/constant.dart';
 import 'package:simple_live_app/app/log.dart';
 import 'package:simple_live_app/services/douyin_account_service.dart';
+import 'package:simple_live_app/services/douyu_account_service.dart';
+import 'package:simple_live_app/services/twitch_account_service.dart';
 import 'package:simple_live_core/simple_live_core.dart';
 
 import '../presence_batch_releaser.dart';
@@ -41,14 +44,28 @@ class IpcPresenceCoordinator extends GetxService
     required SubPresencePort port,
     required PresenceApplyTarget? Function(String tabId) resolveTarget,
     required DouyinAccountService accounts,
+    required DouyuAccountService douyuAccounts,
+    required TwitchAccountService twitchAccounts,
   })  : _port = port,
         _resolveTarget = resolveTarget,
-        _accounts = accounts;
+        _accounts = accounts,
+        _douyuAccounts = douyuAccounts,
+        _twitchAccounts = twitchAccounts;
 
   final String windowId;
   final SubPresencePort _port;
   final PresenceApplyTarget? Function(String tabId) _resolveTarget;
   final DouyinAccountService _accounts;
+  final DouyuAccountService _douyuAccounts;
+  final TwitchAccountService _twitchAccounts;
+
+  /// tabId → siteId：register 时写入，apply_enter 按站点分发凭据到对应
+  /// 账号服务。切房后 refreshRemoteTab 会以新 siteId 覆盖。
+  final Map<String, String> _tabSite = {};
+
+  /// 凭据下发完成回调（M5 接线点）：live_room_controller 注册后按需
+  /// 重启该站弹幕连接。仅在 apply_enter 写完借用凭据后触发一次。
+  void Function(String tabId, String siteId)? onCredentialsApplied;
 
   /// 子端控制器绑定后调用：只在主端建死亡对账索引，不进仲裁栈。
   /// best-effort：主窗不可达不阻塞子端进房（主窗关闭=应用退出）。
@@ -58,6 +75,7 @@ class IpcPresenceCoordinator extends GetxService
     required String roomId,
     required String shareUrl,
   }) async {
+    _tabSite[tabId] = siteId;
     try {
       await _port.invokeMain(
         PresenceProtocol.mRegister,
@@ -83,21 +101,28 @@ class IpcPresenceCoordinator extends GetxService
   /// 不补登记则该 tabId 后续 claim 必被裸拒（子端误报主窗无响应）。
   /// 同时立即清空借用登录凭据（刷新路径不经 yield/suspended 失效点），
   /// 重新 claim 成功时 apply_enter 会再下发当刻新值。register 为幂等
-  /// 纯索引写入：非抖音站点主端拒绝注册，此处仅完成清理；主窗不可达
-  /// 时 best-effort 不抛错。
+  /// 纯索引写入；主窗不可达时 best-effort 不抛错。
   Future<void> refreshRemoteTab({
     required String tabId,
     required String siteId,
     required String roomId,
     required String shareUrl,
   }) async {
-    _accounts.setBorrowedLoginCookie(null);
+    _clearBorrowedCredentials();
     await registerRemoteTab(
       tabId: tabId,
       siteId: siteId,
       roomId: roomId,
       shareUrl: shareUrl,
     );
+  }
+
+  /// 四个失效点（yield/suspended/onClose/refreshRemoteTab）共用：
+  /// 三站借用凭据一并清空，语义安全且不依赖当刻 siteId。
+  void _clearBorrowedCredentials() {
+    _accounts.setBorrowedLoginCookie(null);
+    _douyuAccounts.setBorrowedLoginCookie(null);
+    _twitchAccounts.setBorrowedLoginCreds(null);
   }
 
   /// 控制器持有的 per-tab presence 客户端；guard 参数每次 claim 当刻
@@ -140,10 +165,15 @@ class IpcPresenceCoordinator extends GetxService
       case PresenceProtocol.mApplyEnter:
         final call = PresenceProtocol.decodeApplyEnter(arguments);
         if (call == null) return false;
+        final siteId = _tabSite[call.tabId] ?? Constant.kDouyin;
+        // 先写借用凭据，自取详情/弹幕重连才会携带登录身份
+        _applyBorrowedCredentials(siteId, call);
+        onCredentialsApplied?.call(call.tabId, siteId);
+        // 非抖音只写凭据：账号态进场（fetchAccountDetail/applyAccountEnter）
+        // 是抖音 presence 语义，其余站点弹幕升级由 onCredentialsApplied 负责
+        if (siteId != Constant.kDouyin) return null;
         final target = _resolveTarget(call.tabId);
         if (target == null) return null;
-        // 先写借用 cookie，自取详情才会携带登录凭据
-        _accounts.setBorrowedLoginCookie(call.cookie);
         final LiveRoomDetail detail;
         try {
           detail = await target.fetchAccountDetail();
@@ -167,8 +197,8 @@ class IpcPresenceCoordinator extends GetxService
       case PresenceProtocol.mApplySuspended:
         final tabId = PresenceProtocol.decodeTabApply(arguments);
         if (tabId == null) return false;
-        // cookie 先于控制器切换失效（三失效点之二）
-        _accounts.setBorrowedLoginCookie(null);
+        // 凭据先于控制器切换失效（三失效点之二）；三站一并清空
+        _clearBorrowedCredentials();
         final target = _resolveTarget(tabId);
         if (target == null) return null;
         try {
@@ -187,12 +217,32 @@ class IpcPresenceCoordinator extends GetxService
     }
   }
 
+  /// 按 siteId 把借用凭据写进对应账号服务（纯内存单点，不写 KV/不翻登录态）。
+  void _applyBorrowedCredentials(
+    String siteId,
+    PresenceApplyEnterCall call,
+  ) {
+    switch (siteId) {
+      case Constant.kDouyu:
+        _douyuAccounts.setBorrowedLoginCookie(call.cookie);
+        break;
+      case Constant.kTwitch:
+        _twitchAccounts.setBorrowedLoginCreds(call.creds);
+        break;
+      default:
+        // 抖音（及未知站点回落）：单串 cookie
+        _accounts.setBorrowedLoginCookie(call.cookie);
+        break;
+    }
+  }
+
   /// 防御性清理：仅在容器拆卸/测试场景可达。生产子引擎不主动 Get.delete
   /// 本服务，子窗关闭时借用 cookie 随进程隔离销毁；活跃借用态的立即失效
   /// 由 yield/suspended 两路径保证，主端死亡则经 batchRelease 对账释放。
   @override
   void onClose() {
-    _accounts.setBorrowedLoginCookie(null);
+    _clearBorrowedCredentials();
+    _tabSite.clear();
     super.onClose();
   }
 }

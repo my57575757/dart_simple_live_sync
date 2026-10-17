@@ -6,6 +6,8 @@ import 'package:simple_live_app/app/multiwindow/presence/ipc/sub_presence_port.d
 import 'package:simple_live_app/app/multiwindow/presence/presence_client.dart';
 import 'package:simple_live_app/app/sites.dart';
 import 'package:simple_live_app/services/douyin_account_service.dart';
+import 'package:simple_live_app/services/douyu_account_service.dart';
+import 'package:simple_live_app/services/twitch_account_service.dart';
 import 'package:simple_live_core/simple_live_core.dart';
 
 class _FakePort implements SubPresencePort {
@@ -104,7 +106,11 @@ LiveRoomDetail _detail(String webRid) => LiveRoomDetail(
 void main() {
   late _FakePort port;
   late DouyinAccountService accounts;
+  late DouyuAccountService douyuAccounts;
+  late TwitchAccountService twitchAccounts;
   final site = Sites.allSites['douyin']!.liveSite as DouyinSite;
+  final douyuSite = Sites.allSites['douyu']!.liveSite as DouyuSite;
+  final twitchSite = Sites.allSites['twitch']!.liveSite as TwitchSite;
 
   IpcPresenceCoordinator coord(
     Map<String, PresenceApplyTarget> targets,
@@ -114,6 +120,8 @@ void main() {
         port: port,
         resolveTarget: (tabId) => targets[tabId],
         accounts: accounts,
+        douyuAccounts: douyuAccounts,
+        twitchAccounts: twitchAccounts,
       );
 
   PresenceClaimArgs args({String guardRoomId = 'room_1'}) =>
@@ -128,10 +136,16 @@ void main() {
   setUp(() {
     port = _FakePort();
     accounts = DouyinAccountService();
+    douyuAccounts = DouyuAccountService();
+    twitchAccounts = TwitchAccountService();
   });
 
   tearDown(() {
     site.loginCookie = '';
+    douyuSite.cookie = '';
+    twitchSite.oauthToken = '';
+    twitchSite.userLogin = '';
+    twitchSite.clientId = TwitchSite.kWebClientId;
   });
 
   test('apply_enter：写借用 cookie（logined 不翻转）→ 自取详情 → apply 透传',
@@ -235,7 +249,7 @@ void main() {
         reason: '未知 method 默认 null');
   });
 
-  test('target 已销毁（查无控制器）：静默返回，不写 cookie、不抛', () async {
+  test('target 已销毁（查无控制器）：静默返回，凭据仍先写入、不调 apply、不抛', () async {
     final c = coord(<String, PresenceApplyTarget>{});
     expect(
       await c.handleCall(
@@ -251,7 +265,10 @@ void main() {
       ),
       isNull,
     );
-    expect(accounts.loginCookie, '', reason: '无目标不写 cookie');
+    // M5：凭据先于 target 解析写入（onCredentialsApplied 依赖当刻值）；
+    // 无 target 只跳过 fetch/apply，凭据由四个失效点负责清理
+    expect(accounts.loginCookie, 'sessionid=zzz',
+        reason: '凭据先写（纯内存），失效点负责清零');
     expect(
       await c.handleCall(
           PresenceProtocol.mApplyYield,
@@ -431,6 +448,8 @@ void main() {
       port: port,
       resolveTarget: (_) => target,
       accounts: accounts,
+      douyuAccounts: douyuAccounts,
+      twitchAccounts: twitchAccounts,
     );
     await c2.handleCall(
       PresenceProtocol.mApplyEnter,
@@ -447,6 +466,137 @@ void main() {
     c2.onClose();
     expect(accounts.loginCookie, '');
     expect(site.loginCookie, '');
+  });
+
+  test('非抖音 mApplyEnter 按 siteId 分发：douyu 写 cookie、twitch 写 creds；'
+      'onCredentialsApplied 回调；不走抖音账号进场', () async {
+    final target = _FakeTarget(_detail('1'))..accounts = accounts;
+    final c = coord({'tdy': target});
+
+    String? appliedTab;
+    String? appliedSite;
+    c.onCredentialsApplied = (tabId, siteId) {
+      appliedTab = tabId;
+      appliedSite = siteId;
+    };
+
+    // douyu → DouyuAccountService.cookie
+    await c.registerRemoteTab(
+        tabId: 'tdy', siteId: 'douyu', roomId: '9', shareUrl: '');
+    await c.handleCall(
+      PresenceProtocol.mApplyEnter,
+      PresenceProtocol.encodeApplyEnter(
+        const PresenceApplyEnterCall(
+          tabId: 'tdy',
+          cookie: 'acf_uid=1; acf_stk=2',
+          status: <String, Object?>{},
+          reentered: false,
+        ),
+      ),
+    );
+    expect(douyuAccounts.cookie, 'acf_uid=1; acf_stk=2');
+    expect(douyuSite.cookie, 'acf_uid=1; acf_stk=2');
+    expect(accounts.loginCookie, '', reason: '非抖音不写抖音借用 cookie');
+    expect(target.detailCalls, 0, reason: '非抖音不走 fetchAccountDetail');
+    expect(target.enters, 0, reason: '非抖音不走 applyAccountEnter');
+    expect(appliedTab, 'tdy');
+    expect(appliedSite, 'douyu');
+
+    // twitch → TwitchAccountService 三元组（cookie 恒 ''）
+    await c.registerRemoteTab(
+        tabId: 'ttw', siteId: 'twitch', roomId: '10', shareUrl: '');
+    await c.handleCall(
+      PresenceProtocol.mApplyEnter,
+      PresenceProtocol.encodeApplyEnter(
+        const PresenceApplyEnterCall(
+          tabId: 'ttw',
+          cookie: '',
+          creds: {
+            'oauthToken': 'oauth-abc',
+            'userLogin': 'user1',
+            'clientId': 'cid1',
+          },
+          status: <String, Object?>{},
+          reentered: false,
+        ),
+      ),
+    );
+    expect(twitchAccounts.oauthToken, 'oauth-abc');
+    expect(twitchAccounts.userLogin, 'user1');
+    expect(twitchAccounts.clientId, 'cid1');
+    expect(twitchSite.oauthToken, 'oauth-abc');
+    expect(twitchSite.userLogin, 'user1');
+    expect(douyuAccounts.cookie, 'acf_uid=1; acf_stk=2',
+        reason: 'twitch apply 不清 douyu 已有借用值');
+    expect(appliedTab, 'ttw');
+    expect(appliedSite, 'twitch');
+    expect(target.detailCalls, 0);
+    expect(target.enters, 0);
+
+    // 未 register 的 tabId 回落 douyin：写抖音 cookie，仍不调 target
+    await c.handleCall(
+      PresenceProtocol.mApplyEnter,
+      PresenceProtocol.encodeApplyEnter(
+        const PresenceApplyEnterCall(
+          tabId: 'unknown',
+          cookie: 'sessionid=zzz',
+          status: <String, Object?>{},
+          reentered: false,
+        ),
+      ),
+    );
+    expect(accounts.loginCookie, 'sessionid=zzz');
+    expect(target.detailCalls, 0, reason: 'unknown tab 无 target 不进场');
+  });
+
+  test('yield/suspended/refresh/onClose：三站借用凭据一并清零', () async {
+    final target = _FakeTarget(_detail('1'));
+    final c = coord({'t1': target});
+
+    void seedAll() {
+      accounts.setBorrowedLoginCookie('sessionid=douyin');
+      douyuAccounts.setBorrowedLoginCookie('acf_uid=1; acf_stk=2');
+      twitchAccounts.setBorrowedLoginCreds({
+        'oauthToken': 'oauth-abc',
+        'userLogin': 'user1',
+        'clientId': 'cid1',
+      });
+    }
+
+    void expectAllCleared(String reason) {
+      expect(accounts.loginCookie, '', reason: reason);
+      expect(douyuAccounts.cookie, '', reason: reason);
+      expect(twitchAccounts.oauthToken, '', reason: reason);
+      expect(twitchAccounts.userLogin, '', reason: reason);
+    }
+
+    // yield 清三站
+    seedAll();
+    await c.handleCall(
+      PresenceProtocol.mApplyYield,
+      PresenceProtocol.encodeTabApply('t1'),
+    );
+    expectAllCleared('yield 清三站借用凭据');
+
+    // suspended 清三站
+    seedAll();
+    await c.handleCall(
+      PresenceProtocol.mApplySuspended,
+      PresenceProtocol.encodeTabApply('t1'),
+    );
+    expectAllCleared('suspended 清三站借用凭据');
+
+    // refreshRemoteTab 先清再 register
+    seedAll();
+    await c.refreshRemoteTab(
+        tabId: 't1', siteId: 'douyu', roomId: '1', shareUrl: '');
+    expectAllCleared('refresh 清三站借用凭据');
+    expect(port.calls.last.$1, PresenceProtocol.mRegister);
+
+    // onClose 清三站
+    seedAll();
+    c.onClose();
+    expectAllCleared('onClose 清三站借用凭据');
   });
 
   test('refreshRemoteTab：先清借用凭据再发 register；register 抛错清理仍生效',

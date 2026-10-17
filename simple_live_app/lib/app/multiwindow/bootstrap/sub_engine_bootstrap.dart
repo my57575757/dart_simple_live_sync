@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
@@ -146,9 +148,19 @@ Future<void> runSubEngine(WindowController self) async {
             resolveTarget: (tabId) => Get.find<RoomControllerRegistry>()
                 .controllerForTabId(tabId),
             accounts: Get.find<DouyinAccountService>(),
+            douyuAccounts: Get.find<DouyuAccountService>(),
+            twitchAccounts: Get.find<TwitchAccountService>(),
           ),
           permanent: true,
         );
+  // 凭据下发后按需重启该站弹幕（douyu/twitch）；按 tabId 解析到控制器
+  presenceCoordinator?.onCredentialsApplied = (tabId, siteId) {
+    final controller =
+        Get.find<RoomControllerRegistry>().controllerForTabId(tabId);
+    if (controller != null) {
+      unawaited(controller.applyBorrowedCredentials(siteId));
+    }
+  };
 
   final store = Get.put<TabStore>(
     TabStore(

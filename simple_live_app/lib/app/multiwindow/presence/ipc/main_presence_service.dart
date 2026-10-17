@@ -4,6 +4,10 @@ import 'package:get/get.dart';
 import 'package:simple_live_app/app/constant.dart';
 import 'package:simple_live_app/app/multiwindow/window/sub_window_port.dart';
 import 'package:simple_live_app/app/multiwindow/window/window_open_service.dart';
+import 'package:simple_live_app/services/bilibili_account_service.dart';
+import 'package:simple_live_app/services/douyu_account_service.dart';
+import 'package:simple_live_app/services/huya_account_service.dart';
+import 'package:simple_live_app/services/twitch_account_service.dart';
 import 'package:simple_live_core/simple_live_core.dart';
 
 import '../douyin_presence_gateway.dart';
@@ -50,6 +54,7 @@ class MainPresenceService extends GetxService
     required WindowOpenService windowOpenService,
     this.accountDetailFetcher,
     this.cookieReader,
+    this.credentialReaderFor,
   }) : _windowOpenService = windowOpenService;
 
   final DouyinPresenceGateway gateway;
@@ -62,6 +67,12 @@ class MainPresenceService extends GetxService
 
   /// 测试接缝：生产为 null，apply 当刻读 DouyinAccountService.loginCookie
   final String Function()? cookieReader;
+
+  /// 测试接缝：生产为 null，非抖音 register 后回推凭据时按 siteId 读
+  /// 对应账号服务。返回值约定：douyu/huya/bilibili → {'cookie': <String>}；
+  /// twitch → {'creds': {oauthToken,userLogin,clientId}}。凭据仅经
+  /// pr_apply_enter 单向下发，不得出现在其他协议/日志。
+  final Map<String, Object?> Function(String siteId)? credentialReaderFor;
 
   /// tabId → windowId 死亡对账索引：pr_register 时建立，pr_release/
   /// pr_batch_release/子窗死亡对账时摘除；claim 仅读取校验，不写索引。
@@ -112,9 +123,16 @@ class MainPresenceService extends GetxService
 
   Future<Object?> _register(Object? arguments) async {
     final call = PresenceProtocol.decodeRegister(arguments);
-    if (call == null || call.siteId != Constant.kDouyin) return false;
+    if (call == null) return false;
     // 索引先于一切（既有改挂语义；迁移在途旧窗迟到消息由归属门天然过滤）
     _tabWindow[call.tabId] = call.windowId;
+
+    // 非抖音：只建死亡对账索引 + 回推凭据（M5）；不进仲裁栈、不建 RemoteTab。
+    // 凭据仅经 pr_apply_enter 单向下发，best-effort 吞错不阻塞 register。
+    if (call.siteId != Constant.kDouyin) {
+      unawaited(_pushBorrowedCredentials(call));
+      return true;
+    }
 
     final handoff = _handoffs[call.tabId];
     if (handoff != null) {
@@ -159,6 +177,71 @@ class MainPresenceService extends GetxService
       }
     }
     return true;
+  }
+
+  /// 非抖音 register 成功后回推一次凭据（M5 Cookie 借用扩展）。
+  /// 载荷：douyu/bili/huya 走 cookie 单串（可 ''）；twitch 走 creds 三键
+  /// （cookie 恒 ''）。status 空 Map、reentered=false——语义退化为「凭据下发」。
+  /// 凭据值只出现在 pr_apply_enter，本方法是唯一出口；异常吞掉不外逸。
+  Future<void> _pushBorrowedCredentials(PresenceRegisterCall call) async {
+    try {
+      final payload = _readBorrowedCredentials(call.siteId);
+      await port.invoke(
+        call.windowId,
+        PresenceProtocol.mApplyEnter,
+        PresenceProtocol.encodeApplyEnter(
+          PresenceApplyEnterCall(
+            tabId: call.tabId,
+            cookie: payload.cookie,
+            creds: payload.creds,
+            status: const <String, Object?>{},
+            reentered: false,
+          ),
+        ),
+      );
+    } catch (_) {
+      // best-effort：子窗不可达/读取失败不影响 register 结果
+    }
+  }
+
+  /// 按 siteId 读当刻凭据；测试经 [credentialReaderFor] 注入，生产直读
+  /// 账号服务字段。返回 (cookie, creds)：twitch 的 cookie 恒 ''。
+  ({String cookie, Map<String, String>? creds}) _readBorrowedCredentials(
+      String siteId) {
+    if (credentialReaderFor != null) {
+      final raw = credentialReaderFor!(siteId);
+      final cookie = raw['cookie'] is String ? raw['cookie'] as String : '';
+      final credsRaw = raw['creds'];
+      final creds = credsRaw is Map
+          ? <String, String>{
+              for (final e in credsRaw.entries)
+                if (e.key is String && e.value is String)
+                  e.key as String: e.value as String,
+            }
+          : null;
+      return (cookie: cookie, creds: creds);
+    }
+    switch (siteId) {
+      case Constant.kDouyu:
+        return (cookie: DouyuAccountService.instance.cookie, creds: null);
+      case Constant.kBiliBili:
+        return (cookie: BiliBiliAccountService.instance.cookie, creds: null);
+      case Constant.kHuya:
+        return (cookie: HuyaAccountService.instance.cookie, creds: null);
+      case Constant.kTwitch:
+        final t = TwitchAccountService.instance;
+        return (
+          cookie: '',
+          creds: {
+            'oauthToken': t.oauthToken,
+            'userLogin': t.userLogin,
+            'clientId':
+                t.clientId.isEmpty ? TwitchSite.kWebClientId : t.clientId,
+          },
+        );
+      default:
+        return (cookie: '', creds: null);
+    }
   }
 
   Future<Object?> _claim(Object? arguments) async {

@@ -366,6 +366,157 @@ void main() {
     );
   });
 
+  test('apply_enter：status 缺失/空默认 {}；creds 可选；cookie 仍必填', () {
+    // status 缺失 → 默认 {}
+    final noStatus = PresenceProtocol.decodeApplyEnter({
+      'tabId': 't1',
+      'cookie': 'c',
+      'reentered': false,
+    })!;
+    expect(noStatus.status, isEmpty);
+    expect(noStatus.creds, isNull);
+    expect(noStatus.cookie, 'c');
+
+    // status 显式空 Map
+    final emptyStatus = PresenceProtocol.decodeApplyEnter({
+      'tabId': 't1',
+      'cookie': 'c',
+      'status': <String, Object?>{},
+      'reentered': false,
+    })!;
+    expect(emptyStatus.status, isEmpty);
+
+    // 带 creds（twitch OAuth 三元组，cookie 恒 ''）
+    final withCreds = PresenceProtocol.decodeApplyEnter({
+      'tabId': 't1',
+      'cookie': '',
+      'creds': {
+        'oauthToken': 'oauth-abc',
+        'userLogin': 'user1',
+        'clientId': 'cid1',
+      },
+      'status': <String, Object?>{},
+      'reentered': false,
+    })!;
+    expect(withCreds.cookie, '');
+    expect(withCreds.creds, {
+      'oauthToken': 'oauth-abc',
+      'userLogin': 'user1',
+      'clientId': 'cid1',
+    });
+
+    // encode：creds 非空才携带
+    final withCredsKeys =
+        (PresenceProtocol.encodeApplyEnter(withCreds) as Map).keys.toSet();
+    expect(withCredsKeys, {'tabId', 'cookie', 'creds', 'status', 'reentered'});
+    final noCredsKeys = (PresenceProtocol.encodeApplyEnter(
+      const PresenceApplyEnterCall(
+        tabId: 't1',
+        cookie: 'c',
+        status: <String, Object?>{},
+        reentered: false,
+      ),
+    ) as Map)
+        .keys
+        .toSet();
+    expect(noCredsKeys, {'tabId', 'cookie', 'status', 'reentered'});
+
+    // cookie 仍必填：缺失 / 非 String 均非法
+    expect(
+      PresenceProtocol.decodeApplyEnter({
+        'tabId': 't1',
+        'status': <String, Object?>{},
+        'reentered': false,
+      }),
+      isNull,
+    );
+    expect(
+      PresenceProtocol.decodeApplyEnter({
+        'tabId': 't1',
+        'cookie': 1,
+        'reentered': false,
+      }),
+      isNull,
+    );
+
+    // creds 类型非法：非 Map / 值非 String / 键非 String
+    expect(
+      PresenceProtocol.decodeApplyEnter({
+        'tabId': 't1',
+        'cookie': '',
+        'creds': 'x',
+        'reentered': false,
+      }),
+      isNull,
+    );
+    expect(
+      PresenceProtocol.decodeApplyEnter({
+        'tabId': 't1',
+        'cookie': '',
+        'creds': {'oauthToken': 1},
+        'reentered': false,
+      }),
+      isNull,
+    );
+    expect(
+      PresenceProtocol.decodeApplyEnter({
+        'tabId': 't1',
+        'cookie': '',
+        'creds': {1: 'x'},
+        'reentered': false,
+      }),
+      isNull,
+    );
+
+    // 空 creds Map：decode 合法，encode 省略该键
+    final emptyCreds = PresenceProtocol.decodeApplyEnter({
+      'tabId': 't1',
+      'cookie': '',
+      'creds': <String, String>{},
+      'reentered': false,
+    })!;
+    expect(emptyCreds.creds, isEmpty);
+    expect(
+      (PresenceProtocol.encodeApplyEnter(emptyCreds) as Map)
+          .containsKey('creds'),
+      isFalse,
+    );
+  });
+
+  test('sanitizeForLog：creds 脱敏为 <creds:Nkeys>，不泄漏 oauthToken 值', () {
+    const token = 'oauth-secret-token-value';
+    final enter = PresenceProtocol.encodeApplyEnter(
+      const PresenceApplyEnterCall(
+        tabId: 't1',
+        cookie: 'sessionid=secretvalue',
+        creds: {
+          'oauthToken': 'oauth-secret-token-value',
+          'userLogin': 'user1',
+          'clientId': 'cid1',
+        },
+        status: <String, Object?>{},
+        reentered: false,
+      ),
+    );
+    final log =
+        PresenceProtocol.sanitizeForLog(PresenceProtocol.mApplyEnter, enter);
+    expect(log, contains('<cookie:21chars>'));
+    expect(log, contains('<creds:3keys>'));
+    expect(log.contains(token), isFalse);
+    expect(log.contains('oauth-secret'), isFalse);
+    expect(log.contains('sessionid=secretvalue'), isFalse);
+    expect(log, contains('"tabId":"t1"'));
+
+    // creds 值非 Map：替换为 <creds:0keys>，序列化不抛
+    final badCredsLog = PresenceProtocol.sanitizeForLog(
+      'x',
+      const <String, Object?>{'creds': 'oauth-secret', 'tabId': 't1'},
+    );
+    expect(badCredsLog, contains('<creds:0keys>'));
+    expect(badCredsLog.contains('oauth-secret'), isFalse);
+    expect(badCredsLog, contains('"tabId":"t1"'));
+  });
+
   test('sanitizeForLog：cookie 脱敏，输出不含原文，非敏感字段正常序列化', () {
     const cookie = 'sessionid=secretvalue';
     final enter = PresenceProtocol.encodeApplyEnter(

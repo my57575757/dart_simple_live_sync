@@ -215,6 +215,8 @@ class PresenceProtocol {
   static Map<String, Object?> encodeApplyEnter(PresenceApplyEnterCall call) => {
         'tabId': call.tabId,
         'cookie': call.cookie,
+        // creds 仅在非空时携带（twitch OAuth 三元组）；cookie 恒带（可为 ''）
+        if (call.creds != null && call.creds!.isNotEmpty) 'creds': call.creds,
         'status': call.status,
         'reentered': call.reentered,
       };
@@ -225,17 +227,32 @@ class PresenceProtocol {
     final cookie = args['cookie'];
     final status = args['status'];
     final reentered = args['reentered'];
-    if (tabId == null ||
-        cookie is! String ||
-        status is! Map ||
-        !status.keys.every((k) => k is String) ||
-        reentered is! bool) {
+    final creds = args['creds'];
+    if (tabId == null || cookie is! String || reentered is! bool) {
       return null;
+    }
+    // status 允许缺失/空 Map（非抖音凭据下发语义）；缺失默认 {}
+    if (status != null &&
+        (status is! Map || !status.keys.every((k) => k is String))) {
+      return null;
+    }
+    // creds 可缺失；存在时必须是 String→String Map
+    if (creds != null) {
+      if (creds is! Map ||
+          !creds.keys.every((k) => k is String) ||
+          !creds.values.every((v) => v is String)) {
+        return null;
+      }
     }
     return PresenceApplyEnterCall(
       tabId: tabId,
       cookie: cookie,
-      status: Map<String, Object?>.from(status),
+      creds: creds is Map
+          ? Map<String, String>.from(creds)
+          : null,
+      status: status is Map
+          ? Map<String, Object?>.from(status)
+          : const <String, Object?>{},
       reentered: reentered,
     );
   }
@@ -295,7 +312,8 @@ class PresenceProtocol {
   }
 
   /// 日志安全序列化：任何层级的 cookie 键替换为 <cookie:Nchars>，
-  /// 调用方必须经此函数打印 pr_ 载荷，严禁直接打印原始 args。
+  /// creds 键整体替换为 <creds:Nkeys>（绝不打值）；调用方必须经此函数
+  /// 打印 pr_ 载荷，严禁直接打印原始 args。
   static String sanitizeForLog(String method, Object? args) {
     Object? scrub(Object? value) {
       if (value is Map) {
@@ -303,7 +321,9 @@ class PresenceProtocol {
           for (final entry in value.entries)
             entry.key.toString(): entry.key == 'cookie'
                 ? '<cookie:${entry.value is String ? (entry.value as String).length : 0}chars>'
-                : scrub(entry.value),
+                : entry.key == 'creds'
+                    ? '<creds:${entry.value is Map ? (entry.value as Map).length : 0}keys>'
+                    : scrub(entry.value),
         };
       }
       if (value is List) return value.map(scrub).toList();
@@ -393,10 +413,17 @@ class PresenceApplyEnterCall {
     required this.cookie,
     required this.status,
     required this.reentered,
+    this.creds,
   });
 
   final String tabId;
+
+  /// 单串凭据：抖音/斗鱼/虎牙/B站（可为 ''）。twitch 恒 ''，走 [creds]。
   final String cookie;
+
+  /// 多键凭据：twitch {oauthToken,userLogin,clientId}；其余站点 null。
+  /// 与 cookie 同级同等敏感，仅在 pr_apply_enter 单向下发。
+  final Map<String, String>? creds;
   final Map<String, Object?> status;
   final bool reentered;
 }

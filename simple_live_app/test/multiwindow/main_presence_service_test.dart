@@ -170,6 +170,7 @@ void main() {
   late DouyinPresenceGateway gateway;
   late MainPresenceService svc;
   late String cookieNow;
+  late Map<String, Map<String, Object?>> siteCreds;
 
   Future<Object?> register(String windowId, String tabId,
           {String siteId = 'douyin', String roomId = '1'}) =>
@@ -215,6 +216,18 @@ void main() {
     );
     windowOpenService.onInit();
     cookieNow = 'sessionid=old';
+    siteCreds = {
+      'douyu': {'cookie': 'acf_uid=1; acf_stk=2'},
+      'bilibili': {'cookie': 'SESSDATA=bili'},
+      'huya': {'cookie': ''},
+      'twitch': {
+        'creds': {
+          'oauthToken': 'oauth-abc',
+          'userLogin': 'user1',
+          'clientId': 'cid1',
+        },
+      },
+    };
     gateway = DouyinPresenceGateway(guard);
     svc = MainPresenceService(
       gateway: gateway,
@@ -226,6 +239,7 @@ void main() {
         return _detail(roomId);
       },
       cookieReader: () => cookieNow,
+      credentialReaderFor: (siteId) => siteCreds[siteId] ?? {'cookie': ''},
     );
     svc.onInit();
   });
@@ -236,14 +250,21 @@ void main() {
     windowOpenService.onClose();
   });
 
-  test('register 只建死亡对账索引：不进栈、零 HTTP、零 invoke；非抖音/坏载荷拒绝',
-      () async {
+  test('register 只建死亡对账索引：不进栈、零 HTTP；坏载荷拒绝', () async {
     expect(await register('w1', 't1'), isTrue);
     expect(guard.ensureAccounts, isEmpty);
     expect(guard.enters, isEmpty);
     expect(port.invokes, isEmpty);
 
-    expect(await register('w1', 'tb', siteId: 'bilibili'), isFalse);
+    // 非抖音 register 同样建索引（M5 放开），并回推凭据 apply_enter
+    expect(await register('w1', 'tb', siteId: 'bilibili'), isTrue);
+    expect(guard.ensureAccounts, isEmpty);
+    expect(guard.enters, isEmpty);
+    await Future<void>.delayed(Duration.zero); // unawaited 回推排空
+    expect(
+      port.invokes.where((i) => i.$2 == PresenceProtocol.mApplyEnter),
+      hasLength(1),
+    );
     expect(await svc.handleCall(PresenceProtocol.mRegister, null), isFalse);
 
     // 未 register 直接 claim：拒绝，不触达网关
@@ -265,6 +286,57 @@ void main() {
       isFalse,
     );
     expect(guard.enters, isEmpty);
+  });
+
+  test('非抖音 register 回推 pr_apply_enter：douyu 走 cookie、twitch 走 creds、载荷无多余字段',
+      () async {
+    // douyu → cookie 单串
+    await register('w1', 'tdy', siteId: 'douyu', roomId: '9');
+    await Future<void>.delayed(Duration.zero);
+    var apply = port.invokes
+        .where((i) => i.$2 == PresenceProtocol.mApplyEnter)
+        .toList();
+    expect(apply, hasLength(1));
+    expect(apply.single.$1, 'w1');
+    var call = PresenceProtocol.decodeApplyEnter(apply.single.$3)!;
+    expect(call.tabId, 'tdy');
+    expect(call.cookie, 'acf_uid=1; acf_stk=2');
+    expect(call.creds, isNull);
+    expect(call.status, isEmpty);
+    expect(call.reentered, isFalse);
+    // 载荷键集合：无 creds、无其他字段
+    final douyuKeys = (apply.single.$3! as Map).keys.toSet();
+    expect(douyuKeys, {'tabId', 'cookie', 'status', 'reentered'});
+
+    // twitch → cookie '' + creds 三键
+    port.invokes.clear();
+    await register('w1', 'ttw', siteId: 'twitch', roomId: '10');
+    await Future<void>.delayed(Duration.zero);
+    apply = port.invokes
+        .where((i) => i.$2 == PresenceProtocol.mApplyEnter)
+        .toList();
+    expect(apply, hasLength(1));
+    call = PresenceProtocol.decodeApplyEnter(apply.single.$3)!;
+    expect(call.tabId, 'ttw');
+    expect(call.cookie, '');
+    expect(call.creds, {
+      'oauthToken': 'oauth-abc',
+      'userLogin': 'user1',
+      'clientId': 'cid1',
+    });
+    expect(call.status, isEmpty);
+    expect(call.reentered, isFalse);
+    final twitchKeys = (apply.single.$3! as Map).keys.toSet();
+    expect(twitchKeys, {'tabId', 'cookie', 'creds', 'status', 'reentered'});
+
+    // 抖音 register 不回推（走 claim→RemotePresenceTab 既有路径）
+    port.invokes.clear();
+    await register('w1', 'tdy2', siteId: 'douyin', roomId: '11');
+    await Future<void>.delayed(Duration.zero);
+    expect(
+      port.invokes.where((i) => i.$2 == PresenceProtocol.mApplyEnter),
+      isEmpty,
+    );
   });
 
   test('远端 claim 成功：进场一次、apply_enter 下行且 cookie 为当刻值', () async {

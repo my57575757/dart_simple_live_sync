@@ -111,6 +111,22 @@ class TwitchAccountService extends GetxService {
     setSite();
   }
 
+  /// 子窗口借用主窗口 OAuth 三元组（M5 presence IPC）。
+  ///
+  /// 纯内存单点：写 service 字段并经 setSite() 同步到 site（TwitchSite.
+  /// getRoomDetail 构造 TwitchDanmakuArgs 读的是 site 字段），不写 KV、
+  /// 不翻转 configured。creds 仅在 pr_apply_enter 载荷里下行一次；
+  /// yield/suspended/子窗关闭/刷新四个失效点立即传 null 清除。
+  /// clientId 缺省回落 TwitchSite.kWebClientId（与 setSite 一致）。
+  void setBorrowedLoginCreds(Map<String, String>? creds) {
+    oauthToken = creds?['oauthToken'] ?? '';
+    userLogin = creds?['userLogin'] ?? '';
+    final cid = creds?['clientId'] ?? '';
+    clientId = cid.isNotEmpty ? cid : TwitchSite.kWebClientId;
+    setSite();
+    // 注意：不碰 configured.value——那是本地登录态，借用不算。
+  }
+
   /// 已保存 Client ID 时直接发起授权，返回 true；否则需先配置
   bool login() {
     if (clientId.isEmpty) {

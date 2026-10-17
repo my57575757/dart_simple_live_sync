@@ -966,6 +966,34 @@ class LiveRoomController extends PlayerController
     await liveDanmaku.start(newArgs);
   }
 
+  /// M5 Task 3：凭据下发后按需重启该站弹幕连接（douyu/twitch）。
+  ///
+  /// 仅 douyu/twitch：bili/huya 写路径走代理（Task 4/5），抖音走 presence
+  /// applyAccountEnter 自带账号弹幕切换。凭据非空且弹幕已随房间详情启动时，
+  /// 按 reloginDouyu 同构路径 stop → getDanmaku() → start(新 args 带凭据)；
+  /// 凭据空则不重启，保持 Guest（发送报 not_login，现有文案）。
+  Future<void> applyBorrowedCredentials(String siteId) async {
+    if (siteId != Constant.kDouyu && siteId != Constant.kTwitch) return;
+    final detailValue = detail.value;
+    if (detailValue == null || !canStartDanmaku(detailValue)) return;
+    if (siteId == Constant.kDouyu) {
+      if (DouyuAccountService.instance.cookie.isEmpty) return;
+      await _restartDouyuDanmaku();
+      return;
+    }
+    if (TwitchAccountService.instance.oauthToken.isEmpty) return;
+    final oldArgs = detailValue.danmakuData;
+    final newArgs = TwitchDanmakuArgs(
+      channel: oldArgs is TwitchDanmakuArgs ? oldArgs.channel : roomId,
+      oauthToken: TwitchAccountService.instance.oauthToken,
+      userLogin: TwitchAccountService.instance.userLogin,
+    );
+    await liveDanmaku.stop();
+    liveDanmaku = site.liveSite.getDanmaku();
+    initDanmau();
+    await liveDanmaku.start(newArgs);
+  }
+
   /// 点赞/送灯牌是否可用：仅抖音、B站，且已配置签名服务并登录
   bool get guardActionEnabled =>
       (GuardServerService.instance.configured &&

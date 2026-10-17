@@ -11,7 +11,9 @@ import 'package:simple_live_app/app/multiwindow/window/window_role.dart';
 import 'package:simple_live_app/app/sites.dart';
 import 'package:simple_live_app/modules/live_room/live_room_controller.dart';
 import 'package:simple_live_app/services/douyin_account_service.dart';
+import 'package:simple_live_app/services/douyu_account_service.dart';
 import 'package:simple_live_app/services/guard_server_service.dart';
+import 'package:simple_live_app/services/twitch_account_service.dart';
 import 'package:simple_live_core/simple_live_core.dart';
 // ignore: depend_on_referenced_packages
 import 'package:wakelock_plus_platform_interface/messages.g.dart' show WakelockPlusApi;
@@ -116,6 +118,8 @@ void main() {
         port: port,
         resolveTarget: (_) => null,
         accounts: Get.find<DouyinAccountService>(),
+        douyuAccounts: DouyuAccountService(),
+        twitchAccounts: TwitchAccountService(),
       ),
       permanent: true,
     );

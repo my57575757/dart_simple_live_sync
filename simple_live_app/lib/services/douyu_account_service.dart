@@ -120,6 +120,17 @@ class DouyuAccountService extends GetxService {
     setSite();
   }
 
+  /// 子窗口借用主窗口登录身份（M5 presence IPC）。
+  ///
+  /// 纯内存单点：只写 cookie 字段并经 setSite() 同步 site.cookie（getRoomDetail
+  /// 构造 DouyuDanmakuArgs 读的是 site.cookie），不写 KV、不翻转 logined/name。
+  /// cookie 仅在 pr_apply_enter 载荷里下行一次；yield/suspended/子窗关闭/刷新
+  /// 四个失效点立即传 null 清除，进程退出即消失。
+  void setBorrowedLoginCookie(String? cookie) {
+    this.cookie = cookie ?? '';
+    setSite();
+  }
+
   /// 同步自其他设备/云端的登录凭据；null 表示对端无此数据，不覆盖本地
   void setSyncedCredential(String? account, String? password) {
     if (account != null) {
