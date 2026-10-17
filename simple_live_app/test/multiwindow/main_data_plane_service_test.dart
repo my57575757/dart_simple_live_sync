@@ -40,6 +40,19 @@ class _FakePort implements SubWindowPort {
   Stream<void> get windowsChanged => const Stream<void>.empty();
 }
 
+class _ThrowingKvBox<T> extends MemoryKvBox<T> {
+  @override
+  Future<void> put(Object key, T value) async =>
+      throw StateError('disk full');
+
+  @override
+  Future<void> delete(Object key) async =>
+      throw StateError('disk full');
+
+  @override
+  Future<int> clear() async => throw StateError('disk full');
+}
+
 void main() {
   late LocalStorageService storage;
   late DBService db;
@@ -431,5 +444,75 @@ void main() {
             DataPlaneProtocol.boxSettings, 'DanmuOpacity', 2));
     await flushReloadTimer();
     expect(reloadCalls, 2, reason: '后续远程写仍能调度 reload');
+  });
+
+  test('落盘异常：六个写方法返回 false 不抛、不扇出、不发关注事件', () async {
+    storage = LocalStorageService()
+      ..settingsBox = _ThrowingKvBox<dynamic>()
+      ..shieldBox = _ThrowingKvBox<String>();
+    Get.put<LocalStorageService>(storage, permanent: true);
+    db = DBService()
+      ..historyBox = MemoryKvBox<History>()
+      ..followBox = _ThrowingKvBox<FollowUser>()
+      ..tagBox = MemoryKvBox<FollowUserTag>()
+      ..volumeBox = _ThrowingKvBox<double>();
+    Get.put<DBService>(db, permanent: true);
+    port = _FakePort();
+    registry = WindowRegistry(mainWindowId: 'main')
+      ..registerChild('w1', {'a'});
+    final events = <Object?>[];
+    final sub = EventBus.instance
+        .listen(Constant.kUpdateFollow, (p0) => events.add(p0));
+    addTearDown(sub.cancel);
+    svc = MainDataPlaneService(
+      port: port,
+      registry: registry,
+      storage: storage,
+      db: db,
+      onSettingsChanged: () {},
+    );
+    svc.onInit();
+
+    final follow = FollowUser(
+      id: 'bilibili_3',
+      roomId: '3',
+      siteId: 'bilibili',
+      userName: 'u',
+      face: '',
+      addTime: DateTime(2026),
+      shareUrl: 'http://3',
+    );
+    expect(
+        await call(
+            DataPlaneProtocol.mKvSet,
+            DataPlaneProtocol.kvSet(
+                DataPlaneProtocol.boxSettings, 'DanmuSize', 1)),
+        isFalse);
+    expect(
+        await call(
+            DataPlaneProtocol.mKvDelete,
+            DataPlaneProtocol.kvDelete(
+                DataPlaneProtocol.boxSettings, 'DanmuSize')),
+        isFalse);
+    expect(
+        await call(
+            DataPlaneProtocol.mKvClear,
+            DataPlaneProtocol.kvClear(DataPlaneProtocol.boxShield)),
+        isFalse);
+    expect(
+        await call(DataPlaneProtocol.mVolumeSet,
+            DataPlaneProtocol.volumeSet('huya_9', 42)),
+        isFalse);
+    expect(
+        await call(DataPlaneProtocol.mFollowSet,
+            DataPlaneProtocol.followSet(follow.toJson())),
+        isFalse);
+    expect(
+        await call(DataPlaneProtocol.mFollowRemove,
+            DataPlaneProtocol.followRemove('bilibili_3')),
+        isFalse);
+    expect(changedCalls(), isEmpty, reason: '落盘失败不扇出');
+    await Future<void>.delayed(Duration.zero);
+    expect(events, isEmpty, reason: '落盘失败不发关注更新事件');
   });
 }

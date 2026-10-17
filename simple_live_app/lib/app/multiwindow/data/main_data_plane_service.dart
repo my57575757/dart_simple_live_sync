@@ -138,6 +138,18 @@ class MainDataPlaneService extends GetxService {
     }
   }
 
+  /// 落盘失败统一回执 false：Hive 写异常不得经 method channel 逸出，
+  /// 否则子端乐观态与主端不一致且收不到失败回执。
+  Future<bool> _guardedWrite(Future<void> Function() action) async {
+    try {
+      await action();
+      return true;
+    } catch (e) {
+      Log.d('数据面落盘失败：$e');
+      return false;
+    }
+  }
+
   /// 主窗 method handler 入口（onInit 挂到 mainController；测试直接调）
   Future<Object?> handleCall(String method, Object? arguments) async {
     switch (method) {
@@ -153,14 +165,13 @@ class MainDataPlaneService extends GetxService {
           Log.d('数据面拒绝敏感键写穿：${w.key}');
           return false;
         }
-        await _withRemoteFlag(() async {
-          if (w.box == DataPlaneProtocol.boxShield) {
-            await storage.shieldBox.put(w.key, w.value as String);
-          } else {
-            await storage.settingsBox.put(w.key, w.value);
-          }
-        });
-        return true;
+        return _guardedWrite(() => _withRemoteFlag(() async {
+              if (w.box == DataPlaneProtocol.boxShield) {
+                await storage.shieldBox.put(w.key, w.value as String);
+              } else {
+                await storage.settingsBox.put(w.key, w.value);
+              }
+            }));
 
       case DataPlaneProtocol.mKvDelete:
         final w = DataPlaneProtocol.decodeKvDelete(arguments);
@@ -171,8 +182,8 @@ class MainDataPlaneService extends GetxService {
           Log.d('数据面拒绝敏感键删除：${w.key}');
           return false;
         }
-        await _withRemoteFlag(() => _kvBox(w.box).delete(w.key));
-        return true;
+        return _guardedWrite(
+            () => _withRemoteFlag(() => _kvBox(w.box).delete(w.key)));
 
       case DataPlaneProtocol.mKvClear:
         final boxName = DataPlaneProtocol.kvBoxOf(arguments);
@@ -185,17 +196,20 @@ class MainDataPlaneService extends GetxService {
           return false;
         }
         const kind = DataPlaneProtocol.kindShield;
-        _suppressed.add(kind);
-        try {
-          await _kvBox(boxName).clear();
-          // Hive BoxBaseImpl.clear 先 await backend 后同步 keystore.notify，
-          // 逐 key 事件经 async broadcast 以 microtask 链式重排，而 await 链
-          // 同步坍缩会使 finally 早于它们执行；排空一个事件轮次再解除抑制。
-          // MemoryKvBox 为 sync 广播，此处空等。
-          await Future<void>.delayed(Duration.zero);
-        } finally {
-          _suppressed.remove(kind);
-        }
+        final ok = await _guardedWrite(() async {
+          _suppressed.add(kind);
+          try {
+            await _kvBox(boxName).clear();
+            // Hive BoxBaseImpl.clear 先 await backend 后同步 keystore.notify，
+            // 逐 key 事件经 async broadcast 以 microtask 链式重排，而 await 链
+            // 同步坍缩会使 finally 早于它们执行；排空一个事件轮次再解除抑制。
+            // MemoryKvBox 为 sync 广播，此处空等。
+            await Future<void>.delayed(Duration.zero);
+          } finally {
+            _suppressed.remove(kind);
+          }
+        });
+        if (!ok) return false;
         _fanout(DataPlaneProtocol.changed(kind: kind, key: '', clear: true));
         _scheduleReload();
         return true;
@@ -205,9 +219,8 @@ class MainDataPlaneService extends GetxService {
         final key = arguments['key'];
         final value = arguments['value'];
         if (key is! String || value is! num) return false;
-        await _withRemoteFlag(
-            () => db.addOrUpdateVolume(key, value.toDouble()));
-        return true;
+        return _guardedWrite(() => _withRemoteFlag(
+            () => db.addOrUpdateVolume(key, value.toDouble())));
 
       case DataPlaneProtocol.mFollowSet:
         final FollowUser follow;
@@ -219,14 +232,18 @@ class MainDataPlaneService extends GetxService {
           Log.d('dp_follow_set 载荷解析失败：$e');
           return false;
         }
-        await _withRemoteFlag(() => db.addFollow(follow));
+        final setOk = await _guardedWrite(
+            () => _withRemoteFlag(() => db.addFollow(follow)));
+        if (!setOk) return false;
         EventBus.instance.emit(Constant.kUpdateFollow, follow.id);
         return true;
 
       case DataPlaneProtocol.mFollowRemove:
         if (arguments is! Map || arguments['key'] is! String) return false;
         final key = arguments['key'] as String;
-        await _withRemoteFlag(() => db.deleteFollow(key));
+        final removeOk = await _guardedWrite(
+            () => _withRemoteFlag(() => db.deleteFollow(key)));
+        if (!removeOk) return false;
         EventBus.instance.emit(Constant.kUpdateFollow, key);
         return true;
 
