@@ -1,0 +1,247 @@
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:get/get.dart';
+import 'package:simple_live_app/app/constant.dart';
+import 'package:simple_live_app/app/multiwindow/presence/ipc/ipc_presence_coordinator.dart';
+import 'package:simple_live_app/app/multiwindow/presence/ipc/presence_protocol.dart';
+import 'package:simple_live_app/app/multiwindow/presence/ipc/sub_presence_port.dart';
+import 'package:simple_live_app/app/multiwindow/window/window_role.dart';
+import 'package:simple_live_app/app/sites.dart';
+import 'package:simple_live_app/modules/live_room/live_room_controller.dart';
+import 'package:simple_live_app/services/douyin_account_service.dart';
+import 'package:simple_live_app/services/guard_server_service.dart';
+import 'package:simple_live_core/simple_live_core.dart';
+
+class _FakeDanmaku extends LiveDanmaku {
+  @override
+  Future<void> start(dynamic args) async {}
+  @override
+  Future<void> stop() async {}
+  @override
+  Future<DanmakuSendResult> sendMessage(String message) async =>
+      DanmakuSendResult(success: true);
+}
+
+class _Site extends DouyinSite {
+  final _FakeDanmaku danmaku = _FakeDanmaku();
+  @override
+  LiveDanmaku getDanmaku() => danmaku;
+  LiveRoomDetail guestDetail() => LiveRoomDetail(
+        roomId: '111',
+        title: 't',
+        cover: '',
+        userName: 'u',
+        userAvatar: '',
+        online: 1,
+        status: true,
+        url: 'https://live.douyin.com/111',
+        // 注：brief 原文写 const，但 simple_live_core 的 DouyinDanmakuArgs
+        // 构造非 const（既有同类测试亦无 const），去掉 const 方可编译
+        danmakuData: DouyinDanmakuArgs(
+          webRid: '111',
+          roomId: 'room_111',
+          userId: 'uid',
+          cookie: 'ttwid=guest',
+        ),
+      );
+  @override
+  Future<LiveRoomDetail> getRoomDetail({
+    required String roomId,
+    bool asAccount = false,
+  }) async =>
+      guestDetail();
+}
+
+class _Guard extends GuardServerService {
+  @override
+  // ignore: must_call_super
+  void onInit() {}
+  @override
+  bool get configured => false;
+}
+
+class _LoggedOutAccount extends DouyinAccountService {
+  @override
+  RxBool get logined => false.obs;
+  @override
+  // ignore: must_call_super
+  void onInit() {}
+}
+
+class _FakePort implements SubPresencePort {
+  final List<(String, Object?)> calls = [];
+  Object? claimResult;
+  @override
+  Future<Object?> invokeMain(String method, [Object? arguments]) async {
+    calls.add((method, arguments));
+    if (method == PresenceProtocol.mClaim) {
+      return claimResult ?? PresenceProtocol.encodeClaimOk();
+    }
+    return null;
+  }
+}
+
+void main() {
+  setUp(() {
+    MultiWindowRole.isSubWindow = true;
+  });
+
+  tearDown(() {
+    MultiWindowRole.isSubWindow = false;
+    Get.reset();
+  });
+
+  LiveRoomController makeController({String tabId = 't1'}) {
+    final site = _Site();
+    final c = LiveRoomController(
+      pSite: Site(id: Constant.kDouyin, name: '抖音', logo: '', liveSite: site),
+      pRoomId: '111',
+      pShareUrl: 'https://live.douyin.com/111',
+      tabId: tabId,
+    );
+    c.detail.value = site.guestDetail();
+    return c;
+  }
+
+  IpcPresenceCoordinator putCoordinator(_FakePort port) {
+    Get.put<GuardServerService>(_Guard(), permanent: true);
+    Get.put<DouyinAccountService>(_LoggedOutAccount(), permanent: true);
+    return Get.put<IpcPresenceCoordinator>(
+      IpcPresenceCoordinator(
+        windowId: 'w1',
+        port: port,
+        resolveTarget: (_) => null,
+        accounts: Get.find<DouyinAccountService>(),
+      ),
+      permanent: true,
+    );
+  }
+
+  test('子窗绑定：pr_register 建索引；enterAsAccount 跳过本地登录门走 IPC claim',
+      () async {
+    final port = _FakePort();
+    putCoordinator(port);
+    final c = makeController();
+
+    expect(c.bindSubWindowPresence(), isTrue);
+    // register 为 unawaited best-effort，排空一轮微任务
+    await Future<void>.delayed(Duration.zero);
+
+    final register =
+        PresenceProtocol.decodeRegister(port.calls.first.$2)!;
+    expect(register.windowId, 'w1');
+    expect(register.tabId, 't1');
+    expect(register.siteId, Constant.kDouyin);
+    expect(register.roomId, '111');
+    expect(register.shareUrl, 'https://live.douyin.com/111');
+
+    // 本地抖音登录态恒 false：子窗必须跳过 danmakuLogined 门直接 claim；
+    // granted 后乐观置 account（不依赖主端 apply 回调）
+    expect(await c.enterAsAccount(), isTrue);
+    expect(c.presence.value, RoomPresence.account);
+
+    final claimCall = PresenceProtocol.decodeClaim(
+      port.calls.firstWhere((c) => c.$1 == PresenceProtocol.mClaim).$2,
+    )!;
+    expect(claimCall.windowId, 'w1');
+    expect(claimCall.tabId, 't1');
+    expect(claimCall.roomId, '111');
+    expect(claimCall.shareUrl, 'https://live.douyin.com/111');
+    expect(claimCall.guardRoomId, 'room_111',
+        reason: 'guard 参数 claim 当刻从详情读取');
+    expect(claimCall.guardWebRid, '111');
+  });
+
+  testWidgets('子窗入口收口：输入与全屏回车只 toast；登录提示为单确认框不导航',
+      (tester) async {
+    putCoordinator(_FakePort());
+    await tester.pumpWidget(
+      GetMaterialApp(
+        navigatorObservers: [FlutterSmartDialog.observer],
+        builder: FlutterSmartDialog.init(),
+        home: const Scaffold(body: SizedBox()),
+      ),
+    );
+    final c = makeController();
+
+    await c.showDanmakuInputDialog();
+    await tester.pump();
+    expect(Get.isDialogOpen, isNot(true), reason: '不弹输入框/登录框');
+    expect(find.text('请在主窗口发送弹幕'), findsOneWidget,
+        reason: '输入按钮入口被 toast 拦截');
+
+    // smart_dialog normal toast 为串行队列：第二次 showToast 只排队不入栈
+    // （取证：flutter_smart_dialog 4.9.8+10 custom_toast.dart normalToast
+    // 中 toastQueue.length>1 直接 return），brief 原断言 findsNWidgets(2)
+    // 不可能成立；故先排空当前 toast，再独立验证全屏回车入口。
+    //
+    // 注意 dismiss 不能在 pump 之前 await：CustomToast.dismiss 内部是
+    // `await Future.delayed(animationTime=200ms); await delayed(50ms)`
+    // （custom_toast.dart dismiss），FakeAsync 下先 await 会死锁；
+    // 持 Future、推进帧/时间后再 await。
+    final dismissToast = SmartDialog.dismiss(status: SmartStatus.toast);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.pump();
+    await dismissToast;
+    expect(find.text('请在主窗口发送弹幕'), findsNothing,
+        reason: '旧 toast 已排空');
+
+    c.fullScreenState.value = true;
+    c.handleKeyboardKey(const KeyDownEvent(
+      logicalKey: LogicalKeyboardKey.enter,
+      physicalKey: PhysicalKeyboardKey.enter,
+      // Flutter 3.47 的 KeyDownEvent 要求 timeStamp（brief 写作时缺省）
+      timeStamp: Duration.zero,
+    ));
+    await tester.pump();
+    expect(Get.isDialogOpen, isNot(true));
+    expect(find.text('请在主窗口发送弹幕'), findsOneWidget,
+        reason: '全屏回车入口同样只 toast，不弹输入框/登录框');
+
+    // 不能先 await 再 pump：showDanmakuLoginDialog 内部 await Get.dialog 的
+    // 回执 Future，testWidgets 里先 await 会在首帧前挂起，tap 永远排不上 →
+    // 10 分钟超时（已实测）。先持 Future、泵帧渲染、断言、点确定，最后再 await。
+    final loginDialog = c.showDanmakuLoginDialog();
+    await tester.pump();
+    expect(
+      find.text('子窗口借用主窗口的登录身份，请在主窗口登录抖音并配置弹幕签名服务'),
+      findsOneWidget,
+    );
+    expect(find.byType(TextButton), findsOneWidget,
+        reason: '单确认键，无取消键、不导航账号管理');
+    expect(find.text('登录后才能发送弹幕，是否前往账号管理？'), findsNothing);
+    await tester.tap(find.text('确定'));
+    await tester.pump();
+    expect(Get.isDialogOpen, isNot(true));
+    await loginDialog;
+
+    // 排空 SmartDialog toast 全部残留 Timer：dismiss(status: toast) 走非
+    // closeAll 路径，不取消 2000ms 展示 Timer（toast_tool.dart dismiss
+    // 仅首条出队）；200ms+50ms dismiss 延迟、post-frame 续体与 100ms
+    // interval 都靠后续帧/时间推进，最后再补帧+200ms 兜底，确保无 pending timer。
+    final dismissEnd = SmartDialog.dismiss(status: SmartStatus.toast);
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 3));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 200));
+    await dismissEnd;
+  });
+
+  test('guardActionEnabled 子窗抖音恒可见；非子窗不绑定 IPC 通道', () {
+    final port = _FakePort();
+    putCoordinator(port);
+    final c = makeController();
+
+    expect(c.guardActionEnabled, isTrue,
+        reason: '子窗抖音未登录、guard 未配置仍恒可见');
+
+    MultiWindowRole.isSubWindow = false;
+    expect(c.guardActionEnabled, isFalse);
+    expect(c.bindSubWindowPresence(), isFalse,
+        reason: '非子窗不绑定 IPC presence 通道');
+    expect(port.calls, isEmpty);
+  });
+}

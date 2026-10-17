@@ -17,11 +17,13 @@ import 'package:simple_live_app/app/controller/app_settings_controller.dart';
 import 'package:simple_live_app/app/event_bus.dart';
 import 'package:simple_live_app/app/log.dart';
 import 'package:simple_live_app/app/multiwindow/presence/douyin_presence_gateway.dart';
+import 'package:simple_live_app/app/multiwindow/presence/ipc/ipc_presence_coordinator.dart';
 import 'package:simple_live_app/app/multiwindow/presence/ipc/presence_apply_target.dart';
 import 'package:simple_live_app/app/multiwindow/presence/local_presence_client.dart';
 import 'package:simple_live_app/app/multiwindow/presence/presence_claimant.dart';
 import 'package:simple_live_app/app/multiwindow/presence/presence_client.dart';
 import 'package:simple_live_app/app/multiwindow/shell/tab_store.dart';
+import 'package:simple_live_app/app/multiwindow/window/window_role.dart';
 import 'package:simple_live_app/app/sites.dart';
 import 'package:simple_live_app/app/utils.dart';
 import 'package:simple_live_app/models/db/follow_user.dart';
@@ -199,6 +201,47 @@ class LiveRoomController extends PlayerController
     _presenceClient = client;
   }
 
+  /// 子窗弹幕发送 UI 本里程碑不开放（通道已铺好，输入 UI 留 M5）
+  bool get _isSubWindow =>
+      Platform.isWindows && MultiWindowRole.isSubWindow;
+
+  /// 子窗抖音标签：借用主窗登录身份参与 presence
+  bool get _isSubWindowDouyin =>
+      _isSubWindow && site.id == Constant.kDouyin;
+
+  /// 子引擎 presence 接线入口（onInit 与测试共用）：向主端登记死亡对账
+  /// 索引并持有 per-tab IPC client。返回 true 表示已走子端通道，
+  /// 调用方不再尝试本地网关绑定（子引擎不注册网关）。
+  bool bindSubWindowPresence() {
+    if (!_isSubWindowDouyin ||
+        tabId == null ||
+        !Get.isRegistered<IpcPresenceCoordinator>()) {
+      return false;
+    }
+    final coordinator = Get.find<IpcPresenceCoordinator>();
+    // best-effort：主窗不可达不阻塞子端进房（主窗关闭=整个应用退出）
+    unawaited(coordinator.registerRemoteTab(
+      tabId: tabId!,
+      siteId: site.id,
+      roomId: roomId,
+      shareUrl: shareUrl,
+    ));
+    _presenceClient = coordinator.clientForTab(
+      tabId: tabId!,
+      args: presenceClaimArgs,
+    );
+    return true;
+  }
+
+  /// claim 当刻读取的进房参数：guard 房间标识随游客详情刷新可能变化
+  PresenceClaimArgs presenceClaimArgs() => PresenceClaimArgs(
+        roomId: roomId,
+        shareUrl: shareUrl,
+        guardRoomId: _guardRoomId,
+        guardWebRid: _guardWebRid,
+        guardExtra: Map<String, Object?>.from(_guardExtraArgs()),
+      );
+
   @visibleForTesting
   void stopGuardHeartbeatForTesting() => _stopGuardHeartbeat();
 
@@ -246,9 +289,12 @@ class LiveRoomController extends PlayerController
       await player.pause();
     });
 
-    final gateway = _resolveGateway();
-    if (gateway != null) {
-      bindPresenceGateway(gateway);
+    // 子引擎抖音标签绑 IPC presence 通道；主窗/Android 维持本地网关直连
+    if (!bindSubWindowPresence()) {
+      final gateway = _resolveGateway();
+      if (gateway != null) {
+        bindPresenceGateway(gateway);
+      }
     }
 
     super.onInit();
@@ -472,7 +518,8 @@ class LiveRoomController extends PlayerController
     if (presence.value == RoomPresence.account) return true;
     final inFlight = _enteringFuture;
     if (inFlight != null) return inFlight;
-    if (!danmakuLogined) {
+    // 子窗抖音本地恒未登录：借用主窗身份直接 claim，失败文案由回执承接
+    if (!danmakuLogined && !_isSubWindowDouyin) {
       await showDanmakuLoginDialog();
       return false;
     }
@@ -876,9 +923,10 @@ class LiveRoomController extends PlayerController
 
   /// 点赞/送灯牌是否可用：仅抖音、B站，且已配置签名服务并登录
   bool get guardActionEnabled =>
-      GuardServerService.instance.configured &&
-      (site.id == "douyin" || site.id == "bilibili") &&
-      danmakuLogined;
+      (GuardServerService.instance.configured &&
+          (site.id == "douyin" || site.id == "bilibili") &&
+          danmakuLogined) ||
+      _isSubWindowDouyin;
 
   final sendingAction = false.obs;
 
@@ -1251,6 +1299,10 @@ class LiveRoomController extends PlayerController
         !smallWindowState.value &&
         (event.logicalKey == LogicalKeyboardKey.enter ||
             event.logicalKey == LogicalKeyboardKey.numpadEnter)) {
+      if (_isSubWindow) {
+        SmartDialog.showToast('请在主窗口发送弹幕');
+        return;
+      }
       showDanmakuInputDialog();
       return;
     }
@@ -1259,6 +1311,10 @@ class LiveRoomController extends PlayerController
 
   /// 弹幕输入对话框；全屏键盘回车与控制栏按钮共用
   Future<void> showDanmakuInputDialog() async {
+    if (_isSubWindow) {
+      SmartDialog.showToast('请在主窗口发送弹幕');
+      return;
+    }
     if (!danmakuLogined) {
       await showDanmakuLoginDialog();
       playerFocusNode.requestFocus();
@@ -1341,6 +1397,14 @@ class LiveRoomController extends PlayerController
 
   /// 未登录时弹确认框，确认后前往账号管理
   Future<void> showDanmakuLoginDialog() async {
+    if (_isSubWindowDouyin) {
+      // 子窗不提供登录入口、不导航账号管理（spec §6.6.2）
+      await Utils.showMessageDialog(
+        '子窗口借用主窗口的登录身份，请在主窗口登录抖音并配置弹幕签名服务',
+        title: '未登录',
+      );
+      return;
+    }
     var result = await Utils.showAlertDialog(
       "登录后才能发送弹幕，是否前往账号管理？",
       title: "未登录",
