@@ -1309,11 +1309,18 @@ class DouyinPresenceGateway extends GetxService {
       } on DioException catch (e) {
         if (e.response?.statusCode == 404) {
           // 服务端会话丢失：reregister 一次。成功且仍为 holder → 同步
-          // accountId 缓存并重挂心跳；失败/已不持有 → suspended 收口，
+          // accountId 缓存并重挂心跳；失败且仍持有 → suspended 收口，
           // 不再让 Timer 空转（spec §6.3，替代 M3 只记日志的旧行为）。
+          // beat 不经 _serialized：reregister 的 await 期间 holder 可能
+          // 已切换，任何收口前必须复检持有权，否则 _suspend 会误取消
+          // 新 holder 的心跳 Timer。
           try {
             final newId = await _guard.reregister(Constant.kDouyin);
-            if (newId != null && arbiter.holder == tab.tabId) {
+            if (arbiter.holder != tab.tabId) {
+              // 在途期间已让位：新 holder 自带心跳，旧拍直接放弃
+              return;
+            }
+            if (newId != null) {
               _accountIds[tab.tabId] = newId;
               _startHeartbeat(tab, newId);
             } else {
@@ -1321,7 +1328,9 @@ class DouyinPresenceGateway extends GetxService {
             }
           } catch (e2) {
             Log.logPrint('弹幕服务心跳重注册失败: $e2');
-            await _suspend(tab);
+            if (arbiter.holder == tab.tabId) {
+              await _suspend(tab);
+            }
           }
           return;
         }
@@ -1425,6 +1434,9 @@ class FakeTab implements DouyinPresenceTab {
 
   bool reregisterReturnNull = false;
   bool enterAlways500 = false;
+
+  /// 非 null 时 reregister 进入即等待，造重注册在途期间 holder 切换
+  Completer<String?>? reregisterEnterGate;
 ```
 
 `reregister` 改为：
@@ -1433,6 +1445,10 @@ class FakeTab implements DouyinPresenceTab {
   @override
   Future<String?> reregister(String platform) async {
     reregisters.add(platform);
+    final gate = reregisterEnterGate;
+    if (gate != null) {
+      await gate.future;
+    }
     if (reregisterReturnNull) return null;
     return 'acct2';
   }
@@ -1565,6 +1581,53 @@ class FakeTab implements DouyinPresenceTab {
       });
     });
 
+    test('心跳 404 reregister 在途换 holder：旧拍放弃，新 holder 心跳不受影响',
+        () {
+      FakeAsync().run((async) {
+        final guard = FakeGuard()
+          ..heartbeatThrowOnce = DioException(
+            requestOptions: RequestOptions(path: '/api/room/heartbeat'),
+            response: Response<dynamic>(
+              requestOptions: RequestOptions(path: '/api/room/heartbeat'),
+              statusCode: 404,
+            ),
+          )
+          ..reregisterReturnNull = true;
+        final gw = DouyinPresenceGateway(
+          guard,
+          heartbeatInterval: const Duration(milliseconds: 100),
+        );
+        final a = FakeTab('A', '111');
+        final b = FakeTab('B', '222');
+        final gate = Completer<String?>();
+        guard.reregisterEnterGate = gate;
+
+        gw.claim(a);
+        async.flushMicrotasks();
+        async.elapse(const Duration(milliseconds: 150)); // A 首拍 404 挂在 reregister
+        async.flushMicrotasks();
+        expect(guard.reregisters, [Constant.kDouyin]);
+
+        gw.claim(b); // reregister 在途时经真实网关抢占
+        async.flushMicrotasks();
+        async.flushMicrotasks(); // B 进场成功并挂自己的心跳
+        expect(gw.holderTabId, 'B');
+
+        gate.complete(null); // 旧拍 reregister 完成（返回 null）
+        async.flushMicrotasks();
+        expect(a.suspended, 0, reason: '旧 holder 已让位，不得再 suspend A');
+
+        final beatsAfterGate = guard.beats.length;
+        async.elapse(const Duration(milliseconds: 100));
+        expect(guard.beats.length, greaterThan(beatsAfterGate),
+            reason: 'B 的续租必须继续，heartbeat 记录应增长');
+        expect(guard.beats.last, 'acct1@room_222', reason: '续租打在 B 的房间');
+        expect(async.periodicTimerCount, 1, reason: '仅 B 的一个心跳 Timer');
+        guard.reregisterEnterGate = null;
+        gw.stopHeartbeatForTesting();
+      });
+    });
+
     test('#7 新 holder 进房在途被关：不 yield 旧 holder，由排队 release reenter',
         () {
       FakeAsync().run((async) {
@@ -1619,6 +1682,8 @@ class FakeTab implements DouyinPresenceTab {
         async.flushMicrotasks();
         expect(gw.holderTabId, isNull);
         expect(guard.exits, isEmpty, reason: 'detach 不发 exit');
+        expect(async.periodicTimerCount, 0,
+            reason: '唯一持有者 detach 后 periodic Timer 必须取消');
 
         final beats = guard.beats.length;
         async.elapse(const Duration(milliseconds: 300));
@@ -1651,7 +1716,7 @@ class FakeTab implements DouyinPresenceTab {
 
 Run（cwd=simple_live_app）：
 - `C:/tools/flutter347/flutter/bin/flutter.bat analyze` → 相对基线零新增；特别确认无 `PresenceClaimResult.detailFailed`/`gw.dispose`/`void applySuspended` 残留（grep 三项应零命中）。
-- `C:/tools/flutter347/flutter/bin/flutter.bat test` → 全绿（基线 + Task 1 + 本任务新增 7 例：notLoggedIn、enterFailed、#4、#5、#6、#7、心跳-suspended）。
+- `C:/tools/flutter347/flutter/bin/flutter.bat test` → 全绿（基线 + Task 1 + 本任务新增 8 例：notLoggedIn、enterFailed、#4、#5、#6、#7、心跳-suspended、心跳 404 reregister 在途换 holder 竞态）。
 - `C:/tools/flutter347/flutter/bin/flutter.bat build windows --debug` → 成功（app_pages 接线改动）。
 
 - [ ] **Step 14: Commit**
