@@ -327,6 +327,7 @@ void main() {
     final c = coord(<String, PresenceApplyTarget>{});
     final client = c.clientForTab(
       tabId: 't1',
+      siteId: 'douyin',
       args: () => args(guardRoomId: guardRoomId),
     );
 
@@ -379,7 +380,7 @@ void main() {
     await expectLater(client.release(), completes);
     port.throwing.clear();
 
-    final client2 = c.clientForTab(tabId: 't2', args: args);
+    final client2 = c.clientForTab(tabId: 't2', siteId: 'douyin', args: args);
     await client2.detach();
     expect(port.calls.last.$1, PresenceProtocol.mDetach);
   });
@@ -387,7 +388,7 @@ void main() {
   test('guard_send 载荷/结果往返；IPC 失败码与文案；register/batch/onClose',
       () async {
     final c = coord(<String, PresenceApplyTarget>{});
-    final client = c.clientForTab(tabId: 't1', args: args);
+    final client = c.clientForTab(tabId: 't1', siteId: 'bilibili', args: args);
 
     final ok = await client.sendDanmaku('hi');
     expect(ok.success, isTrue);
@@ -396,11 +397,37 @@ void main() {
     expect(send.tabId, 't1');
     expect(send.kind, PresenceProtocol.kDanmaku);
     expect(send.content, 'hi');
+    // 写动作载荷固化 siteId，房间参数每次 send 当刻读 args()
+    expect(send.siteId, 'bilibili');
+    expect(send.roomId, 'room_1', reason: 'roomId 取 guardRoomId');
+    expect(send.webRid, '1');
+    expect(send.extra, {'k': 'v'});
 
     await client.sendAction('like');
     send = PresenceProtocol.decodeGuardSend(port.calls.last.$2)!;
     expect(send.kind, PresenceProtocol.kAction);
     expect(send.action, 'like');
+    expect(send.siteId, 'bilibili');
+    expect(send.roomId, 'room_1');
+
+    // guardExtra 空 map 可省；args 当刻值在下次 send 生效
+    final bare = c.clientForTab(
+      tabId: 'tB',
+      siteId: 'huya',
+      args: () => const PresenceClaimArgs(
+        roomId: '2',
+        shareUrl: '',
+        guardRoomId: '',
+        guardWebRid: '',
+        guardExtra: <String, Object?>{},
+      ),
+    );
+    await bare.sendDanmaku('z');
+    final bareSend = PresenceProtocol.decodeGuardSend(port.calls.last.$2)!;
+    expect(bareSend.siteId, 'huya');
+    expect(bareSend.roomId, isNull);
+    expect(bareSend.webRid, isNull);
+    expect(bareSend.extra, isNull);
 
     port.throwing.add(PresenceProtocol.mGuardSend);
     var failed = await client.sendDanmaku('x');

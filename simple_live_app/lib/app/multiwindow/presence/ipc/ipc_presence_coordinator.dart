@@ -127,13 +127,16 @@ class IpcPresenceCoordinator extends GetxService
 
   /// 控制器持有的 per-tab presence 客户端；guard 参数每次 claim 当刻
   /// 经 [args] 读取（游客详情刷新后 roomId/webRid 可能变化）。
+  /// [siteId] 构造时固化（claim 语义与站点解耦），写动作 encode 时带上。
   PresenceClient clientForTab({
     required String tabId,
+    required String siteId,
     required PresenceClaimArgs Function() args,
   }) =>
       _IpcPresenceClient(
         windowId: windowId,
         tabId: tabId,
+        siteId: siteId,
         args: args,
         port: _port,
       );
@@ -251,12 +254,14 @@ class _IpcPresenceClient implements PresenceClient {
   _IpcPresenceClient({
     required this.windowId,
     required this.tabId,
+    required this.siteId,
     required this.args,
     required this.port,
   });
 
   final String windowId;
   final String tabId;
+  final String siteId;
   final PresenceClaimArgs Function() args;
   final SubPresencePort port;
 
@@ -336,6 +341,7 @@ class _IpcPresenceClient implements PresenceClient {
     String? action,
   }) async {
     try {
+      final a = args();
       final raw = await port.invokeMain(
         PresenceProtocol.mGuardSend,
         PresenceProtocol.encodeGuardSend(
@@ -345,6 +351,10 @@ class _IpcPresenceClient implements PresenceClient {
             kind: kind,
             content: content,
             action: action,
+            siteId: siteId,
+            roomId: a.guardRoomId,
+            webRid: a.guardWebRid,
+            extra: a.guardExtra.isEmpty ? null : a.guardExtra,
           ),
         ),
       );

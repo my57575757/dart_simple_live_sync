@@ -178,6 +178,15 @@ class PresenceProtocol {
         'kind': call.kind,
         if (call.content != null) 'content': call.content,
         if (call.action != null) 'action': call.action,
+        // 房间标识仅公开参数（siteId/roomId/webRid/extra），非空时携带；
+        // 缺省/空 = 抖音走网关。严禁在此放入任何凭据字段。
+        if (call.siteId != null && call.siteId!.isNotEmpty)
+          'siteId': call.siteId,
+        if (call.roomId != null && call.roomId!.isNotEmpty)
+          'roomId': call.roomId,
+        if (call.webRid != null && call.webRid!.isNotEmpty)
+          'webRid': call.webRid,
+        if (call.extra != null && call.extra!.isNotEmpty) 'extra': call.extra,
       };
 
   static PresenceGuardSendCall? decodeGuardSend(Object? args) {
@@ -190,6 +199,18 @@ class PresenceProtocol {
         (kind != kDanmaku && kind != kAction)) {
       return null;
     }
+    // 新增房间参数全部可选；extra 存在时须是 Map（键 String）
+    final siteId = _nonEmptyStr(args, 'siteId');
+    final roomId = _nonEmptyStr(args, 'roomId');
+    final webRid = _nonEmptyStr(args, 'webRid');
+    final extraRaw = args['extra'];
+    if (extraRaw != null &&
+        (extraRaw is! Map || !extraRaw.keys.every((k) => k is String))) {
+      return null;
+    }
+    final extra =
+        extraRaw is Map ? Map<String, Object?>.from(extraRaw) : null;
+
     if (kind == kDanmaku) {
       final content = args['content'];
       if (content is! String || content.isEmpty) return null;
@@ -198,6 +219,10 @@ class PresenceProtocol {
         tabId: tabId,
         kind: kDanmaku,
         content: content,
+        siteId: siteId,
+        roomId: roomId,
+        webRid: webRid,
+        extra: extra,
       );
     }
     final action = args['action'];
@@ -207,6 +232,10 @@ class PresenceProtocol {
       tabId: tabId,
       kind: kAction,
       action: action,
+      siteId: siteId,
+      roomId: roomId,
+      webRid: webRid,
+      extra: extra,
     );
   }
 
@@ -398,6 +427,10 @@ class PresenceGuardSendCall {
     required this.kind,
     this.content,
     this.action,
+    this.siteId,
+    this.roomId,
+    this.webRid,
+    this.extra,
   });
 
   final String windowId;
@@ -405,6 +438,15 @@ class PresenceGuardSendCall {
   final String kind;
   final String? content;
   final String? action;
+
+  /// 非抖音写动作的站点标识（bilibili/douyu/huya/twitch）；
+  /// 缺省/空 = 抖音走网关。公开房间参数，非凭据。
+  final String? siteId;
+  final String? roomId;
+  final String? webRid;
+
+  /// 仅 JSON 兼容公开房间参数，严禁放 cookie/token 等凭据
+  final Map<String, Object?>? extra;
 }
 
 class PresenceApplyEnterCall {

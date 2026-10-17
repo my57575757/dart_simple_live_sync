@@ -6,6 +6,7 @@ import 'package:simple_live_app/app/multiwindow/window/sub_window_port.dart';
 import 'package:simple_live_app/app/multiwindow/window/window_open_service.dart';
 import 'package:simple_live_app/services/bilibili_account_service.dart';
 import 'package:simple_live_app/services/douyu_account_service.dart';
+import 'package:simple_live_app/services/guard_server_service.dart';
 import 'package:simple_live_app/services/huya_account_service.dart';
 import 'package:simple_live_app/services/twitch_account_service.dart';
 import 'package:simple_live_core/simple_live_core.dart';
@@ -324,16 +325,82 @@ class MainPresenceService extends GetxService
       return PresenceProtocol.encodeSendResult(
           PresenceSendResult.notHolder);
     }
-    final result = call.kind == PresenceProtocol.kDanmaku
-        ? await gateway.sendDanmakuAsHolder(
-            tabId: call.tabId,
-            content: call.content!,
-          )
-        : await gateway.sendActionAsHolder(
-            tabId: call.tabId,
-            action: call.action!,
-          );
-    return PresenceProtocol.encodeSendResult(result);
+    final siteId = call.siteId;
+    if (siteId == null || siteId == Constant.kDouyin) {
+      // 既有 gateway 路径，语义一行不改
+      final result = call.kind == PresenceProtocol.kDanmaku
+          ? await gateway.sendDanmakuAsHolder(
+              tabId: call.tabId,
+              content: call.content!,
+            )
+          : await gateway.sendActionAsHolder(
+              tabId: call.tabId,
+              action: call.action!,
+            );
+      return PresenceProtocol.encodeSendResult(result);
+    }
+    // 非抖音：代理到主窗 GuardServerService（账号态 HTTP 在主引擎）。
+    // 不做 holder 检查（非抖音无仲裁），仅保留死亡对账索引门（上文）。
+    final guard = GuardServerService.instance;
+    if (!guard.configured) {
+      return PresenceProtocol.encodeSendResult(
+        const PresenceSendResult(
+          success: false,
+          code: 'not_configured',
+          message: '未配置弹幕签名服务',
+        ),
+      );
+    }
+    final accountId = await guard.ensureAccount(siteId);
+    if (accountId == null) {
+      return PresenceProtocol.encodeSendResult(
+        const PresenceSendResult(
+          success: false,
+          code: kPresenceCodeNotLogin,
+        ),
+      );
+    }
+    try {
+      if (call.kind == PresenceProtocol.kDanmaku) {
+        final data = await guard.sendDanmaku(
+          platform: siteId,
+          accountId: accountId,
+          roomId: call.roomId ?? '',
+          webRid: call.webRid ?? '',
+          content: call.content!,
+          extra: call.extra?.cast<String, dynamic>(),
+        );
+        return PresenceProtocol.encodeSendResult(
+          PresenceSendResult(
+            success: data['success'] == true,
+            code: data['platformCode']?.toString(),
+            message: data['message']?.toString(),
+          ),
+        );
+      }
+      final data = await guard.sendAction(
+        accountId: accountId,
+        roomId: call.roomId ?? '',
+        webRid: call.webRid ?? '',
+        action: call.action!,
+      );
+      return PresenceProtocol.encodeSendResult(
+        PresenceSendResult(
+          success: data['success'] == true,
+          code: data['platformCode']?.toString(),
+          message: data['message']?.toString(),
+        ),
+      );
+    } catch (_) {
+      // 固定文案，不回显异常（可能含请求载荷）
+      return PresenceProtocol.encodeSendResult(
+        const PresenceSendResult(
+          success: false,
+          code: 'guard_error',
+          message: '网络请求失败',
+        ),
+      );
+    }
   }
 
   /// 编排层迁移前置：网关跟踪该 tab 时建 10s handoff 并返回其 future；

@@ -99,6 +99,138 @@ void main() {
     expect(dAction.content, isNull);
   });
 
+  test('guard_send 扩展：siteId/roomId/webRid/extra 往返、缺省可解码、无凭据字段', () {
+    final full = PresenceProtocol.encodeGuardSend(
+      const PresenceGuardSendCall(
+        windowId: 'w1',
+        tabId: 't1',
+        kind: PresenceProtocol.kDanmaku,
+        content: 'hi',
+        siteId: 'bilibili',
+        roomId: '9',
+        webRid: 'wr9',
+        extra: <String, Object?>{'k': 'v'},
+      ),
+    );
+    expect(
+      full.keys.toSet(),
+      {'windowId', 'tabId', 'kind', 'content', 'siteId', 'roomId', 'webRid', 'extra'},
+    );
+    final d = PresenceProtocol.decodeGuardSend(full)!;
+    expect(d.siteId, 'bilibili');
+    expect(d.roomId, '9');
+    expect(d.webRid, 'wr9');
+    expect(d.extra, {'k': 'v'});
+    expect(d.content, 'hi');
+    expect(PresenceProtocol.encodeGuardSend(d), full);
+
+    // action 同样带房间参数
+    final fullAction = PresenceProtocol.encodeGuardSend(
+      const PresenceGuardSendCall(
+        windowId: 'w1',
+        tabId: 't1',
+        kind: PresenceProtocol.kAction,
+        action: 'like',
+        siteId: 'huya',
+        roomId: '8',
+      ),
+    );
+    final dAction = PresenceProtocol.decodeGuardSend(fullAction)!;
+    expect(dAction.siteId, 'huya');
+    expect(dAction.roomId, '8');
+    expect(dAction.webRid, isNull);
+    expect(dAction.extra, isNull);
+
+    // 缺省（老载荷）可解码：四字段均 null
+    final bare = PresenceProtocol.encodeGuardSend(
+      const PresenceGuardSendCall(
+        windowId: 'w1',
+        tabId: 't1',
+        kind: PresenceProtocol.kDanmaku,
+        content: 'x',
+      ),
+    );
+    expect(
+      bare.keys.toSet(),
+      {'windowId', 'tabId', 'kind', 'content'},
+    );
+    final dBare = PresenceProtocol.decodeGuardSend(bare)!;
+    expect(dBare.siteId, isNull);
+    expect(dBare.roomId, isNull);
+    expect(dBare.webRid, isNull);
+    expect(dBare.extra, isNull);
+
+    // 空串 siteId/roomId/webRid encode 省略（缺省 = 抖音走网关）
+    final empties = PresenceProtocol.encodeGuardSend(
+      const PresenceGuardSendCall(
+        windowId: 'w1',
+        tabId: 't1',
+        kind: PresenceProtocol.kDanmaku,
+        content: 'x',
+        siteId: '',
+        roomId: '',
+        webRid: '',
+        extra: <String, Object?>{},
+      ),
+    );
+    expect(empties.keys.toSet(), {'windowId', 'tabId', 'kind', 'content'});
+    final dEmpty = PresenceProtocol.decodeGuardSend(empties)!;
+    expect(dEmpty.siteId, isNull);
+    expect(dEmpty.extra, isNull);
+
+    // extra 非法（非 Map / 非字符串键）→ null
+    expect(
+      PresenceProtocol.decodeGuardSend({
+        'windowId': 'w',
+        'tabId': 't',
+        'kind': 'danmaku',
+        'content': 'x',
+        'extra': 'no',
+      }),
+      isNull,
+    );
+    expect(
+      PresenceProtocol.decodeGuardSend({
+        'windowId': 'w',
+        'tabId': 't',
+        'kind': 'danmaku',
+        'content': 'x',
+        'extra': <Object, Object?>{1: 'x'},
+      }),
+      isNull,
+    );
+    // extra 合法空 Map：可解码
+    final emptyExtra = PresenceProtocol.decodeGuardSend({
+      'windowId': 'w',
+      'tabId': 't',
+      'kind': 'action',
+      'action': 'like',
+      'extra': <String, Object?>{},
+    })!;
+    expect(emptyExtra.extra, isEmpty);
+
+    // 协议自身字段绝无凭据键（cookie/token/oauthToken）——全字段嵌套 grep
+    void expectNoCredentialKeys(Object? node) {
+      if (node is Map) {
+        for (final e in node.entries) {
+          final k = e.key.toString().toLowerCase();
+          expect(k.contains('cookie'), isFalse, reason: '键: ${e.key}');
+          expect(k.contains('token'), isFalse, reason: '键: ${e.key}');
+          expect(k.contains('oauth'), isFalse, reason: '键: ${e.key}');
+          expectNoCredentialKeys(e.value);
+        }
+      } else if (node is List) {
+        for (final v in node) {
+          expectNoCredentialKeys(v);
+        }
+      }
+    }
+
+    expectNoCredentialKeys(full);
+    expectNoCredentialKeys(fullAction);
+    expectNoCredentialKeys(bare);
+  });
+
   test('主→子 apply 与 claim/send 响应编解码、reason 四值映射', () {
     final enter = PresenceProtocol.encodeApplyEnter(
       const PresenceApplyEnterCall(

@@ -235,6 +235,7 @@ class LiveRoomController extends PlayerController
     ));
     _presenceClient = coordinator.clientForTab(
       tabId: tabId!,
+      siteId: site.id,
       args: presenceClaimArgs,
     );
     return true;

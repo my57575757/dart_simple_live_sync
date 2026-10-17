@@ -1,9 +1,11 @@
 import 'dart:async';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:get/get.dart';
 import 'package:simple_live_app/app/multiwindow/presence/douyin_presence_gateway.dart';
 import 'package:simple_live_app/app/multiwindow/presence/ipc/main_presence_service.dart';
 import 'package:simple_live_app/app/multiwindow/presence/ipc/presence_protocol.dart';
+import 'package:simple_live_app/app/multiwindow/presence/presence_client.dart';
 import 'package:simple_live_app/app/multiwindow/shell/room_controller_registry.dart';
 import 'package:simple_live_app/app/multiwindow/shell/tab_open_request.dart';
 import 'package:simple_live_app/app/multiwindow/shell/tab_store.dart';
@@ -62,17 +64,22 @@ class _FakeGuard extends GuardServerService {
   final sendDanmakus = <Map<String, Object?>>[];
   final sendActions = <Map<String, Object?>>[];
 
+  /// 测试可改：模拟未配置 / 未登录 / 发送抛错
+  bool configuredValue = true;
+  String? ensureAccountResult = 'acct1';
+  bool throwOnSend = false;
+
   @override
   // ignore: must_call_super
   void onInit() {}
 
   @override
-  bool get configured => true;
+  bool get configured => configuredValue;
 
   @override
   Future<String?> ensureAccount(String platform) async {
     ensureAccounts.add(platform);
-    return 'acct1';
+    return ensureAccountResult;
   }
 
   @override
@@ -120,11 +127,14 @@ class _FakeGuard extends GuardServerService {
     required String content,
     Map<String, dynamic>? extra,
   }) async {
+    if (throwOnSend) throw StateError('net');
     sendDanmakus.add({
       'platform': platform,
       'accountId': accountId,
       'roomId': roomId,
+      'webRid': webRid,
       'content': content,
+      'extra': extra,
     });
     return {'success': true};
   }
@@ -136,9 +146,11 @@ class _FakeGuard extends GuardServerService {
     String webRid = '',
     required String action,
   }) async {
+    if (throwOnSend) throw StateError('net');
     sendActions.add({
       'accountId': accountId,
       'roomId': roomId,
+      'webRid': webRid,
       'action': action,
     });
     return {'success': true};
@@ -207,6 +219,8 @@ void main() {
 
   setUp(() {
     guard = _FakeGuard();
+    // permanent + force delete：GetX put 不覆盖已注册实例，必须先清干净
+    Get.put<GuardServerService>(guard, permanent: true);
     port = _FakeSubWindowPort();
     registry = WindowRegistry(mainWindowId: 'main');
     windowOpenService = WindowOpenService(
@@ -248,6 +262,7 @@ void main() {
     gateway.stopHeartbeatForTesting();
     svc.onClose();
     windowOpenService.onClose();
+    Get.delete<GuardServerService>(force: true);
   });
 
   test('register 只建死亡对账索引：不进栈、零 HTTP；坏载荷拒绝', () async {
@@ -631,5 +646,168 @@ void main() {
     )!;
     expect(send.success, isTrue);
     expect(guard.sendActions, isNotEmpty);
+  });
+
+  Future<PresenceSendResult> guardSend(
+    String windowId,
+    String tabId, {
+    String kind = PresenceProtocol.kDanmaku,
+    String? content,
+    String? action,
+    String? siteId,
+    String? roomId,
+    String? webRid,
+    Map<String, Object?>? extra,
+  }) async {
+    final raw = await svc.handleCall(
+      PresenceProtocol.mGuardSend,
+      PresenceProtocol.encodeGuardSend(PresenceGuardSendCall(
+        windowId: windowId,
+        tabId: tabId,
+        kind: kind,
+        content: content,
+        action: action,
+        siteId: siteId,
+        roomId: roomId,
+        webRid: webRid,
+        extra: extra,
+      )),
+    );
+    return PresenceProtocol.decodeSendResult(raw)!;
+  }
+
+  test('guard_send 非抖音：直连 GuardServerService，弹幕/动作各一次、参数正确', () async {
+    expect(await register('w1', 'tb', siteId: 'bilibili', roomId: '9'), isTrue);
+    guard.sendDanmakus.clear();
+    guard.ensureAccounts.clear();
+
+    final d = await guardSend(
+      'w1', 'tb',
+      content: 'hello-bili',
+      siteId: 'bilibili',
+      roomId: '9',
+      webRid: 'wr9',
+      extra: const <String, Object?>{'k': 'v'},
+    );
+    expect(d.success, isTrue);
+    expect(guard.ensureAccounts, ['bilibili']);
+    expect(guard.sendDanmakus, hasLength(1));
+    expect(guard.sendDanmakus.single['platform'], 'bilibili');
+    expect(guard.sendDanmakus.single['accountId'], 'acct1');
+    expect(guard.sendDanmakus.single['roomId'], '9');
+    expect(guard.sendDanmakus.single['webRid'], 'wr9');
+    expect(guard.sendDanmakus.single['content'], 'hello-bili');
+    expect(guard.sendDanmakus.single['extra'], {'k': 'v'});
+    expect(guard.sendActions, isEmpty, reason: '弹幕不触发 sendAction');
+
+    final a = await guardSend(
+      'w1', 'tb',
+      kind: PresenceProtocol.kAction,
+      action: 'like',
+      siteId: 'huya',
+      roomId: '8',
+      webRid: 'wr8',
+    );
+    expect(a.success, isTrue);
+    expect(guard.ensureAccounts, ['bilibili', 'huya']);
+    expect(guard.sendActions, hasLength(1));
+    expect(guard.sendActions.single['accountId'], 'acct1');
+    expect(guard.sendActions.single['roomId'], '8');
+    expect(guard.sendActions.single['webRid'], 'wr8');
+    expect(guard.sendActions.single['action'], 'like');
+    expect(guard.sendDanmakus, hasLength(1), reason: '动作不触发 sendDanmaku');
+  });
+
+  test('guard_send 非抖音失败分流：未配置 / 未登录 / 抛错固定文案', () async {
+    expect(await register('w1', 'tb', siteId: 'bilibili', roomId: '9'), isTrue);
+
+    // 未配置弹幕签名服务
+    guard.configuredValue = false;
+    var r = await guardSend('w1', 'tb', content: 'x', siteId: 'bilibili', roomId: '9');
+    expect(r.success, isFalse);
+    expect(r.code, 'not_configured');
+    expect(r.message, '未配置弹幕签名服务');
+    expect(guard.ensureAccounts, isEmpty);
+    expect(guard.sendDanmakus, isEmpty);
+
+    // ensureAccount 返回 null → not_login
+    guard.configuredValue = true;
+    guard.ensureAccountResult = null;
+    r = await guardSend('w1', 'tb', content: 'x', siteId: 'bilibili', roomId: '9');
+    expect(r.success, isFalse);
+    expect(r.code, kPresenceCodeNotLogin);
+    expect(guard.sendDanmakus, isEmpty, reason: '未登录不发 HTTP');
+
+    // guard 抛错 → guard_error 固定文案（不回显异常）
+    guard.ensureAccountResult = 'acct1';
+    guard.throwOnSend = true;
+    r = await guardSend('w1', 'tb', content: 'x', siteId: 'bilibili', roomId: '9');
+    expect(r.success, isFalse);
+    expect(r.code, 'guard_error');
+    expect(r.message, '网络请求失败');
+
+    // 动作同路径
+    r = await guardSend(
+      'w1', 'tb',
+      kind: PresenceProtocol.kAction,
+      action: 'like',
+      siteId: 'douyu',
+      roomId: '7',
+    );
+    expect(r.code, 'guard_error');
+    expect(r.message, '网络请求失败');
+  });
+
+  test('guard_send 非抖音不做 holder 检查，仍走死亡对账索引门', () async {
+    expect(await register('w1', 'tb', siteId: 'bilibili', roomId: '9'), isTrue);
+    // 另一窗同 tab 抢占索引（非抖音无仲裁栈，仅索引门生效）
+    expect(await register('w2', 'tb', siteId: 'bilibili', roomId: '9'), isTrue);
+
+    guard.sendDanmakus.clear();
+    final displaced = await guardSend(
+      'w1', 'tb', content: 'x', siteId: 'bilibili', roomId: '9',
+    );
+    expect(displaced.code, kPresenceCodeNotHolder);
+    expect(guard.sendDanmakus, isEmpty, reason: '归属门拒绝后零 HTTP');
+
+    final ok = await guardSend(
+      'w2', 'tb', content: 'x', siteId: 'bilibili', roomId: '9',
+    );
+    expect(ok.success, isTrue);
+    expect(guard.sendDanmakus, hasLength(1));
+  });
+
+  test('guard_send 无 siteId / siteId=douyin 走网关，不进 GuardServerService 直连分支',
+      () async {
+    await register('w1', 't1');
+    await claim('w1', 't1',
+        roomId: '1', guardRoomId: 'room_1', guardWebRid: '1');
+    guard.ensureAccounts.clear();
+    guard.sendDanmakus.clear();
+
+    // 无 siteId（老载荷）→ 网关 holder 路径
+    final r1 = await guardSend('w1', 't1', content: 'x');
+    expect(r1.success, isTrue);
+    expect(guard.ensureAccounts, isEmpty,
+        reason: '网关路径持有 accountId，不在 send 时 ensureAccount');
+    expect(guard.sendDanmakus.single['platform'], 'douyin');
+
+    // siteId == douyin 同样走网关，不进直连分支
+    guard.sendDanmakus.clear();
+    final r2 = await guardSend(
+      'w1', 't1', content: 'y', siteId: 'douyin', roomId: 'room_1',
+    );
+    expect(r2.success, isTrue);
+    expect(guard.ensureAccounts, isEmpty);
+    expect(guard.sendDanmakus.single['platform'], 'douyin');
+
+    // 抢占后网关返回 not_holder（直连分支无此语义）
+    await register('w2', 't2', roomId: '2');
+    await claim('w2', 't2',
+        roomId: '2', guardRoomId: 'room_2', guardWebRid: '2');
+    guard.sendDanmakus.clear();
+    final displaced = await guardSend('w1', 't1', content: 'z');
+    expect(displaced.code, kPresenceCodeNotHolder);
+    expect(guard.sendDanmakus, isEmpty);
   });
 }
