@@ -170,6 +170,24 @@ class LiveRoomController extends PlayerController
   PresenceClient? _presenceClient;
   DouyinPresenceTab? _presenceTab;
 
+  /// 子窗 bili/huya 写动作走主窗 GuardServerService 代理（无仲裁语义，
+  /// 只 send 不 claim/release）。
+  PresenceClient? _writeClient;
+
+  /// 测试用：注入假 write client 验证子窗 bili/huya 发送分流。
+  @visibleForTesting
+  void debugBindWriteClient(PresenceClient client) {
+    _writeClient = client;
+  }
+
+  /// 测试用：读取当前 presence client（验证切房重绑）。
+  @visibleForTesting
+  PresenceClient? get debugPresenceClient => _presenceClient;
+
+  /// 测试用：读取当前 write client（验证切房重绑）。
+  @visibleForTesting
+  PresenceClient? get debugWriteClient => _writeClient;
+
   /// 跨窗迁移关闭：onClose 时不再发 presence leave（栈/心跳在主端延续）
   bool _movedAway = false;
 
@@ -241,6 +259,26 @@ class LiveRoomController extends PlayerController
     return true;
   }
 
+  /// 子窗 bili/huya 写动作（弹幕/点赞）走主窗 GuardServerService 代理：
+  /// 无仲裁语义，只 send 不 claim/release。douyu/twitch 走 liveDanmaku
+  /// （凭据借用后重启连接），不挂 write client。
+  bool bindSubWindowWriteClient() {
+    if (!_isSubWindow ||
+        tabId == null ||
+        !Get.isRegistered<IpcPresenceCoordinator>()) {
+      return false;
+    }
+    if (site.id != Constant.kBiliBili && site.id != Constant.kHuya) {
+      return false;
+    }
+    _writeClient = Get.find<IpcPresenceCoordinator>().clientForTab(
+      tabId: tabId!,
+      args: presenceClaimArgs,
+      siteId: site.id,
+    );
+    return true;
+  }
+
   /// claim 当刻读取的进房参数：guard 房间标识随游客详情刷新可能变化
   PresenceClaimArgs presenceClaimArgs() => PresenceClaimArgs(
         roomId: roomId,
@@ -271,6 +309,22 @@ class LiveRoomController extends PlayerController
   @visibleForTesting
   Future<void> debugReRegisterSubWindowAfterLeave() =>
       _reRegisterSubWindowTabAfterLeave();
+
+  /// 子窗切房后动态重绑 per-tab client（缺口 E）：旧 client 一律置空再按
+  /// 新站点挂 presence（抖音 claim）或 write（bili/huya 代理写动作）。
+  /// 主窗/Android 不受影响（保留 onInit 的网关绑定）。
+  void _rebindSubWindowClients() {
+    if (!_isSubWindow) return;
+    _presenceClient = null;
+    _writeClient = null;
+    if (!bindSubWindowPresence()) {
+      bindSubWindowWriteClient();
+    }
+  }
+
+  /// 测试接缝：切房后子窗 client 动态重绑（生产仅 resetRoom 调用）
+  @visibleForTesting
+  void debugRebindSubWindowClients() => _rebindSubWindowClients();
 
   @visibleForTesting
   void stopGuardHeartbeatForTesting() => _stopGuardHeartbeat();
@@ -319,11 +373,14 @@ class LiveRoomController extends PlayerController
       await player.pause();
     });
 
-    // 子引擎抖音标签绑 IPC presence 通道；主窗/Android 维持本地网关直连
+    // 子引擎抖音标签绑 IPC presence 通道；bili/huya 子窗绑 write 代理；
+    // 主窗/Android 维持本地网关直连
     if (!bindSubWindowPresence()) {
-      final gateway = _resolveGateway();
-      if (gateway != null) {
-        bindPresenceGateway(gateway);
+      if (!bindSubWindowWriteClient()) {
+        final gateway = _resolveGateway();
+        if (gateway != null) {
+          bindPresenceGateway(gateway);
+        }
       }
     }
 
@@ -840,6 +897,13 @@ class LiveRoomController extends PlayerController
         // 主窗标签 / 子窗标签抖音发送统一走 presence 串行域，不再直连
         // GuardServerService、不在控制器起心跳（消除发送瞬间 holder 切换）。
         result = await _sendDanmakuViaPresence(presenceClient, content);
+      } else if (_isSubWindow &&
+          (site.id == Constant.kBiliBili || site.id == Constant.kHuya) &&
+          _writeClient != null) {
+        // 子窗 bili/huya：经主窗 GuardServerService 代理发送（无仲裁语义）。
+        // _sendDanmakuViaPresence 含一次 not_holder 重试；bili/huya 无
+        // holder 语义，重试安全（幂等由服务端决定）。
+        result = await _sendDanmakuViaPresence(_writeClient!, content);
       } else {
         String? accountId;
         if (guard.configured && _guardPlatforms.contains(site.id)) {
@@ -995,12 +1059,14 @@ class LiveRoomController extends PlayerController
     await liveDanmaku.start(newArgs);
   }
 
-  /// 点赞/送灯牌是否可用：仅抖音、B站，且已配置签名服务并登录
+  /// 点赞/送灯牌是否可用：仅抖音、B站，且已配置签名服务并登录；
+  /// 子窗抖音/bili 恒放行（借用主窗身份，由主窗代理鉴权）
   bool get guardActionEnabled =>
       (GuardServerService.instance.configured &&
           (site.id == "douyin" || site.id == "bilibili") &&
           danmakuLogined) ||
-      _isSubWindowDouyin;
+      _isSubWindowDouyin ||
+      (_isSubWindow && site.id == "bilibili");
 
   final sendingAction = false.obs;
 
@@ -1028,6 +1094,13 @@ class LiveRoomController extends PlayerController
       final presenceClient = _presenceClient;
       if (site.id == Constant.kDouyin && presenceClient != null) {
         await _sendActionViaPresence(presenceClient, action);
+        return;
+      }
+      if (_isSubWindow &&
+          site.id == Constant.kBiliBili &&
+          _writeClient != null) {
+        // 子窗 bili 互动动作经主窗代理（huya 无互动 UI，不开此分支）
+        await _sendActionViaPresence(_writeClient!, action);
         return;
       }
       var accountId = await guard.ensureAccount(site.id);
@@ -2566,6 +2639,9 @@ class LiveRoomController extends PlayerController
     if ((_isSubWindow && wasDouyin) || _isSubWindowDouyin) {
       await _reRegisterSubWindowTabAfterLeave();
     }
+    // 子窗 client 动态重绑（缺口 E）：与是否走了 _reRegisterSubWindowTabAfterLeave
+    // 无关，非抖音→抖音、抖音→bili、bili→huya 等全部要换 client
+    _rebindSubWindowClients();
     // 清除全部消息
     liveDanmaku.stop();
     messages.clear();

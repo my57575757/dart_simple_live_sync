@@ -7,6 +7,7 @@ import 'package:simple_live_app/app/constant.dart';
 import 'package:simple_live_app/app/multiwindow/presence/ipc/ipc_presence_coordinator.dart';
 import 'package:simple_live_app/app/multiwindow/presence/ipc/presence_protocol.dart';
 import 'package:simple_live_app/app/multiwindow/presence/ipc/sub_presence_port.dart';
+import 'package:simple_live_app/app/multiwindow/presence/presence_client.dart';
 import 'package:simple_live_app/app/multiwindow/window/window_role.dart';
 import 'package:simple_live_app/app/sites.dart';
 import 'package:simple_live_app/modules/live_room/live_room_controller.dart';
@@ -19,13 +20,27 @@ import 'package:simple_live_core/simple_live_core.dart';
 import 'package:wakelock_plus_platform_interface/messages.g.dart' show WakelockPlusApi;
 
 class _FakeDanmaku extends LiveDanmaku {
+  int starts = 0;
+  int stops = 0;
+  final sends = <String>[];
+  Object? lastArgs;
+
   @override
-  Future<void> start(dynamic args) async {}
+  Future<void> start(dynamic args) async {
+    starts++;
+    lastArgs = args;
+  }
+
   @override
-  Future<void> stop() async {}
+  Future<void> stop() async {
+    stops++;
+  }
+
   @override
-  Future<DanmakuSendResult> sendMessage(String message) async =>
-      DanmakuSendResult(success: true);
+  Future<DanmakuSendResult> sendMessage(String message) async {
+    sends.add(message);
+    return DanmakuSendResult(success: true);
+  }
 }
 
 class _Site extends DouyinSite {
@@ -74,6 +89,14 @@ class _LoggedOutAccount extends DouyinAccountService {
   void onInit() {}
 }
 
+class _LoggedInAccount extends DouyinAccountService {
+  @override
+  RxBool get logined => true.obs;
+  @override
+  // ignore: must_call_super
+  void onInit() {}
+}
+
 class _FakePort implements SubPresencePort {
   final List<(String, Object?)> calls = [];
   Object? claimResult;
@@ -85,6 +108,81 @@ class _FakePort implements SubPresencePort {
     }
     return null;
   }
+}
+
+/// 假 PresenceClient：计数 sendDanmaku/sendAction 调用，验证子窗分流。
+class _FakeWriteClient implements PresenceClient {
+  int sendDanmakuCount = 0;
+  int sendActionCount = 0;
+  final danmakuContents = <String>[];
+  final actions = <String>[];
+  PresenceSendResult result = const PresenceSendResult(success: true);
+
+  @override
+  Future<PresenceClaimResult> claim() async =>
+      const PresenceClaimResult.granted();
+
+  @override
+  Future<void> release() async {}
+
+  @override
+  Future<void> detach() async {}
+
+  @override
+  bool get isClaimed => false;
+
+  @override
+  Future<PresenceSendResult> sendDanmaku(String content) async {
+    sendDanmakuCount++;
+    danmakuContents.add(content);
+    return result;
+  }
+
+  @override
+  Future<PresenceSendResult> sendAction(String action) async {
+    sendActionCount++;
+    actions.add(action);
+    return result;
+  }
+}
+
+/// 通用假站点：bili/huya/douyu/twitch 子窗发送/凭据测试共用。
+class _FakeGenericSite extends LiveSite {
+  _FakeGenericSite(this.siteId);
+  final String siteId;
+  final _FakeDanmaku danmaku = _FakeDanmaku();
+
+  @override
+  LiveDanmaku getDanmaku() => danmaku;
+
+  LiveRoomDetail buildDetail({String roomId = '222', Object? danmakuData}) =>
+      LiveRoomDetail(
+        roomId: roomId,
+        title: 't',
+        cover: '',
+        userName: 'u',
+        userAvatar: '',
+        online: 1,
+        status: true,
+        url: 'https://example.com/$siteId/$roomId',
+        danmakuData: danmakuData,
+      );
+
+  @override
+  Future<LiveRoomDetail> getRoomDetail({required String roomId}) async =>
+      buildDetail(roomId: roomId);
+}
+
+class _FakeDouyuAccounts extends DouyuAccountService {
+  @override
+  // ignore: must_call_super
+  void onInit() {}
+}
+
+class _FakeTwitchAccounts extends TwitchAccountService {
+  @override
+  // ignore: must_call_super
+  void onInit() {}
 }
 
 void main() {
@@ -123,6 +221,22 @@ void main() {
       ),
       permanent: true,
     );
+  }
+
+  LiveRoomController makeSiteController({
+    required String siteId,
+    required _FakeGenericSite liveSite,
+    String tabId = 't1',
+    String roomId = '222',
+  }) {
+    final c = LiveRoomController(
+      pSite: Site(id: siteId, name: siteId, logo: '', liveSite: liveSite),
+      pRoomId: roomId,
+      pShareUrl: 'https://example.com/$siteId/$roomId',
+      tabId: tabId,
+    );
+    c.detail.value = liveSite.buildDetail(roomId: roomId);
+    return c;
   }
 
   test('子窗绑定：pr_register 建索引；enterAsAccount 跳过本地登录门走 IPC claim',
@@ -320,5 +434,232 @@ void main() {
       isTrue,
       reason: '普通 onClose 行为不变',
     );
+  });
+
+  group('Task5 发送分流 / client 重绑 / guardActionEnabled', () {
+    test('子窗 bili 发弹幕走 writeClient，恰好一次', () async {
+      putCoordinator(_FakePort());
+      final site = _FakeGenericSite(Constant.kBiliBili);
+      final c = makeSiteController(siteId: Constant.kBiliBili, liveSite: site);
+      final client = _FakeWriteClient();
+      c.debugBindWriteClient(client);
+
+      await c.sendDanmaku('hello');
+
+      expect(client.sendDanmakuCount, 1);
+      expect(client.danmakuContents, ['hello']);
+      expect(site.danmaku.sends, isEmpty);
+    });
+
+    test('子窗 huya 发弹幕走 writeClient，恰好一次', () async {
+      putCoordinator(_FakePort());
+      final site = _FakeGenericSite(Constant.kHuya);
+      final c = makeSiteController(siteId: Constant.kHuya, liveSite: site);
+      final client = _FakeWriteClient();
+      c.debugBindWriteClient(client);
+
+      await c.sendDanmaku('hi');
+
+      expect(client.sendDanmakuCount, 1);
+      expect(client.danmakuContents, ['hi']);
+      expect(site.danmaku.sends, isEmpty);
+    });
+
+    test('子窗 douyu 发弹幕走 liveDanmaku，不调 writeClient', () async {
+      putCoordinator(_FakePort());
+      final site = _FakeGenericSite(Constant.kDouyu);
+      final c = makeSiteController(siteId: Constant.kDouyu, liveSite: site);
+      final client = _FakeWriteClient();
+      c.debugBindWriteClient(client);
+
+      await c.sendDanmaku('yo');
+
+      expect(client.sendDanmakuCount, 0);
+      expect(site.danmaku.sends, ['yo']);
+    });
+
+    test('子窗 bili 点赞走 writeClient.sendAction', () async {
+      putCoordinator(_FakePort());
+      final site = _FakeGenericSite(Constant.kBiliBili);
+      final c = makeSiteController(siteId: Constant.kBiliBili, liveSite: site);
+      final client = _FakeWriteClient();
+      c.debugBindWriteClient(client);
+
+      await c.like();
+
+      expect(client.sendActionCount, 1);
+      expect(client.actions, ['like']);
+    });
+
+    test('切房非抖音→抖音：rebind 后 _presenceClient 重建', () {
+      final port = _FakePort();
+      putCoordinator(port);
+      final biliSite = _FakeGenericSite(Constant.kBiliBili);
+      final c = makeSiteController(siteId: Constant.kBiliBili, liveSite: biliSite);
+      expect(c.bindSubWindowWriteClient(), isTrue);
+      expect(c.debugWriteClient, isNotNull);
+      expect(c.debugPresenceClient, isNull);
+
+      // 模拟切房到抖音：更新站点身份后动态重绑
+      final douyinSite = _Site();
+      c.rxSite.value =
+          Site(id: Constant.kDouyin, name: '抖音', logo: '', liveSite: douyinSite);
+      c.rxRoomId.value = '333';
+      c.rxShareUrl.value = 'https://live.douyin.com/333';
+      c.debugRebindSubWindowClients();
+
+      expect(c.debugPresenceClient, isNotNull, reason: '非抖音→抖音后 presence 重建');
+      expect(c.debugWriteClient, isNull, reason: '抖音不挂 write client');
+    });
+
+    test('切房抖音→bili：rebind 后 _writeClient 重建、_presenceClient 置空',
+        () {
+      final port = _FakePort();
+      putCoordinator(port);
+      final c = makeController();
+      expect(c.bindSubWindowPresence(), isTrue);
+      expect(c.debugPresenceClient, isNotNull);
+
+      // 模拟切房到 bili
+      final biliSite = _FakeGenericSite(Constant.kBiliBili);
+      c.rxSite.value = Site(
+          id: Constant.kBiliBili, name: '哔哩哔哩', logo: '', liveSite: biliSite);
+      c.rxRoomId.value = '444';
+      c.rxShareUrl.value = 'https://example.com/bilibili/444';
+      c.debugRebindSubWindowClients();
+
+      expect(c.debugPresenceClient, isNull);
+      expect(c.debugWriteClient, isNotNull, reason: '抖音→bili 后挂 write client');
+    });
+
+    test('guardActionEnabled：子窗 bili 恒可见；子窗 huya 不可见（无互动 UI）',
+        () {
+      putCoordinator(_FakePort());
+
+      final biliSite = _FakeGenericSite(Constant.kBiliBili);
+      final bili =
+          makeSiteController(siteId: Constant.kBiliBili, liveSite: biliSite);
+      expect(bili.guardActionEnabled, isTrue);
+
+      final huyaSite = _FakeGenericSite(Constant.kHuya);
+      final huya =
+          makeSiteController(siteId: Constant.kHuya, liveSite: huyaSite);
+      expect(huya.guardActionEnabled, isFalse);
+    });
+
+    test('主窗行为零变化：bili/douyin guardActionEnabled 不放行、不绑 IPC', () {
+      final port = _FakePort();
+      putCoordinator(port);
+      MultiWindowRole.isSubWindow = false;
+
+      final biliSite = _FakeGenericSite(Constant.kBiliBili);
+      final bili =
+          makeSiteController(siteId: Constant.kBiliBili, liveSite: biliSite);
+      expect(bili.guardActionEnabled, isFalse,
+          reason: '主窗 bili 未配置/未登录不放行');
+
+      final c = makeController();
+      expect(c.guardActionEnabled, isFalse,
+          reason: '主窗 douyin 未配置/未登录不放行');
+      expect(c.bindSubWindowPresence(), isFalse,
+          reason: '非子窗不绑定 IPC presence 通道');
+      expect(c.bindSubWindowWriteClient(), isFalse,
+          reason: '非子窗不绑定 write client');
+      expect(port.calls, isEmpty);
+    });
+
+    test('主窗 bili 发弹幕零变化：不走 writeClient，落 liveDanmaku', () async {
+      MultiWindowRole.isSubWindow = false;
+      putCoordinator(_FakePort());
+      final site = _FakeGenericSite(Constant.kBiliBili);
+      final c = makeSiteController(siteId: Constant.kBiliBili, liveSite: site);
+      final client = _FakeWriteClient();
+      c.debugBindWriteClient(client);
+
+      await c.sendDanmaku('hello');
+
+      expect(client.sendDanmakuCount, 0);
+      expect(site.danmaku.sends, ['hello']);
+    });
+
+    test('主窗 douyin 发弹幕零变化：仍走 presence client', () async {
+      MultiWindowRole.isSubWindow = false;
+      // 不经 putCoordinator：主窗 douyin 只需 GuardServerService.instance
+      // 与 danmakuLogined（登录态过 ensureAccountPresence 门）
+      Get.put<GuardServerService>(_Guard(), permanent: true);
+      Get.put<DouyinAccountService>(_LoggedInAccount(), permanent: true);
+      final c = makeController();
+      final client = _FakeWriteClient();
+      c.debugBindPresenceClient(client);
+
+      await c.sendDanmaku('hello');
+
+      expect(client.sendDanmakuCount, 1);
+      expect(client.danmakuContents, ['hello']);
+    });
+
+    test('applyBorrowedCredentials douyu：凭据非空 stop+start 各一次', () async {
+      final site = _FakeGenericSite(Constant.kDouyu);
+      final c = makeSiteController(siteId: Constant.kDouyu, liveSite: site);
+      c.detail.value = site.buildDetail(
+        roomId: '222',
+        danmakuData: DouyuDanmakuArgs(roomId: 222, cookie: 'guest'),
+      );
+
+      final douyuAccounts = _FakeDouyuAccounts();
+      douyuAccounts.cookie = 'acf_stk=x; acf_uid=1';
+      Get.put<DouyuAccountService>(douyuAccounts, permanent: true);
+
+      await c.applyBorrowedCredentials(Constant.kDouyu);
+
+      expect(site.danmaku.stops, 1);
+      expect(site.danmaku.starts, 1);
+      final args = site.danmaku.lastArgs;
+      expect(args, isA<DouyuDanmakuArgs>());
+      expect((args as DouyuDanmakuArgs).cookie, 'acf_stk=x; acf_uid=1');
+    });
+
+    test('applyBorrowedCredentials douyu：凭据空不重启弹幕', () async {
+      final site = _FakeGenericSite(Constant.kDouyu);
+      final c = makeSiteController(siteId: Constant.kDouyu, liveSite: site);
+      c.detail.value = site.buildDetail(
+        roomId: '222',
+        danmakuData: DouyuDanmakuArgs(roomId: 222),
+      );
+
+      final douyuAccounts = _FakeDouyuAccounts();
+      douyuAccounts.cookie = '';
+      Get.put<DouyuAccountService>(douyuAccounts, permanent: true);
+
+      await c.applyBorrowedCredentials(Constant.kDouyu);
+
+      expect(site.danmaku.stops, 0);
+      expect(site.danmaku.starts, 0);
+    });
+
+    test('applyBorrowedCredentials twitch：凭据非空构造新 args 并 stop+start',
+        () async {
+      final site = _FakeGenericSite(Constant.kTwitch);
+      final c = makeSiteController(siteId: Constant.kTwitch, liveSite: site);
+      c.detail.value = site.buildDetail(
+        roomId: '222',
+        danmakuData: TwitchDanmakuArgs(channel: 'somechannel'),
+      );
+
+      final twitchAccounts = _FakeTwitchAccounts();
+      twitchAccounts.oauthToken = 'token123';
+      twitchAccounts.userLogin = 'user1';
+      Get.put<TwitchAccountService>(twitchAccounts, permanent: true);
+
+      await c.applyBorrowedCredentials(Constant.kTwitch);
+
+      expect(site.danmaku.stops, 1);
+      expect(site.danmaku.starts, 1);
+      final args = site.danmaku.lastArgs;
+      expect(args, isA<TwitchDanmakuArgs>());
+      expect((args as TwitchDanmakuArgs).channel, 'somechannel');
+      expect(args.oauthToken, 'token123');
+      expect(args.userLogin, 'user1');
+    });
   });
 }
