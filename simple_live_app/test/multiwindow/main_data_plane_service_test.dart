@@ -343,10 +343,11 @@ void main() {
     // MemoryKvBox 永远测不出此路径：真实 Hive BoxBaseImpl.clear 先 await
     // backend.clear() 后 keystore.clear()，逐 key notify 经 async broadcast
     // 以 microtask 链式重排，await 链同步坍缩会使 finally 早于事件执行。
-    final tempDir = await Directory.systemTemp.createTemp('m42_hive_clear');
+    Directory? tempDir;
     Box<String>? hiveBox;
     MainDataPlaneService? hiveSvc;
     try {
+      tempDir = await Directory.systemTemp.createTemp('m42_hive_clear');
       final boxName =
           'shield_${DateTime.now().microsecondsSinceEpoch}';
       hiveBox =
@@ -400,7 +401,7 @@ void main() {
       // openBox 抛异常时 svc/box 可能未初始化，可空判空保证临时目录不泄漏
       hiveSvc?.onClose();
       await Hive.close();
-      tempDir.deleteSync(recursive: true);
+      tempDir?.deleteSync(recursive: true);
     }
   });
 
@@ -514,5 +515,77 @@ void main() {
     expect(changedCalls(), isEmpty, reason: '落盘失败不扇出');
     await Future<void>.delayed(Duration.zero);
     expect(events, isEmpty, reason: '落盘失败不发关注更新事件');
+  });
+
+  test('真实 Hive：dp_kv_set/delete 落盘、watch 扇出且各触发一次 owner reload',
+      () async {
+    // MemoryKvBox 为同步广播，测不到真实 Hive watch 的 async 派发与
+    // _remoteWrite 标志下的 owner reload；put/delete 路径此前无自动化。
+    Directory? tempDir;
+    Box<dynamic>? hiveBox;
+    MainDataPlaneService? hiveSvc;
+    try {
+      tempDir = await Directory.systemTemp.createTemp('m42_hive_write');
+      final boxName =
+          'localstorage_${DateTime.now().microsecondsSinceEpoch}';
+      hiveBox =
+          await Hive.openBox<dynamic>(boxName, path: tempDir.path);
+
+      storage = LocalStorageService()
+        ..settingsBox = HiveKvBox<dynamic>(hiveBox)
+        ..shieldBox = MemoryKvBox<String>();
+      Get.put<LocalStorageService>(storage, permanent: true);
+      db = DBService()
+        ..historyBox = MemoryKvBox<History>()
+        ..followBox = MemoryKvBox<FollowUser>()
+        ..tagBox = MemoryKvBox<FollowUserTag>()
+        ..volumeBox = MemoryKvBox<double>();
+      Get.put<DBService>(db, permanent: true);
+      port = _FakePort();
+      registry = WindowRegistry(mainWindowId: 'main');
+      registry.registerChild('w1', {'douyin_r1'});
+      reloadCount = 0;
+      svc = MainDataPlaneService(
+        port: port,
+        registry: registry,
+        storage: storage,
+        db: db,
+        onSettingsChanged: () => reloadCount++,
+      );
+      hiveSvc = svc;
+      svc.onInit();
+      port.calls.clear();
+
+      expect(
+          await call(
+              DataPlaneProtocol.mKvSet,
+              DataPlaneProtocol.kvSet(
+                  DataPlaneProtocol.boxSettings, 'DanmuSize', 20.0)),
+          isTrue);
+      expect(storage.getValue('DanmuSize', 0.0), 20.0);
+      // Hive watch 为 async broadcast：排空一轮事件后再冲防抖 Timer
+      await Future<void>.delayed(Duration.zero);
+      await flushReloadTimer();
+      expect(reloadCount, 1, reason: '远程写触发一次 owner reload');
+      expect(changedCalls().length, 1);
+
+      expect(
+          await call(
+              DataPlaneProtocol.mKvDelete,
+              DataPlaneProtocol.kvDelete(
+                  DataPlaneProtocol.boxSettings, 'DanmuSize')),
+          isTrue);
+      expect(storage.settingsBox.containsKey('DanmuSize'), isFalse);
+      await Future<void>.delayed(Duration.zero);
+      await flushReloadTimer();
+      expect(reloadCount, 2, reason: '两次远程写各调度一次');
+      final changed = changedCalls();
+      expect(changed.length, 2);
+      expect((changed[1].$2! as Map)['deleted'], isTrue);
+    } finally {
+      hiveSvc?.onClose();
+      await Hive.close();
+      tempDir?.deleteSync(recursive: true);
+    }
   });
 }
