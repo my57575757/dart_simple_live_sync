@@ -9,6 +9,7 @@ import 'package:simple_live_app/services/guard_server_service.dart';
 import 'package:simple_live_core/simple_live_core.dart';
 
 import 'presence_arbiter.dart';
+import 'presence_batch_releaser.dart';
 import 'presence_claimant.dart';
 import 'presence_client.dart';
 
@@ -21,7 +22,8 @@ import 'presence_client.dart';
 /// 所有变更操作经 [_serialized] 串行：claim 的 HTTP 在途时到达的
 /// release/batchRelease 会排队到进场完成之后执行，避免迟到的成功结果
 /// 把已关闭标签变成孤儿 holder。
-class DouyinPresenceGateway extends GetxService {
+class DouyinPresenceGateway extends GetxService
+    implements PresenceBatchReleaser {
   DouyinPresenceGateway(
     this._guard, {
     this.heartbeatInterval = const Duration(seconds: 20),
@@ -188,6 +190,7 @@ class DouyinPresenceGateway extends GetxService {
   /// 批量关闭（关闭其他/右侧/全部）：一次性摘栈，整批至多一次 exit、
   /// 至多一次幸存者接管。必须在这批标签的控制器被销毁**之前**调用：
   /// 摘栈后控制器 onClose 的 release 全部命中未知 tab no-op。
+  @override
   Future<void> batchRelease(Set<String> tabIds) =>
       _serialized(() => _batchRelease(tabIds));
 

@@ -1,4 +1,7 @@
+import 'dart:async';
+
 import 'package:flutter_test/flutter_test.dart';
+import 'package:simple_live_app/app/multiwindow/presence/presence_batch_releaser.dart';
 import 'package:simple_live_app/app/multiwindow/shell/room_controller_registry.dart';
 import 'package:simple_live_app/app/multiwindow/shell/tab_open_request.dart';
 import 'package:simple_live_app/app/multiwindow/shell/tab_store.dart';
@@ -45,6 +48,19 @@ class FakeThenThrowRegistry extends FakeRegistry {
       throw ArgumentError('boom');
     }
     super.register(tabId, request);
+  }
+}
+
+class _BlockingReleaser implements PresenceBatchReleaser {
+  int calls = 0;
+  final Completer<void> entered = Completer<void>();
+  final Completer<void> gate = Completer<void>();
+
+  @override
+  Future<void> batchRelease(Set<String> tabIds) async {
+    calls++;
+    if (!entered.isCompleted) entered.complete();
+    await gate.future;
   }
 }
 
@@ -213,5 +229,29 @@ void main() {
     expect(store.findByKey('douyin_missing'), isNull);
     store.activateByKey('douyin_missing');
     expect(store.activeTabId.value, t1.tabId, reason: '未命中不改变激活态');
+  });
+
+  test('#8 批量流程在途时再次批量操作直接 no-op，结束后恢复', () async {
+    final releaser = _BlockingReleaser();
+    final s = TabStore(registry: registry, presenceGateway: releaser);
+    s.open(req('a', '1'));
+    s.open(req('a', '2'));
+    final first = s.closeAll();
+    await releaser.entered.future; // 首批量卡在 batchRelease 在途
+
+    // 在途期间：tabs 尚未清空（摘栈 await 之后才 unregister/clear）
+    await s.closeAll();
+    await s.closeOthers(s.tabs.first.tabId);
+    await s.closeRight(s.tabs.first.tabId);
+    expect(releaser.calls, 1, reason: '在途期间只允许一个批量摘栈');
+
+    releaser.gate.complete();
+    await first;
+    expect(s.tabs, isEmpty);
+
+    // 流程结束后批量能力恢复
+    s.open(req('a', '9'));
+    await s.closeAll();
+    expect(releaser.calls, 2);
   });
 }

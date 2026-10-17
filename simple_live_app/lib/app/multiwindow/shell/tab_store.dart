@@ -3,7 +3,7 @@ import 'dart:async';
 import 'package:get/get.dart';
 import 'package:uuid/uuid.dart';
 
-import '../presence/douyin_presence_gateway.dart';
+import '../presence/presence_batch_releaser.dart';
 import 'room_controller_registry.dart';
 import 'tab_descriptor.dart';
 import 'tab_open_request.dart';
@@ -18,10 +18,26 @@ class TabStore extends GetxController {
   final RoomControllerRegistry registry;
   final bool hasHome;
 
-  /// Windows 标签壳注入；null（单元测试 / 未来其他宿主）时行为与 M2 完全一致
-  final DouyinPresenceGateway? presenceGateway;
+  /// Windows 标签壳注入；null（单元测试 / 未来其他宿主）时行为与 M2 完全一致。
+  /// 主引擎传 DouyinPresenceGateway，子引擎传 IpcPresenceCoordinator。
+  final PresenceBatchReleaser? presenceGateway;
 
   final _uuid = const Uuid();
+
+  /// 批量菜单防抖：closeOthers/closeRight/closeAll 任一在途时，其余批量
+  /// 调用直接 no-op（终态幂等），杜绝快速两次批量操作的"刚 enter 即 exit"
+  /// 抖动（spec §7 #8）。单标签 close() 不受此门控。
+  bool _batchClosing = false;
+
+  Future<void> _batchGuarded(Future<void> Function() body) async {
+    if (_batchClosing) return;
+    _batchClosing = true;
+    try {
+      await body();
+    } finally {
+      _batchClosing = false;
+    }
+  }
 
   final RxList<TabDescriptor> tabs = <TabDescriptor>[].obs;
   final RxnString activeTabId = RxnString();
@@ -104,7 +120,10 @@ class TabStore extends GetxController {
     return removed;
   }
 
-  Future<void> closeOthers(String tabId) async {
+  Future<void> closeOthers(String tabId) =>
+      _batchGuarded(() => _closeOthers(tabId));
+
+  Future<void> _closeOthers(String tabId) async {
     final index = tabs.indexWhere((t) => t.tabId == tabId);
     if (index < 0) {
       throw ArgumentError('tab not found: $tabId');
@@ -122,7 +141,10 @@ class TabStore extends GetxController {
     activeTabId.value = tabId;
   }
 
-  Future<void> closeRight(String tabId) async {
+  Future<void> closeRight(String tabId) =>
+      _batchGuarded(() => _closeRight(tabId));
+
+  Future<void> _closeRight(String tabId) async {
     final index = tabs.indexWhere((t) => t.tabId == tabId);
     if (index < 0) {
       throw ArgumentError('tab not found: $tabId');
@@ -147,7 +169,9 @@ class TabStore extends GetxController {
     tabs.insert(newIndex.clamp(0, tabs.length), t);
   }
 
-  Future<void> closeAll() async {
+  Future<void> closeAll() => _batchGuarded(_closeAll);
+
+  Future<void> _closeAll() async {
     final all = tabs.toList();
     await presenceGateway?.batchRelease(
       all.map((t) => t.tabId).toSet(),
