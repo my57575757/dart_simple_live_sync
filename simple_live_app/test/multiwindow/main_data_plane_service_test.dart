@@ -588,4 +588,49 @@ void main() {
       tempDir?.deleteSync(recursive: true);
     }
   });
+
+  test('未知方法（pr_ 前缀）委托 unhandledMethodHandler 并原样返回；dp_ 方法不触达',
+      () async {
+    // 独立夹具：不经 bootstrap()，避免触碰 WindowSnapshotBuilder 的 Get 依赖
+    final localStorage = LocalStorageService()
+      ..settingsBox = MemoryKvBox<dynamic>()
+      ..shieldBox = MemoryKvBox<String>();
+    final localDb = DBService()
+      ..historyBox = MemoryKvBox<History>()
+      ..followBox = MemoryKvBox<FollowUser>()
+      ..tagBox = MemoryKvBox<FollowUserTag>()
+      ..volumeBox = MemoryKvBox<double>();
+    final delegated = <(String, Object?)>[];
+    // 同步赋给共享 svc：本文件 tearDown 统一 onClose/Get.reset，
+    // 否则单用例单跑（--plain-name）会触发 late 未初始化
+    final localSvc = svc = MainDataPlaneService(
+      port: _FakePort(),
+      registry: WindowRegistry(mainWindowId: 'main'),
+      storage: localStorage,
+      db: localDb,
+      unhandledMethodHandler: (method, arguments) async {
+        delegated.add((method, arguments));
+        return 'ok';
+      },
+    );
+    localSvc.onInit();
+    try {
+      final result =
+          await localSvc.handleCall('pr_register', {'tabId': 't1'});
+      expect(result, 'ok');
+      // record 运行时类型按字段静态类型物化（actual 第二字段为 Object?），
+      // 直接与字面量列表比 == 必假，逐字段断言委托入参
+      expect(delegated, hasLength(1));
+      expect(delegated.single.$1, 'pr_register');
+      expect(delegated.single.$2, {'tabId': 't1'});
+
+      // dp_ 已知分支（坏载荷）在本服务内返回 false，不得落到委托
+      final badKvSet =
+          await localSvc.handleCall(DataPlaneProtocol.mKvSet, null);
+      expect(badKvSet, isFalse);
+      expect(delegated, hasLength(1), reason: 'dp_ 方法不触达 presence 委托');
+    } finally {
+      localSvc.onClose();
+    }
+  });
 }

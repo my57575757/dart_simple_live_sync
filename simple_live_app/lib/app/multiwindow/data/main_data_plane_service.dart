@@ -31,6 +31,7 @@ class MainDataPlaneService extends GetxService {
     required this.db,
     this.onSettingsChanged,
     this.mainController,
+    this.unhandledMethodHandler,
   });
 
   final SubWindowPort port;
@@ -39,6 +40,10 @@ class MainDataPlaneService extends GetxService {
   final DBService db;
   final void Function()? onSettingsChanged;
   final WindowController? mainController;
+
+  /// 非 dp_ 方法（pr_ 账号面）的唯一委托点；null 时未知方法返回 null
+  final Future<Object?> Function(String method, Object? arguments)?
+      unhandledMethodHandler;
 
   final List<StreamSubscription<dynamic>> _subs = [];
   final Set<String> _suppressed = <String>{};
@@ -260,7 +265,9 @@ class MainDataPlaneService extends GetxService {
         return true;
 
       default:
-        return null;
+        final handler = unhandledMethodHandler;
+        if (handler == null) return null;
+        return handler(method, arguments);
     }
   }
 }

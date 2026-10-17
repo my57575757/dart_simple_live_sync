@@ -6,6 +6,7 @@ import 'package:get/get.dart';
 import 'package:simple_live_app/app/controller/app_settings_controller.dart';
 import 'package:simple_live_app/app/multiwindow/data/main_data_plane_service.dart';
 import 'package:simple_live_app/app/multiwindow/presence/douyin_presence_gateway.dart';
+import 'package:simple_live_app/app/multiwindow/presence/ipc/main_presence_service.dart';
 import 'package:simple_live_app/app/multiwindow/shell/getx_room_controller_registry.dart';
 import 'package:simple_live_app/app/multiwindow/shell/room_controller_registry.dart';
 import 'package:simple_live_app/app/multiwindow/shell/room_shell_page.dart';
@@ -108,6 +109,18 @@ class AppPages {
             ),
             permanent: true,
           );
+          // MainPresenceService 必须先于任何开窗：onInit 即订阅
+          // onChildWindowsClosed（broadcast 不补发历史），故紧随
+          // WindowOpenService 构造；pr_ 流量经数据面 default 分支委托进入，
+          // presence 不另挂 setWindowMethodHandler（dmw 单 handler 槽位）
+          final mainPresenceService = Get.put(
+            MainPresenceService(
+              gateway: Get.find<DouyinPresenceGateway>(),
+              port: subWindowPort,
+              windowOpenService: Get.find<WindowOpenService>(),
+            ),
+            permanent: true,
+          );
           Get.put(
             MainDataPlaneService(
               port: subWindowPort,
@@ -117,6 +130,7 @@ class AppPages {
               onSettingsChanged: () =>
                   AppSettingsController.instance.reloadFromStorage(),
               mainController: DmwSubWindowPort.mainController,
+              unhandledMethodHandler: mainPresenceService.handleCall,
             ),
             permanent: true,
           );
