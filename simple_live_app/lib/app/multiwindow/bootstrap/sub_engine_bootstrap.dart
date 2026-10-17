@@ -201,6 +201,7 @@ Future<void> runSubEngine(WindowController self) async {
           roomId: tab.roomId,
           shareUrl: tab.shareUrl,
         ),
+        tabId: tab.tabId,
       );
     } catch (e, st) {
       Log.logPrint('子窗打开标签失败：${tab.siteId}/${tab.roomId}');

@@ -260,4 +260,21 @@ void main() {
     await s.closeAll();
     expect(releaser.calls, 2);
   });
+
+  test('open 接受外部 tabId：迁移落地保持 id 不变', () {
+    final t = store.open(req('douyin', 'r1'), tabId: 'fixed-tab-id');
+    expect(t.tabId, 'fixed-tab-id');
+    expect(store.tabs.single.tabId, 'fixed-tab-id');
+    expect(registry.registered.containsKey('fixed-tab-id'), isTrue);
+  });
+
+  test('closeForMove：行为同 close（注销/摘除/激活相邻）', () {
+    store.open(req('douyin', 'r1'), tabId: 'a');
+    store.open(req('douyin', 'r2'), tabId: 'b');
+    final removed = store.closeForMove('a');
+    expect(removed.tabId, 'a');
+    expect(store.tabs.single.tabId, 'b');
+    expect(store.activeTabId.value, 'b');
+    expect(registry.registered.containsKey('a'), isFalse);
+  });
 }

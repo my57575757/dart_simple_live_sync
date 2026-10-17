@@ -6,22 +6,28 @@ class RoomTabArg {
     required this.siteId,
     required this.roomId,
     this.shareUrl = '',
+    this.tabId,
   });
 
   final String siteId;
   final String roomId;
   final String shareUrl;
 
+  /// 跨窗迁移预定的标签 id；null=新开窗由 TabStore 生成 uuid
+  final String? tabId;
+
   Map<String, dynamic> toJson() => {
         'siteId': siteId,
         'roomId': roomId,
         'shareUrl': shareUrl,
+        if (tabId != null) 'tabId': tabId,
       };
 
   factory RoomTabArg.fromJson(Map<String, dynamic> json) => RoomTabArg(
         siteId: json['siteId'] as String,
         roomId: json['roomId'] as String,
         shareUrl: (json['shareUrl'] as String?) ?? '',
+        tabId: json['tabId'] as String?,
       );
 }
 

@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:simple_live_app/app/multiwindow/window/window_args.dart';
 
@@ -74,5 +76,22 @@ void main() {
     final decodedLegacy =
         RoomWindowArgs.fromJson(Map<String, dynamic>.from(legacyJson));
     expect(decodedLegacy.mainWindowId, '');
+  });
+
+  test('RoomTabArg.tabId 往返；旧 JSON 缺字段为 null', () {
+    const args = RoomWindowArgs(
+      tabs: [
+        RoomTabArg(siteId: 'douyin', roomId: '1', tabId: 'fixed-id'),
+        RoomTabArg(siteId: 'douyin', roomId: '2'),
+      ],
+    );
+    final decoded = RoomWindowArgs.decode(args.encode());
+    expect(decoded.tabs[0].tabId, 'fixed-id');
+    expect(decoded.tabs[1].tabId, isNull);
+
+    final legacy = RoomTabArg.fromJson(
+        jsonDecode('{"siteId":"douyin","roomId":"9","shareUrl":""}')
+            as Map<String, dynamic>);
+    expect(legacy.tabId, isNull);
   });
 }

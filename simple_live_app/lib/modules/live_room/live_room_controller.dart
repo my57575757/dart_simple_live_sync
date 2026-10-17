@@ -170,6 +170,13 @@ class LiveRoomController extends PlayerController
   PresenceClient? _presenceClient;
   DouyinPresenceTab? _presenceTab;
 
+  /// 跨窗迁移关闭：onClose 时不再发 presence leave（栈/心跳在主端延续）
+  bool _movedAway = false;
+
+  void debugMarkMovedAway() {
+    _movedAway = true;
+  }
+
   /// presence 状态切换世代：每次 apply* 切换递增；续体在每个 await 后发现
   /// 世代已变（让位降级在途时被回退接管/重进/suspended/关闭/刷新抢先）即放弃
   /// 落 side effect，避免迟到续体把账号弹幕覆盖回游客。
@@ -2626,7 +2633,9 @@ ${error is Error ? (error as Error).stackTrace : ""}''');
     scrollController.removeListener(scrollListener);
     autoExitTimer?.cancel();
 
-    unawaited(_leaveDouyinPresence(unconditional: true));
+    if (!_movedAway) {
+      unawaited(_leaveDouyinPresence(unconditional: true));
+    }
 
     liveDanmaku.stop();
     if (_audioServiceActive) {

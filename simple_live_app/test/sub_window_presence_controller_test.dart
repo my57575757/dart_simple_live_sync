@@ -268,4 +268,41 @@ void main() {
     expect(last.roomId, '111');
     expect(accounts.loginCookie, '', reason: '刷新路径立即清借用凭据');
   });
+
+  test('closeForMove 语义：debugMarkMovedAway 后 onClose 不发 pr_release；'
+      '普通 onClose 仍发', () async {
+    // 迁移关闭路径
+    final movedPort = _FakePort();
+    putCoordinator(movedPort);
+    final moved = makeController();
+    moved.bindSubWindowPresence();
+    await Future<void>.delayed(Duration.zero);
+    movedPort.calls.clear();
+
+    moved.debugMarkMovedAway();
+    moved.onClose();
+    await Future<void>.delayed(Duration.zero);
+    expect(
+      movedPort.calls.any((c) => c.$1 == PresenceProtocol.mRelease),
+      isFalse,
+      reason: '迁移关闭不发 leave，心跳/栈由主端 rehome 延续',
+    );
+
+    // 普通关闭路径（Get.reset 在 tearDown，手动新建一套）
+    Get.reset();
+    final normalPort = _FakePort();
+    putCoordinator(normalPort);
+    final normal = makeController();
+    normal.bindSubWindowPresence();
+    await Future<void>.delayed(Duration.zero);
+    normalPort.calls.clear();
+
+    normal.onClose();
+    await Future<void>.delayed(Duration.zero);
+    expect(
+      normalPort.calls.any((c) => c.$1 == PresenceProtocol.mRelease),
+      isTrue,
+      reason: '普通 onClose 行为不变',
+    );
+  });
 }

@@ -52,7 +52,8 @@ class TabStore extends GetxController {
 
   /// 打开（或激活已存在的）直播间标签
   /// [activate]=false 时为后台打开：去重命中不激活、新建也不切换激活标签
-  TabDescriptor open(TabOpenRequest request, {bool activate = true}) {
+  TabDescriptor open(TabOpenRequest request,
+      {bool activate = true, String? tabId}) {
     final existing =
         tabs.firstWhereOrNull((t) => t.request.key == request.key);
     if (existing != null) {
@@ -61,7 +62,7 @@ class TabStore extends GetxController {
       }
       return existing;
     }
-    final tabId = _uuid.v4();
+    final id = tabId ?? _uuid.v4();
     // 激活态必须先于 register 设置：register 同步触发 Get.put→onInit→
     // loadData，控制器在其同步头内据此判定前/后台，决定是否弹全局 loading；
     // 若在 register 之后才赋值，首次左键前台开标签也会被误判为后台。
@@ -69,17 +70,17 @@ class TabStore extends GetxController {
     // 下一帧重建，届时 tabs.add 已完成。
     final previousActive = activeTabId.value;
     if (activate) {
-      activeTabId.value = tabId;
+      activeTabId.value = id;
     }
     try {
-      registry.register(tabId, request);
+      registry.register(id, request);
     } catch (_) {
       // 防御 register 失败（如未知 site）：恢复原激活态，避免悬空指向
       // 尚未加入 tabs 的标签，然后原样抛出
       activeTabId.value = previousActive;
       rethrow;
     }
-    final descriptor = TabDescriptor(tabId: tabId, request: request);
+    final descriptor = TabDescriptor(tabId: id, request: request);
     tabs.add(descriptor);
     return descriptor;
   }
@@ -118,6 +119,13 @@ class TabStore extends GetxController {
           tabs.isEmpty ? null : tabs[index.clamp(0, tabs.length - 1)].tabId;
     }
     return removed;
+  }
+
+  /// 跨窗迁移关闭：先标记控制器「已迁走」抑制其 onClose 的 presence leave
+  /// （心跳/仲裁栈由主端 rehome 延续），其余与 close 完全相同。
+  TabDescriptor closeForMove(String tabId) {
+    registry.controllerForTabId(tabId)?.debugMarkMovedAway();
+    return close(tabId);
   }
 
   Future<void> closeOthers(String tabId) =>
