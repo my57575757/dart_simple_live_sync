@@ -361,4 +361,26 @@ void main() {
 
     await expectation;
   });
+
+  test('handoff 在途目标窗死亡：失败结算 HandoffTargetClosedException', () async {
+    await register('w1', 't1');
+    await claim('w1', 't1', '1');
+    // 源窗与目标窗均须 registerChild + 端口存活，reconcile 才能产出 removed；
+    // t1 仍挂源窗 w1 名下（register 未改挂），故源路径摘不到它，靠 destWindowId 命中
+    registry.registerChild('w1', {'douyin_1'});
+    registry.registerChild('w2', {'douyin_2'});
+    port.alive.add('w1');
+    port.alive.add('w2');
+    final future = svc.prepareHandoff('t1', 'w2')!;
+    // 监听者先挂：completeError 当刻零监听者会被 zone 记为未捕获异步错误
+    final expectation = expectLater(
+        future, throwsA(isA<HandoffTargetClosedException>()));
+
+    // 仅目标窗死亡（源窗 w1 仍存活）→ 立即失败结算，不等 10s 超时
+    port.alive.remove('w2');
+    port.changed.add(null);
+    await flush(10);
+
+    await expectation;
+  });
 }

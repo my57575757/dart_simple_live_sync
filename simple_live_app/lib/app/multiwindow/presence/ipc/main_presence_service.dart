@@ -35,6 +35,12 @@ class HandoffSourceClosedException implements Exception {
   String toString() => 'HandoffSourceClosedException';
 }
 
+class HandoffTargetClosedException implements Exception {
+  const HandoffTargetClosedException();
+  @override
+  String toString() => 'HandoffTargetClosedException';
+}
+
 class _Handoff {
   _Handoff(this.destWindowId) : completer = Completer<void>();
 
@@ -482,6 +488,16 @@ class MainPresenceService extends GetxService
     }
     for (final tabId in tabIds) {
       _failHandoff(tabId, const HandoffSourceClosedException());
+    }
+    // 目标窗死亡：handoff.destWindowId 命中已死窗同样立即失败结算
+    // （spec §5.1/§9.3，M4-4「destWindowId 只写不读」结转补齐），
+    // 不再退化为 10s 超时。源窗路径已结算的 tabId 经 settled 幂等跳过。
+    final targetDoomed = <String>[
+      for (final entry in _handoffs.entries)
+        if (windowIds.contains(entry.value.destWindowId)) entry.key,
+    ];
+    for (final tabId in targetDoomed) {
+      _failHandoff(tabId, const HandoffTargetClosedException());
     }
     if (tabIds.isNotEmpty) {
       await gateway.batchRelease(tabIds);

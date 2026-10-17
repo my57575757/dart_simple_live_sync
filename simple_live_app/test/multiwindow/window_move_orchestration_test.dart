@@ -437,6 +437,7 @@ void main() {
     final bad = await service.handleWindowCall(
         WindowControlProtocol.mRequestMove, null);
     expect(WindowControlProtocol.decodeMoveResult(bad)!.ok, isFalse);
+    expect(WindowControlProtocol.decodeMoveResult(bad)!.message, '移动失败，请重试');
     expect(
       await service.handleWindowCall('mw_unknown', null),
       isNull,
