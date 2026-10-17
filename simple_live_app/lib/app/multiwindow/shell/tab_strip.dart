@@ -3,8 +3,10 @@ import 'dart:io';
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:get/get.dart';
 import 'package:simple_live_app/app/app_style.dart';
+import 'package:simple_live_app/app/multiwindow/window/sub_window_control_service.dart';
 import 'package:simple_live_app/app/multiwindow/window/window_control_protocol.dart';
 import 'package:simple_live_app/app/multiwindow/window/window_open_service.dart';
 import 'package:simple_live_app/app/multiwindow/window/window_role.dart';
@@ -13,6 +15,7 @@ import 'package:simple_live_app/modules/live_room/live_room_controller.dart';
 
 import 'room_controller_registry.dart';
 import 'tab_descriptor.dart';
+import 'tab_move_menu.dart';
 import 'tab_store.dart';
 
 class TabStrip extends StatelessWidget {
@@ -159,41 +162,85 @@ class _TabItem extends StatelessWidget {
       Rect.fromPoints(position, position),
       Offset.zero & overlay.size,
     );
-    LiveRoomController? controller;
-    if (registry.isRegistered(descriptor.tabId)) {
-      controller = Get.find<LiveRoomController>(tag: descriptor.tabId);
-    }
-    final isAccount =
-        controller?.presence.value == RoomPresence.account;
-    // M4-1：移动仅主窗游客态可用；子窗不显示该项，账号态置灰
-    final showMoveItem = Platform.isWindows &&
-        !MultiWindowRole.isSubWindow &&
-        Get.isRegistered<WindowOpenService>();
-    Widget moveChild = const Text('移到新窗口');
-    if (isAccount) {
-      moveChild = const Tooltip(
-        message: '账号跨窗在下一阶段支持',
-        child: Text('移到新窗口'),
-      );
-    }
+
+    // M4-4：主窗经 WOS 本地编排，子窗经控制服务转发主端；账号态可直接迁移
+    // （presence 无缝 handoff），不再置灰
+    final host = TabMoveMenu.resolveMoveMenuHost(
+      isWindows: Platform.isWindows,
+      isSubWindow: MultiWindowRole.isSubWindow,
+      windowServiceRegistered: Get.isRegistered<WindowOpenService>(),
+      controlServiceRegistered:
+          Get.isRegistered<SubWindowControlService>(),
+    );
+    final mainTargets = host == MoveMenuHost.main
+        ? WindowOpenService.instance
+            .listMoveTargets(excludeWindowId: null)
+        : const <WindowListEntry>[];
+
+    final items = <PopupMenuEntry<String>>[
+      const PopupMenuItem(value: 'close', child: Text('关闭')),
+      const PopupMenuItem(value: 'others', child: Text('关闭其他标签')),
+      const PopupMenuItem(value: 'right', child: Text('关闭右侧标签')),
+      if (host != MoveMenuHost.none)
+        ...TabMoveMenu.buildMoveEntries(
+          hasTargets: host == MoveMenuHost.sub || mainTargets.isNotEmpty,
+        ),
+      const PopupMenuItem(value: 'copy', child: Text('复制房间链接')),
+    ];
 
     final value = await showMenu<String>(
       context: context,
       position: rel,
-      items: [
-        const PopupMenuItem(value: 'close', child: Text('关闭')),
-        const PopupMenuItem(value: 'others', child: Text('关闭其他标签')),
-        const PopupMenuItem(value: 'right', child: Text('关闭右侧标签')),
-        if (showMoveItem)
-          PopupMenuItem(
-            value: 'move_window',
-            enabled: !isAccount,
-            child: moveChild,
-          ),
-        const PopupMenuItem(value: 'copy', child: Text('复制房间链接')),
-      ],
+      items: items,
     );
     if (value == null) return;
+
+    // 「其他窗口」：主窗用同步候选；子窗点击后拉列表（排除自己），
+    // 空列表 toast，非空在原位弹二级
+    String? moveTarget = TabMoveMenu.decodeMoveTarget(value);
+    if (value == TabMoveMenu.moveOthers) {
+      final List<WindowListEntry> targets;
+      if (host == MoveMenuHost.main) {
+        targets = mainTargets;
+      } else {
+        final control = SubWindowControlService.instance;
+        final all = await control.requestWindowList();
+        targets =
+            all.where((e) => e.id != control.windowId).toList(growable: false);
+      }
+      if (targets.isEmpty) {
+        SmartDialog.showToast('没有可移入的其他窗口');
+        return;
+      }
+      if (!context.mounted) return;
+      final second = await showMenu<String>(
+        context: context,
+        position: rel,
+        items: TabMoveMenu.buildTargetEntries(targets),
+      );
+      if (second == null) return;
+      moveTarget = TabMoveMenu.decodeMoveTarget(second);
+    }
+
+    if (moveTarget != null) {
+      if (host == MoveMenuHost.sub) {
+        unawaited(
+          SubWindowControlService.instance.requestMove(
+            tab: descriptor,
+            target: moveTarget,
+          ),
+        );
+      } else if (host == MoveMenuHost.main) {
+        unawaited(
+          WindowOpenService.instance.moveTabToWindow(
+            tabId: descriptor.tabId,
+            target: moveTarget,
+          ),
+        );
+      }
+      return;
+    }
+
     switch (value) {
       case 'close':
         store.close(descriptor.tabId);
@@ -201,13 +248,6 @@ class _TabItem extends StatelessWidget {
         unawaited(store.closeOthers(descriptor.tabId));
       case 'right':
         unawaited(store.closeRight(descriptor.tabId));
-      case 'move_window':
-        unawaited(
-          WindowOpenService.instance.moveTabToWindow(
-            tabId: descriptor.tabId,
-            target: WindowControlProtocol.targetNew,
-          ),
-        );
       case 'copy':
         // 优先复制控制器已加载的真实房间链接，避免 shareUrl 为空时复制裸 roomId
         String? realUrl;
