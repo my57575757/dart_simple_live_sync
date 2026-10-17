@@ -90,9 +90,13 @@ void main() {
     expect(registry.windowForTab('douyin_x'), isNull);
     expect(registry.tabsOf('w1'), {'douyin_a'});
 
-    registry.reconcile(['main', 'w2']);
+    final removed = registry.reconcile(['main', 'w2']);
+    expect(removed, {'w1'}, reason: '返回值恰为被摘除窗口集');
     expect(registry.childCount, 1);
     expect(registry.windowForTab('douyin_a'), isNull);
+
+    expect(registry.reconcile(['main', 'w2']), isEmpty,
+        reason: '无变化时返回空集');
   });
 
   test('卡片新窗口：全新房间创建子窗，参数为 room_shell JSON', () async {
@@ -287,5 +291,35 @@ void main() {
     expect(snap.shield, contains('垃圾词'));
     expect(snap.volumes, args.snapshot.volumes);
     expect(snap.followShareUrls, args.snapshot.followShareUrls);
+  });
+
+  test('onChildWindowsClosed：摘除集推送一次，无变化不推送', () async {
+    final closed = <Set<String>>[];
+    final sub = service.onChildWindowsClosed.listen(closed.add);
+    addTearDown(sub.cancel);
+
+    await service.openInNewWindow(req('douyin', 'a'));
+    await service.openInNewWindow(req('douyin', 'b'));
+    await Future<void>.delayed(Duration.zero);
+    expect(closed, isEmpty, reason: '开窗存活不产生死亡事件');
+
+    port.alive.remove('w1');
+    port.changedController.add(null);
+    await Future<void>.delayed(Duration.zero);
+    await Future<void>.delayed(Duration.zero);
+    expect(closed, [
+      {'w1'}
+    ], reason: '一次对账事件推送一个摘除集');
+
+    port.changedController.add(null);
+    await Future<void>.delayed(Duration.zero);
+    await Future<void>.delayed(Duration.zero);
+    expect(closed.length, 1, reason: '窗口集无变化不推送');
+
+    port.alive.remove('w2');
+    port.changedController.add(null);
+    await Future<void>.delayed(Duration.zero);
+    await Future<void>.delayed(Duration.zero);
+    expect(closed.last, {'w2'});
   });
 }

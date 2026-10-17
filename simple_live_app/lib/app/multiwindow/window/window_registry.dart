@@ -31,10 +31,18 @@ class WindowRegistry {
     return null;
   }
 
-  /// onWindowsChanged 后按存活窗口列表对账，摘除已关闭窗口
-  void reconcile(Iterable<String> aliveWindowIds) {
+  /// onWindowsChanged 后按存活窗口列表对账，摘除已关闭窗口。
+  /// 返回本次被摘除的 windowId 集合（无变化为空集），供订阅者
+  /// （MainPresenceService）批量释放该窗名下的远端 presence 标签。
+  Set<String> reconcile(Iterable<String> aliveWindowIds) {
     final alive = aliveWindowIds.toSet();
-    _childTabs.removeWhere((id, _) => !alive.contains(id));
+    final removed = <String>{};
+    _childTabs.removeWhere((id, _) {
+      if (alive.contains(id)) return false;
+      removed.add(id);
+      return true;
+    });
     _order.removeWhere((id) => !_childTabs.containsKey(id));
+    return removed;
   }
 }

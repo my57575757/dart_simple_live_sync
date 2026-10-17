@@ -76,12 +76,24 @@ class WindowOpenService extends GetxService {
 
   StreamSubscription<void>? _windowsChangedSub;
 
+  final StreamController<Set<String>> _childWindowsClosed =
+      StreamController<Set<String>>.broadcast();
+
+  /// 对账发现子窗进程消失（无临终消息）时推送被摘除 windowId 集。
+  /// MainPresenceService 订阅后批量释放该窗名下远端 presence 标签。
+  Stream<Set<String>> get onChildWindowsClosed =>
+      _childWindowsClosed.stream;
+
   @override
   void onInit() {
     super.onInit();
     _windowsChangedSub = port.windowsChanged.listen((_) async {
       try {
-        registry.reconcile(await port.listWindowIds());
+        final removed =
+            registry.reconcile(await port.listWindowIds());
+        if (removed.isNotEmpty) {
+          _childWindowsClosed.add(removed);
+        }
       } catch (_) {
         // 对账失败等下一事件自愈，不影响开窗主流程
       }
@@ -92,6 +104,7 @@ class WindowOpenService extends GetxService {
   void onClose() {
     unawaited(_windowsChangedSub?.cancel());
     _windowsChangedSub = null;
+    unawaited(_childWindowsClosed.close());
     super.onClose();
   }
 
