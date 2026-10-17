@@ -42,14 +42,19 @@
 - 测试：storage/db 假实现抛异常时，六方法各返回 false 且不抛；
   成功路径仍 true（既有测试回归）。
 
-### D3（T6 M-1）kindVolume 畸形值语义对称化
+### D3（T6 M-1）kindVolume 畸形值处理显式化
 
 - 现状：sub_data_plane_client.dart:94 非 num 值走 `seedVolume(key, null,
-  deleted: value==null)`——String 畸形值被当作删除，与 shield
-  "非 String 忽略"（:85）不对称。输入只来自受信主端，生产不可达。
-- 改动：明确语义为**畸形忽略**——`value is num` 正常 seed；
-  `deleted==true || value == null` 删除；其余（String 等）忽略不写。
-- 测试：并入 D4 表驱动。
+  deleted: value==null)`。**实施实证（SDD Task 3）修正了原判断**：
+  String 畸形值产生的是 `seedVolume(null, deleted: false)`，而
+  InMemoryDBService.seedVolume 的 deleted/value 两分支均不命中
+  （in_memory_services.dart:75-81），本就是静默忽略——原 spec
+  「String 被当作删除」系误读，现状语义已正确，只是靠隐式 fallthrough
+  意外正确。输入只来自受信主端，生产不可达。
+- 改动（零行为变化的显式化重构）：写清三分支——`e.clear` 清空；
+  `deleted==true || value == null` 删除；`value is num` 转 double 写入；
+  其余（String 等）落到分支外即忽略，与 shield「非 String 忽略」对称。
+- 测试：并入 D4 表驱动；'junk' 用例在重构前后均绿，为锚点而非红测。
 
 ### D4（T6 M-3）volume 三分支表驱动测试
 

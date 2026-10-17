@@ -531,7 +531,14 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
 
 ---
 
-### Task 3: D3+D4 kindVolume 畸形值忽略与三分支表驱动测试
+### Task 3: D3+D4 kindVolume 三分支显式化与表驱动回归
+
+> **实施勘误（SDD Task 3 裁决，2026-10-17）**：下列 Step 2 原写「'junk'
+> 被现状代码当作删除、测试 FAIL」，经实证不成立——现状三元式对 String
+> 畸形值产生 `seedVolume(key, null, deleted: false)`，而 InMemoryDBService
+> 的 deleted/null 两分支均不命中，本就是静默 no-op。故本任务**无 RED**：
+> 表驱动（含 'junk'）在重构前后均绿，性质为 characterization/regression
+> 锚点；Step 3 是零行为变化的显式化重构，Step 5 用 refactor 提交。
 
 **Files:**
 - Modify: `simple_live_app/lib/app/multiwindow/data/sub_data_plane_client.dart`（kindVolume case，约 L89-96）
@@ -541,7 +548,7 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
 - Consumes: `InMemoryDBService.seedVolume(String, double?, {bool deleted})`、`seedVolumesClear()`、`DBService.exportVolumes()`。
 - Produces: 无新签名。
 
-- [ ] **Step 1: 写失败测试**
+- [ ] **Step 1: 写表驱动回归测试（锚点，非红绿）**
 
 在 `sub_data_plane_client_test.dart` 的 `main()` 内最后追加：
 
@@ -594,12 +601,14 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
   });
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [ ] **Step 2: 跑测试确认现状即绿（锚点性质）**
 
 Run: `C:/tools/flutter347/flutter/bin/flutter.bat test test/multiwindow/sub_data_plane_client_test.dart`
-Expected: FAIL——最后一段 `'junk'` 被现状代码当作删除，`exportVolumes()` 为空。
+Expected: PASS——`'junk'` 现状已是静默忽略（`seedVolume(null, deleted:false)`
+双 fallthrough no-op），全部用例在旧码下通过。若此处 FAIL，说明实证前提
+变化，停下报控制器，不得自行改生产代码凑红或凑绿。
 
-- [ ] **Step 3: 实现三分支**
+- [ ] **Step 3: 显式化重构三分支（零行为变化）**
 
 将 `sub_data_plane_client.dart` 的 kindVolume case：
 
@@ -638,10 +647,13 @@ Expected: PASS。
 
 ```bash
 git add simple_live_app/lib/app/multiwindow/data/sub_data_plane_client.dart simple_live_app/test/multiwindow/sub_data_plane_client_test.dart
-git commit -m "fix(multiwindow): 子端 volume 畸形非 num 值改为忽略
+git commit -m "refactor(multiwindow): 子端 volume 三分支显式化并补表驱动回归
 
-与 shield 非 String 忽略语义对称，String 等坏值不再被误当删除；
-补 clear/deleted/null/int/畸形五输入表驱动回归（M4-2 D3/D4）。
+spec D3 原判断「String 畸形值被当删除」实证不成立——
+seedVolume(null, deleted:false) 在 InMemoryDBService 两分支均不命中，
+现状即静默忽略。本提交零行为变化：隐式 fallthrough 改为与 shield
+对称的显式三分支（clear / 删除 / num 写入，其余忽略），并以表驱动
+测试钉死五输入语义（M4-2 D3/D4）。
 
 Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
 ```
