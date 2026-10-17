@@ -20,7 +20,10 @@ import 'package:simple_live_app/app/multiwindow/shell/getx_room_controller_regis
 import 'package:simple_live_app/app/multiwindow/shell/room_controller_registry.dart';
 import 'package:simple_live_app/app/multiwindow/shell/tab_open_request.dart';
 import 'package:simple_live_app/app/multiwindow/shell/tab_store.dart';
+import 'package:simple_live_app/app/multiwindow/window/sub_window_control_port.dart';
+import 'package:simple_live_app/app/multiwindow/window/sub_window_control_service.dart';
 import 'package:simple_live_app/app/multiwindow/window/window_args.dart';
+import 'package:simple_live_app/app/multiwindow/window/window_control_protocol.dart';
 import 'package:simple_live_app/app/multiwindow/window/window_role.dart';
 import 'package:simple_live_app/main.dart' show MyApp;
 import 'package:simple_live_app/services/bilibili_account_service.dart';
@@ -77,6 +80,11 @@ Future<void> runSubEngine(WindowController self) async {
   final SubPresencePort? presencePort = dataPort == null
       ? null
       : DmwSubPresencePort(args.mainWindowId);
+
+  // 窗口管理通道与 presence 通道同门控：只有挂在主窗下的子窗才能跨窗迁移
+  final SubWindowControlPort? controlPort = presencePort == null
+      ? null
+      : DmwSubWindowControlPort(args.mainWindowId);
 
   RemoteKvBox<dynamic>? settingsKv;
   RemoteKvBox<String>? shieldKv;
@@ -151,6 +159,17 @@ Future<void> runSubEngine(WindowController self) async {
     permanent: true,
   );
 
+  final SubWindowControlService? controlService = controlPort == null
+      ? null
+      : Get.put(
+          SubWindowControlService(
+            windowId: self.windowId,
+            port: controlPort,
+            store: store,
+          ),
+          permanent: true,
+        );
+
   // —— 数据面客户端 + 总 handler：handler 先就位，再 await 对账（spec §6.4）——
   final SubDataPlaneClient? dataClient = dataPort == null
       ? null
@@ -175,6 +194,10 @@ Future<void> runSubEngine(WindowController self) async {
         // coordinator 为 null（无主窗的独立子窗）时 await null → 返回 null
         return await presenceCoordinator?.handleCall(
             call.method, call.arguments);
+      case WindowControlProtocol.mOpenTab:
+      case WindowControlProtocol.mCloseTab:
+        // controlService 为 null（无主窗的独立子窗）时返回 null
+        return await controlService?.handleCall(call.method, call.arguments);
       case 'focus_tab':
         await windowManager.show();
         await windowManager.focus();
