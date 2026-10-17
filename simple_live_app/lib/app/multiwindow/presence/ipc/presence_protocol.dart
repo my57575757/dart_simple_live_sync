@@ -117,7 +117,8 @@ class PresenceProtocol {
         shareUrl is! String ||
         guardRoomId is! String ||
         guardWebRid is! String ||
-        guardExtra is! Map) {
+        guardExtra is! Map ||
+        !guardExtra.keys.every((k) => k is String)) {
       return null;
     }
     return PresenceClaimCall(
@@ -227,6 +228,7 @@ class PresenceProtocol {
     if (tabId == null ||
         cookie is! String ||
         status is! Map ||
+        !status.keys.every((k) => k is String) ||
         reentered is! bool) {
       return null;
     }

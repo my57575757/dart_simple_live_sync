@@ -38,6 +38,26 @@ void main() {
     expect(dClaim.guardExtra, isEmpty);
     expect(PresenceProtocol.encodeClaim(dClaim), claim);
 
+    // 空 guardWebRid 同样是合法值（仅 String 类型必填）
+    final claimEmptyWebRid = PresenceProtocol.encodeClaim(
+      const PresenceClaimCall(
+        windowId: 'w1',
+        tabId: 't1',
+        roomId: '711',
+        shareUrl: '',
+        guardRoomId: 'r711',
+        guardWebRid: '',
+        guardExtra: <String, Object?>{},
+      ),
+    );
+    final dClaimEmptyWebRid =
+        PresenceProtocol.decodeClaim(claimEmptyWebRid)!;
+    expect(dClaimEmptyWebRid.guardWebRid, '');
+    expect(
+      PresenceProtocol.encodeClaim(dClaimEmptyWebRid),
+      claimEmptyWebRid,
+    );
+
     final release = PresenceProtocol.encodeRelease(
       const PresenceReleaseCall(windowId: 'w1', tabId: 't1'),
     );
@@ -93,6 +113,27 @@ void main() {
     expect(dEnter.status, {'inRoom': true});
     expect(dEnter.reentered, isTrue);
     expect(PresenceProtocol.encodeApplyEnter(dEnter), enter);
+
+    // 空 cookie 是合法值（必须是 String，空串不拦）
+    final emptyCookie = PresenceProtocol.encodeApplyEnter(
+      const PresenceApplyEnterCall(
+        tabId: 't2',
+        cookie: '',
+        status: <String, Object?>{},
+        reentered: false,
+      ),
+    );
+    final dEmptyCookie = PresenceProtocol.decodeApplyEnter(emptyCookie)!;
+    expect(dEmptyCookie.cookie, '');
+    expect(PresenceProtocol.encodeApplyEnter(dEmptyCookie), emptyCookie);
+
+    // ipcFailed 是子端本地结果，禁止编码上线
+    expect(
+      () => PresenceProtocol.encodeClaimFailure(
+        PresenceFailureReason.ipcFailed,
+      ),
+      throwsArgumentError,
+    );
 
     expect(
       PresenceProtocol.decodeTabApply(PresenceProtocol.encodeTabApply('t9')),
@@ -187,6 +228,14 @@ void main() {
     expect(PresenceProtocol.decodeClaim(badRoomIdType), isNull);
     expect(PresenceProtocol.decodeClaim(missingWebRid), isNull);
 
+    // guardExtra 非字符串键：decode 必须返回 null，不许抛 _TypeError
+    final nonStringExtraKey = Map<String, Object?>.from(goodClaim)
+      ..['guardExtra'] = <Object, Object?>{1: 'x'};
+    expect(PresenceProtocol.decodeClaim(nonStringExtraKey), isNull);
+
+    expect(PresenceProtocol.decodeClaim(null), isNull);
+    expect(PresenceProtocol.decodeClaim('x'), isNull);
+
     expect(PresenceProtocol.decodeRelease(null), isNull);
     expect(
       PresenceProtocol.decodeRelease({'windowId': 'w'}),
@@ -203,6 +252,13 @@ void main() {
       PresenceProtocol.decodeBatchRelease({
         'windowId': 'w',
         'tabIds': ['t', 1],
+      }),
+      isNull,
+    );
+    expect(
+      PresenceProtocol.decodeBatchRelease({
+        'windowId': 'w',
+        'tabIds': ['t', ''],
       }),
       isNull,
     );
@@ -241,6 +297,23 @@ void main() {
       }),
       isNull,
     );
+    expect(
+      PresenceProtocol.decodeGuardSend({
+        'windowId': 'w',
+        'tabId': 't',
+        'kind': 'danmaku',
+        'content': 1,
+      }),
+      isNull,
+    );
+    expect(
+      PresenceProtocol.decodeGuardSend({
+        'windowId': 'w',
+        'tabId': 't',
+        'kind': 'action',
+      }),
+      isNull,
+    );
 
     expect(
       PresenceProtocol.decodeApplyEnter({
@@ -260,6 +333,19 @@ void main() {
       }),
       isNull,
     );
+    expect(
+      PresenceProtocol.decodeApplyEnter({
+        'tabId': 't',
+        'cookie': 'c',
+        // status 非字符串键：decode 必须返回 null，不许抛 _TypeError
+        'status': <Object, Object?>{1: 'x'},
+        'reentered': false,
+      }),
+      isNull,
+    );
+
+    expect(PresenceProtocol.decodeApplyEnter(null), isNull);
+    expect(PresenceProtocol.decodeApplyEnter('x'), isNull);
 
     expect(PresenceProtocol.decodeTabApply('x'), isNull);
     expect(PresenceProtocol.decodeTabApply({'tabId': ''}), isNull);
@@ -307,6 +393,14 @@ void main() {
     ]);
     expect(listLog.contains('sessionid'), isFalse);
     expect(listLog, contains('<cookie:'));
+
+    // cookie 值非 String：替换为 <cookie:0chars>，序列化不抛
+    final numCookieLog = PresenceProtocol.sanitizeForLog(
+      'x',
+      const <String, Object?>{'cookie': 1, 'tabId': 't1'},
+    );
+    expect(numCookieLog, contains('<cookie:0chars>'));
+    expect(numCookieLog, contains('"tabId":"t1"'));
 
     expect(
       PresenceProtocol.sanitizeForLog('x', Object()),
