@@ -10,6 +10,7 @@ import 'package:simple_live_app/app/multiwindow/presence/ipc/main_presence_servi
 import 'package:simple_live_app/app/multiwindow/shell/getx_room_controller_registry.dart';
 import 'package:simple_live_app/app/multiwindow/shell/room_controller_registry.dart';
 import 'package:simple_live_app/app/multiwindow/shell/room_shell_page.dart';
+import 'package:simple_live_app/app/multiwindow/shell/sub_window_blocked_page.dart';
 import 'package:simple_live_app/app/multiwindow/shell/tab_store.dart';
 import 'package:simple_live_app/app/multiwindow/window/dmw_sub_window_port.dart';
 import 'package:simple_live_app/app/multiwindow/window/window_open_service.dart';
@@ -247,7 +248,7 @@ class AppPages {
     //账号设置
     GetPage(
       name: RoutePath.kSettingsAccount,
-      page: () => const AccountPage(),
+      page: () => const SubWindowBlockedPage(child: AccountPage()),
       bindings: [
         BindingsBuilder.put(() => AccountController()),
       ],
@@ -271,7 +272,7 @@ class AppPages {
     //通用WebView登录
     GetPage(
       name: RoutePath.kWebLogin,
-      page: () => const WebLoginPage(),
+      page: () => const SubWindowBlockedPage(child: WebLoginPage()),
       binding: BindingsBuilder.put(() => WebLoginController()),
     ),
     // 数据同步
@@ -325,7 +326,7 @@ class AppPages {
     //远程同步-WebDAV
     GetPage(
       name: RoutePath.kRemoteSyncWebDav,
-      page: () => const RemoteSyncWebDAVPage(),
+      page: () => const SubWindowBlockedPage(child: RemoteSyncWebDAVPage()),
       bindings: [
         BindingsBuilder.put(
               () => RemoteSyncWebDAVController(),
@@ -340,7 +341,7 @@ class AppPages {
     //其他设置
     GetPage(
       name: RoutePath.kSettingsOther,
-      page: () => const OtherSettingsPage(),
+      page: () => const SubWindowBlockedPage(child: OtherSettingsPage()),
       bindings: [
         BindingsBuilder.put(() => OtherSettingsController()),
       ],
