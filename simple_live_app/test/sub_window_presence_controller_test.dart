@@ -13,6 +13,8 @@ import 'package:simple_live_app/modules/live_room/live_room_controller.dart';
 import 'package:simple_live_app/services/douyin_account_service.dart';
 import 'package:simple_live_app/services/guard_server_service.dart';
 import 'package:simple_live_core/simple_live_core.dart';
+// ignore: depend_on_referenced_packages
+import 'package:wakelock_plus_platform_interface/messages.g.dart' show WakelockPlusApi;
 
 class _FakeDanmaku extends LiveDanmaku {
   @override
@@ -269,19 +271,39 @@ void main() {
     expect(accounts.loginCookie, '', reason: '刷新路径立即清借用凭据');
   });
 
-  test('closeForMove 语义：debugMarkMovedAway 后 onClose 不发 pr_release；'
-      '普通 onClose 仍发', () async {
+  testWidgets('closeForMove 语义：debugMarkMovedAway 后 onClose 不发 pr_release；'
+      '普通 onClose 仍发', (tester) async {
+    // 提供真实 binding（最简 Scaffold，无 UI 交互不需要 SmartDialog）。
+    // 纯 test() 下 onClose 异步链上的 pigeon 通道无 mock，PlatformException
+    // 晚到漏入测试 zone 导致 flake；testWidgets + 通道 mock 覆盖。
+    await tester.pumpWidget(const MaterialApp(home: Scaffold(body: SizedBox())));
+
+    // mock wakelock_plus pigeon 通道回成功空信封。
+    // 依据 wakelock_plus_platform_interface 1.7.0 messages.g.dart（pigeon v28）：
+    //   channel: dev.flutter.pigeon.wakelock_plus_platform_interface.WakelockPlusApi.toggle
+    //   codec:   WakelockPlusApi.pigeonChannelCodec（_PigeonCodec）
+    //   void 成功返回 wrapResponse(result: null) → <Object?>[null]（List 信封）。
+    //   注：brief 猜测的 {'result': null} 为旧版 pigeon async 协议，v28 实为
+    //   List 信封（_extractReplyValueOrThrow 对 isNullValid=true 接受 [null]）。
+    // handler 在整个用例期间有效（Get.reset 不影响 binding 级 channel mock）。
+    tester.binding.defaultBinaryMessenger.setMockMessageHandler(
+      'dev.flutter.pigeon.wakelock_plus_platform_interface.WakelockPlusApi.toggle',
+      (ByteData? message) async =>
+          WakelockPlusApi.pigeonChannelCodec.encodeMessage(<Object?>[null]),
+    );
+
     // 迁移关闭路径
     final movedPort = _FakePort();
     putCoordinator(movedPort);
     final moved = makeController();
     moved.bindSubWindowPresence();
-    await Future<void>.delayed(Duration.zero);
+    await tester.pump();
     movedPort.calls.clear();
 
     moved.debugMarkMovedAway();
     moved.onClose();
-    await Future<void>.delayed(Duration.zero);
+    await tester.pump();
+    await tester.pump();
     expect(
       movedPort.calls.any((c) => c.$1 == PresenceProtocol.mRelease),
       isFalse,
@@ -294,11 +316,12 @@ void main() {
     putCoordinator(normalPort);
     final normal = makeController();
     normal.bindSubWindowPresence();
-    await Future<void>.delayed(Duration.zero);
+    await tester.pump();
     normalPort.calls.clear();
 
     normal.onClose();
-    await Future<void>.delayed(Duration.zero);
+    await tester.pump();
+    await tester.pump();
     expect(
       normalPort.calls.any((c) => c.$1 == PresenceProtocol.mRelease),
       isTrue,
