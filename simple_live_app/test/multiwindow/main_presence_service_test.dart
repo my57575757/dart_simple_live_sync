@@ -42,8 +42,10 @@ class _FakeSubWindowPort implements SubWindowPort {
   }
 
   @override
-  Future<void> invoke(String windowId, String method, Object? arguments) async {
+  Future<Object?> invoke(String windowId, String method, Object? arguments)
+      async {
     invokes.add((windowId, method, arguments));
+    return null;
   }
 
   @override

@@ -22,9 +22,9 @@ class DmwSubWindowPort implements SubWindowPort {
   }
 
   @override
-  Future<void> invoke(
+  Future<Object?> invoke(
       String windowId, String method, Object? arguments) async {
-    await WindowController.fromWindowId(windowId)
+    return WindowController.fromWindowId(windowId)
         .invokeMethod(method, arguments);
   }
 

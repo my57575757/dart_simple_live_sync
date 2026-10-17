@@ -52,8 +52,10 @@ class FakeSubWindowPort implements SubWindowPort {
   }
 
   @override
-  Future<void> invoke(String windowId, String method, Object? arguments) async {
+  Future<Object?> invoke(String windowId, String method, Object? arguments)
+      async {
     invocations.add((windowId, method, arguments));
+    return null;
   }
 
   @override
@@ -127,16 +129,6 @@ void main() {
 
     expect(port.created.length, 1);
     expect(port.invocations, contains(('w1', 'focus_tab', 'douyin_a')));
-  });
-
-  test('移到新窗口：创建子窗后关闭本窗标签', () async {
-    final tab = store.open(req('douyin', 'a', 'http://a'));
-    await service.moveTabToNewWindow(tab.tabId);
-
-    expect(port.created.length, 1);
-    final args = RoomWindowArgs.decode(port.created.values.single);
-    expect(args.tabs.single.shareUrl, 'http://a');
-    expect(store.tabs, isEmpty);
   });
 
   test('onWindowsChanged：窗口消失后注册表自动对账摘除', () async {

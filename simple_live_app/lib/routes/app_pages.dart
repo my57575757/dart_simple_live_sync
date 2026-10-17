@@ -13,6 +13,7 @@ import 'package:simple_live_app/app/multiwindow/shell/room_shell_page.dart';
 import 'package:simple_live_app/app/multiwindow/shell/sub_window_blocked_page.dart';
 import 'package:simple_live_app/app/multiwindow/shell/tab_store.dart';
 import 'package:simple_live_app/app/multiwindow/window/dmw_sub_window_port.dart';
+import 'package:simple_live_app/app/multiwindow/window/unhandled_method_router.dart';
 import 'package:simple_live_app/app/multiwindow/window/window_open_service.dart';
 import 'package:simple_live_app/app/multiwindow/window/window_registry.dart';
 import 'package:simple_live_app/app/multiwindow/window/window_role.dart';
@@ -102,7 +103,7 @@ class AppPages {
           final windowRegistry = WindowRegistry(
             mainWindowId: DmwSubWindowPort.mainWindowId!,
           );
-          Get.put(
+          final windowOpenService = Get.put(
             WindowOpenService(
               port: subWindowPort,
               store: Get.find<TabStore>(),
@@ -112,16 +113,18 @@ class AppPages {
           );
           // MainPresenceService 必须先于任何开窗：onInit 即订阅
           // onChildWindowsClosed（broadcast 不补发历史），故紧随
-          // WindowOpenService 构造；pr_ 流量经数据面 default 分支委托进入，
-          // presence 不另挂 setWindowMethodHandler（dmw 单 handler 槽位）
+          // WindowOpenService 构造；pr_/mw_ 流量经数据面 default 分支
+          // 前缀路由委托进入，presence 不另挂 setWindowMethodHandler
           final mainPresenceService = Get.put(
             MainPresenceService(
               gateway: Get.find<DouyinPresenceGateway>(),
               port: subWindowPort,
-              windowOpenService: Get.find<WindowOpenService>(),
+              windowOpenService: windowOpenService,
             ),
             permanent: true,
           );
+          // WOS 构造早于 MPS：后绑 handoff 能力
+          windowOpenService.presenceService = mainPresenceService;
           Get.put(
             MainDataPlaneService(
               port: subWindowPort,
@@ -131,7 +134,13 @@ class AppPages {
               onSettingsChanged: () =>
                   AppSettingsController.instance.reloadFromStorage(),
               mainController: DmwSubWindowPort.mainController,
-              unhandledMethodHandler: mainPresenceService.handleCall,
+              unhandledMethodHandler: (method, arguments) =>
+                  routeUnhandledMethod(
+                method,
+                arguments,
+                presenceHandler: mainPresenceService.handleCall,
+                windowHandler: windowOpenService.handleWindowCall,
+              ),
             ),
             permanent: true,
           );

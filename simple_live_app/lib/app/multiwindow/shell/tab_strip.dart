@@ -5,6 +5,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:simple_live_app/app/app_style.dart';
+import 'package:simple_live_app/app/multiwindow/window/window_control_protocol.dart';
 import 'package:simple_live_app/app/multiwindow/window/window_open_service.dart';
 import 'package:simple_live_app/app/multiwindow/window/window_role.dart';
 import 'package:simple_live_app/app/utils.dart';
@@ -202,8 +203,10 @@ class _TabItem extends StatelessWidget {
         unawaited(store.closeRight(descriptor.tabId));
       case 'move_window':
         unawaited(
-          WindowOpenService.instance
-              .moveTabToNewWindow(descriptor.tabId),
+          WindowOpenService.instance.moveTabToWindow(
+            tabId: descriptor.tabId,
+            target: WindowControlProtocol.targetNew,
+          ),
         );
       case 'copy':
         // 优先复制控制器已加载的真实房间链接，避免 shareUrl 为空时复制裸 roomId

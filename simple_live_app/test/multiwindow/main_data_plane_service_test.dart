@@ -28,9 +28,11 @@ class _FakePort implements SubWindowPort {
       const SubWindowHandle('x');
 
   @override
-  Future<void> invoke(String windowId, String method, Object? arguments) async {
+  Future<Object?> invoke(String windowId, String method, Object? arguments)
+      async {
     calls.add((windowId, method, arguments));
     if (windowId == throwingWindow) throw StateError('window gone');
+    return null;
   }
 
   @override

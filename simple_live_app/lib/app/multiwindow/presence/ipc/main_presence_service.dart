@@ -7,6 +7,7 @@ import 'package:simple_live_app/app/multiwindow/window/window_open_service.dart'
 import 'package:simple_live_core/simple_live_core.dart';
 
 import '../douyin_presence_gateway.dart';
+import '../handoff_controller.dart';
 import '../presence_client.dart';
 import 'presence_protocol.dart';
 import 'remote_presence_tab.dart';
@@ -41,7 +42,8 @@ class _Handoff {
 /// 主引擎账号面 presence 服务：解析 pr_ 方法，把远端标签混入唯一网关
 /// 仲裁栈；维护 tabId→windowId 死亡对账索引（register 只建索引，
 /// 不进栈）；订阅子窗死亡流批量释放。dp_/pr_ 互不解析对方方法。
-class MainPresenceService extends GetxService {
+class MainPresenceService extends GetxService
+    implements PresenceHandoffController {
   MainPresenceService({
     required this.gateway,
     required this.port,
@@ -253,6 +255,7 @@ class MainPresenceService extends GetxService {
 
   /// 编排层迁移前置：网关跟踪该 tab 时建 10s handoff 并返回其 future；
   /// 非跟踪（非抖音/纯游客）返回 null，编排层按纯壳迁移处理。
+  @override
   Future<void>? prepareHandoff(String tabId, String destWindowId) {
     if (!gateway.isTrackedTab(tabId)) return null;
     final previous = _handoffs.remove(tabId);
@@ -282,6 +285,7 @@ class MainPresenceService extends GetxService {
 
   /// 子→主：主窗 store.open 后控制器已 bindTab 本地端口。摘远端索引/
   /// RemoteTab，网关 rehome(newPort:null) 换到本地端口并复刻；幂等。
+  @override
   Future<void> rehomeLocal(String tabId) async {
     final old = _remoteTabs.remove(tabId);
     old?.markClosed();
