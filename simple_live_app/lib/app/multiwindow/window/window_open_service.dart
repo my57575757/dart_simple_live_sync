@@ -88,6 +88,11 @@ class WindowOpenService extends GetxService {
   final void Function(String message) _showToast;
   final Future<void> Function()? _focusMainOverride;
 
+  /// 在途迁移 tabId 集：菜单 unawaited 连点会让同一标签的两次迁移在 await
+  /// 点交错（孤立重复标签 / presence 索引被末次 pr_register 胜出 / 旧
+  /// handoff 被误报「移动超时」）。入口登记，finally 清理。
+  final Set<String> _movingTabIds = <String>{};
+
   Future<void> _showAndFocusMain() async {
     final override = _focusMainOverride;
     if (override != null) {
@@ -231,163 +236,177 @@ class WindowOpenService extends GetxService {
       return message;
     }
 
-    // 1. 取请求四元组（tabId 为权威身份，presence 全程不换）
-    TabOpenRequest? request;
-    if (fromMain) {
-      request = store.tabs
-          .firstWhereOrNull((t) => t.tabId == tabId)
-          ?.request;
-    } else if (siteId != null && roomId != null) {
-      request = TabOpenRequest(
-          siteId: siteId, roomId: roomId, shareUrl: shareUrl ?? '');
+    // F1：tabId 级在途守卫，第二次并发直接拒
+    if (!_movingTabIds.add(tabId)) {
+      return fail('移动失败，请重试');
     }
-    final req0 = request;
-    if (req0 == null) {
-      return fail('未找到要移动的标签');
-    }
-    final tabKey = req0.key;
+    try {
+      // 1. 取请求四元组（tabId 为权威身份，presence 全程不换）
+      TabOpenRequest? request;
+      if (fromMain) {
+        request = store.tabs
+            .firstWhereOrNull((t) => t.tabId == tabId)
+            ?.request;
+      } else if (siteId != null && roomId != null) {
+        request = TabOpenRequest(
+            siteId: siteId, roomId: roomId, shareUrl: shareUrl ?? '');
+      }
+      final req0 = request;
+      if (req0 == null) {
+        return fail('未找到要移动的标签');
+      }
+      final tabKey = req0.key;
 
-    // 2. 解析目标；__new__ 此刻创建进程（早于 prepareHandoff：创建失败
-    //    时根本没有 handoff 需要取消，spec §8）
-    var destIsNew = false;
-    var destIsMain = false;
-    var destWindowId = '';
-    if (target == WindowControlProtocol.targetMain) {
-      destIsMain = true;
-      destWindowId = registry.mainWindowId;
-    } else if (target == WindowControlProtocol.targetNew) {
-      destIsNew = true;
-      try {
-        final handle = await port.createRoomWindow(
-          RoomWindowArgs(
-            mainWindowId: DmwSubWindowPort.mainWindowId ?? '',
-            tabs: [
-              RoomTabArg(
-                siteId: req0.siteId,
-                roomId: req0.roomId,
-                shareUrl: req0.shareUrl,
-                tabId: tabId,
-              ),
-            ],
-            snapshot: WindowSnapshotBuilder.buildDataSnapshot(),
-          ).encode(),
-        );
-        destWindowId = handle.windowId;
-        // 新窗空集覆盖式登记（registerChild 语义）
-        registry.registerChild(handle.windowId, {tabKey});
-      } catch (_) {
-        return fail('新建窗口失败');
+      // F3：子源载荷归属校验——tab 实际所在子窗须等于 sourceWindowId，
+      // 防 IPC 载荷串窗/伪造；registry 查不到（漂移）放行以免误杀。
+      final owner = registry.windowForTab(tabKey);
+      if (owner != null && owner != sourceWindowId) {
+        return fail('未找到要移动的标签');
       }
-    } else {
-      if (!registry.childWindowIds.contains(target)) {
-        return fail('目标窗口不存在');
-      }
-      destWindowId = target;
-    }
 
-    // 3. presence 无缝 handoff（非抖音/未跟踪得 null，壳流程不等）
-    final handoff =
-        presenceService?.prepareHandoff(tabId, destWindowId);
-
-    // 4. 目标落标签
-    if (destIsMain) {
-      // 主窗控制器在 store.open 同步头内 onInit→bindTab，先于 rehomeLocal
-      store.open(req0, tabId: tabId);
-      try {
-        await presenceService?.rehomeLocal(tabId);
-      } catch (_) {
-        // 本地复刻失败不阻断壳迁移：pending 补放/写动作 claim 自愈（spec §8）
-      }
-      // rehomeLocal 已结算本地 handoff；若 rehomeLocal 抛错未结算，
-      // 10s 超时自清，吞掉未监听的完成错误避免 unhandled
-      final discarded = handoff;
-      if (discarded != null) {
-        unawaited(discarded.catchError((Object _) {}));
-      }
-    } else {
-      if (!destIsNew) {
-        Object? accepted;
+      // 2. 解析目标；__new__ 此刻创建进程（早于 prepareHandoff：创建失败
+      //    时根本没有 handoff 需要取消，spec §8）
+      var destIsNew = false;
+      var destIsMain = false;
+      var destWindowId = '';
+      if (target == WindowControlProtocol.targetMain) {
+        destIsMain = true;
+        destWindowId = registry.mainWindowId;
+      } else if (target == WindowControlProtocol.targetNew) {
+        destIsNew = true;
         try {
-          accepted = await port.invoke(
-            destWindowId,
-            WindowControlProtocol.mOpenTab,
-            WindowControlProtocol.encodeOpenTab(
-              OpenTabCall(
-                tabId: tabId,
-                siteId: req0.siteId,
-                roomId: req0.roomId,
-                shareUrl: req0.shareUrl,
-                activate: true,
-              ),
-            ),
+          final handle = await port.createRoomWindow(
+            RoomWindowArgs(
+              mainWindowId: DmwSubWindowPort.mainWindowId ?? '',
+              tabs: [
+                RoomTabArg(
+                  siteId: req0.siteId,
+                  roomId: req0.roomId,
+                  shareUrl: req0.shareUrl,
+                  tabId: tabId,
+                ),
+              ],
+              snapshot: WindowSnapshotBuilder.buildDataSnapshot(),
+            ).encode(),
           );
+          destWindowId = handle.windowId;
+          // 新窗空集覆盖式登记（registerChild 语义）
+          registry.registerChild(handle.windowId, {tabKey});
         } catch (_) {
-          accepted = false;
+          return fail('新建窗口失败');
         }
-        if (accepted != true) {
-          // 不登记 registry；handoff 由 10s 超时自清；源不动（spec §8）
-          final discarded = handoff;
-          if (discarded != null) {
-            unawaited(discarded.catchError((Object _) {}));
-          }
-          return fail('目标窗口无响应');
-        }
-        registry.addChildTab(destWindowId, tabKey);
-      }
-      // new 的 pr_register 与 child 的 register 均已在途：等 rehome 结算
-      if (handoff != null) {
-        try {
-          await handoff;
-        } catch (_) {
-          if (destIsNew) {
-            // 无法确认新窗状态：best-effort 关窗（成功则 reconcile 摘表）
-            try {
-              await port.invoke(destWindowId, 'close_window', null);
-            } catch (_) {}
-          }
-          // child：保守保留目标标签（其 store.open 已成功），源不动
-          return fail('移动超时，标签可能已在目标窗口');
-        }
-      }
-    }
-
-    // 5. 关源（best-effort：源窗若已死，reconcile 兜底）
-    if (fromMain) {
-      store.closeForMove(tabId);
-    } else {
-      try {
-        await port.invoke(
-          sourceWindowId,
-          WindowControlProtocol.mCloseTab,
-          WindowControlProtocol.encodeCloseTab(
-              CloseTabCall(tabId: tabId)),
-        );
-      } catch (_) {}
-    }
-
-    // 6. registry 挪动（主窗标签不在 registry；新窗步骤 2 已登记）
-    if (!fromMain) {
-      if (destIsMain) {
-        registry.removeChildTab(sourceWindowId, tabKey);
       } else {
-        registry.moveChildTab(sourceWindowId, destWindowId, tabKey);
+        if (!registry.childWindowIds.contains(target)) {
+          return fail('目标窗口不存在');
+        }
+        destWindowId = target;
       }
-    }
 
-    // 7. 聚焦：新窗 bootstrap 自 show；已存在子窗发 focus_tab；
-    //    主窗仅在源是子窗时置前
-    if (destIsMain) {
-      if (!fromMain) {
+      // 3. presence 无缝 handoff（非抖音/未跟踪得 null，壳流程不等）
+      final handoff =
+          presenceService?.prepareHandoff(tabId, destWindowId);
+      // 立即挂 catchError 防 unhandled：覆盖后续所有提前 return / 不 await
+      // 分支；正常 await handoff 收口语义不变（成功/超时/失败既有行为不动）。
+      if (handoff != null) {
+        unawaited(handoff.catchError((Object _) {}));
+      }
+
+      // 4. 目标落标签
+      if (destIsMain) {
+        // 主窗控制器在 store.open 同步头内 onInit→bindTab，先于 rehomeLocal
+        store.open(req0, tabId: tabId);
         try {
-          await _showAndFocusMain();
+          await presenceService?.rehomeLocal(tabId);
+        } catch (_) {
+          // 本地复刻失败不阻断壳迁移：pending 补放/写动作 claim 自愈（spec §8）
+        }
+      } else {
+        if (!destIsNew) {
+          Object? accepted;
+          try {
+            accepted = await port.invoke(
+              destWindowId,
+              WindowControlProtocol.mOpenTab,
+              WindowControlProtocol.encodeOpenTab(
+                OpenTabCall(
+                  tabId: tabId,
+                  siteId: req0.siteId,
+                  roomId: req0.roomId,
+                  shareUrl: req0.shareUrl,
+                  activate: true,
+                ),
+              ),
+            );
+          } catch (_) {
+            accepted = false;
+          }
+          if (accepted != true) {
+            // 不登记 registry；handoff 由 10s 超时自清；源不动（spec §8）
+            return fail('目标窗口无响应');
+          }
+          registry.addChildTab(destWindowId, tabKey);
+        }
+        // new 的 pr_register 与 child 的 register 均已在途：等 rehome 结算
+        if (handoff != null) {
+          try {
+            await handoff;
+          } catch (_) {
+            if (destIsNew) {
+              // 无法确认新窗状态：best-effort 关窗（成功则 reconcile 摘表）
+              try {
+                await port.invoke(destWindowId, 'close_window', null);
+              } catch (_) {}
+            }
+            // child：保守保留目标标签（其 store.open 已成功），源不动
+            return fail('移动超时，标签可能已在目标窗口');
+          }
+        }
+      }
+
+      // 5. 关源（best-effort：源窗若已死，reconcile 兜底）
+      if (fromMain) {
+        store.closeForMove(tabId);
+      } else {
+        try {
+          await port.invoke(
+            sourceWindowId,
+            WindowControlProtocol.mCloseTab,
+            WindowControlProtocol.encodeCloseTab(
+                CloseTabCall(tabId: tabId)),
+          );
         } catch (_) {}
       }
-    } else if (!destIsNew) {
-      try {
-        await port.invoke(destWindowId, 'focus_tab', tabKey);
-      } catch (_) {}
+
+      // 6. registry 挪动（主窗标签不在 registry；新窗步骤 2 已登记）
+      if (!fromMain) {
+        if (destIsMain) {
+          registry.removeChildTab(sourceWindowId, tabKey);
+        } else {
+          registry.moveChildTab(sourceWindowId, destWindowId, tabKey);
+        }
+      }
+
+      // 7. 聚焦：新窗 bootstrap 自 show；已存在子窗发 focus_tab；
+      //    主窗仅在源是子窗时置前
+      if (destIsMain) {
+        if (!fromMain) {
+          try {
+            await _showAndFocusMain();
+          } catch (_) {}
+        }
+      } else if (!destIsNew) {
+        try {
+          await port.invoke(destWindowId, 'focus_tab', tabKey);
+        } catch (_) {}
+      }
+      return null;
+    } catch (_) {
+      // F2：编排体逃逸异常（store.open 未知 site / closeForMove 源被手关 /
+      // moveChildTab 目标窗已死等）统一收口，禁止把异常对象拼进文案
+      return fail('移动失败，请重试');
+    } finally {
+      _movingTabIds.remove(tabId);
     }
-    return null;
   }
 
   /// 主窗关闭前尽力联动关闭所有子窗；单个失败不阻断退出

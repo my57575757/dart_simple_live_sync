@@ -124,7 +124,7 @@ class TabStore extends GetxController {
   /// 跨窗迁移关闭：先标记控制器「已迁走」抑制其 onClose 的 presence leave
   /// （心跳/仲裁栈由主端 rehome 延续），其余与 close 完全相同。
   TabDescriptor closeForMove(String tabId) {
-    registry.controllerForTabId(tabId)?.debugMarkMovedAway();
+    registry.controllerForTabId(tabId)?.markMovedAway();
     return close(tabId);
   }
 

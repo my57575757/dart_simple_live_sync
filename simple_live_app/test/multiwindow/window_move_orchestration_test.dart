@@ -74,6 +74,7 @@ class _FakeHandoff implements PresenceHandoffController {
   String mode = 'immediate';
   final prepares = <(String, String)>[];
   int rehomeLocalCount = 0;
+  Completer<void>? hang;
 
   @override
   Future<void>? prepareHandoff(String tabId, String destWindowId) {
@@ -84,6 +85,10 @@ class _FakeHandoff implements PresenceHandoffController {
       Timer(const Duration(seconds: 10),
           () => completer.completeError(StateError('timeout')));
       return completer.future;
+    }
+    if (mode == 'hang') {
+      hang = Completer<void>();
+      return hang!.future;
     }
     return Future.value();
   }
@@ -436,5 +441,77 @@ void main() {
       await service.handleWindowCall('mw_unknown', null),
       isNull,
     );
+  });
+
+  test('在途重入被拒：同一 tabId 并发第二次立即失败且不重发 mw_open_tab',
+      () async {
+    handoff.mode = 'hang';
+    port.onInvoke = (w, m, a) => m == WindowControlProtocol.mOpenTab;
+    registry.registerChild('w1', {'douyin_b'});
+    final tab = store.open(req('douyin', 'a'));
+
+    final first = service.moveTabToWindow(
+      tabId: tab.tabId,
+      target: 'w1',
+    );
+    // 第一次已建立 handoff 并挂起在 await 点
+    expect(handoff.prepares, hasLength(1));
+
+    final message = await service.moveTabToWindow(
+      tabId: tab.tabId,
+      target: 'w1',
+    );
+    expect(message, '移动失败，请重试');
+    expect(toasts, ['移动失败，请重试'], reason: '主源重入失败在主端 toast');
+    expect(calls('w1', WindowControlProtocol.mOpenTab), hasLength(1),
+        reason: '重入不再发第二次 mw_open_tab');
+
+    // 收尾：放行第一次迁移以免悬挂
+    handoff.hang!.complete();
+    expect(await first, isNull);
+  });
+
+  test('失败：closeForMove 抛错（源标签被手关）收口移动失败请重试，主源有 toast',
+      () async {
+    handoff.mode = 'none';
+    registry.registerChild('w1', {'douyin_b'});
+    final tab = store.open(req('douyin', 'a'));
+    port.onInvoke = (w, m, a) {
+      if (m == WindowControlProtocol.mOpenTab) {
+        // 迁移途中源标签被用户手关 → step5 closeForMove 抛 ArgumentError
+        store.close(tab.tabId);
+        return true;
+      }
+      return null;
+    };
+
+    final message = await service.moveTabToWindow(
+      tabId: tab.tabId,
+      target: 'w1',
+    );
+    expect(message, '移动失败，请重试');
+    expect(toasts, ['移动失败，请重试'], reason: '主源失败在主端 toast');
+    expect(store.tabs, isEmpty);
+  });
+
+  test('目标窗死亡：handoff 失败结算走超时文案，异常不逃逸、源不动', () async {
+    handoff.mode = 'hang';
+    port.onInvoke = (w, m, a) => m == WindowControlProtocol.mOpenTab;
+    registry.registerChild('w1', {'douyin_b'});
+    final tab = store.open(req('douyin', 'a'));
+
+    final future = service.moveTabToWindow(
+      tabId: tab.tabId,
+      target: 'w1',
+    );
+    expect(handoff.prepares, hasLength(1), reason: 'handoff 已建立');
+
+    // 目标窗在 handoff 结算前死亡 → future 以异常结算
+    handoff.hang!.completeError(StateError('dest gone'));
+
+    final message = await future;
+    expect(message, '移动超时，标签可能已在目标窗口');
+    expect(toasts, ['移动超时，标签可能已在目标窗口']);
+    expect(store.tabs.single.tabId, tab.tabId, reason: '源不动继续播放');
   });
 }

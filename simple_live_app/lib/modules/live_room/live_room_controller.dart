@@ -173,7 +173,7 @@ class LiveRoomController extends PlayerController
   /// 跨窗迁移关闭：onClose 时不再发 presence leave（栈/心跳在主端延续）
   bool _movedAway = false;
 
-  void debugMarkMovedAway() {
+  void markMovedAway() {
     _movedAway = true;
   }
 

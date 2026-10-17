@@ -271,7 +271,7 @@ void main() {
     expect(accounts.loginCookie, '', reason: '刷新路径立即清借用凭据');
   });
 
-  testWidgets('closeForMove 语义：debugMarkMovedAway 后 onClose 不发 pr_release；'
+  testWidgets('closeForMove 语义：markMovedAway 后 onClose 不发 pr_release；'
       '普通 onClose 仍发', (tester) async {
     // 提供真实 binding（最简 Scaffold，无 UI 交互不需要 SmartDialog）。
     // 纯 test() 下 onClose 异步链上的 pigeon 通道无 mock，PlatformException
@@ -300,7 +300,7 @@ void main() {
     await tester.pump();
     movedPort.calls.clear();
 
-    moved.debugMarkMovedAway();
+    moved.markMovedAway();
     moved.onClose();
     await tester.pump();
     await tester.pump();
