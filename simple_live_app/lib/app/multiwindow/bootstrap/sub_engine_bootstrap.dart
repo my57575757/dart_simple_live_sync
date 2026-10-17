@@ -123,7 +123,7 @@ Future<void> runSubEngine(WindowController self) async {
   // 不起定时刷新、不跑状态查询网络
   Get.put(FollowService(enableScheduledRefresh: false), permanent: true);
 
-  // —— 标签壳（无首页、无 presence 网关）——
+  // —— 标签壳（无首页、无主端 presence 网关；批量释放挂 coordinator）——
   Get.put<RoomControllerRegistry>(GetxRoomControllerRegistry(),
       permanent: true);
 
