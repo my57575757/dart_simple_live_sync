@@ -1344,10 +1344,6 @@ class LiveRoomController extends PlayerController
         !smallWindowState.value &&
         (event.logicalKey == LogicalKeyboardKey.enter ||
             event.logicalKey == LogicalKeyboardKey.numpadEnter)) {
-      if (_isSubWindow) {
-        SmartDialog.showToast('请在主窗口发送弹幕');
-        return;
-      }
       showDanmakuInputDialog();
       return;
     }
@@ -1356,10 +1352,6 @@ class LiveRoomController extends PlayerController
 
   /// 弹幕输入对话框；全屏键盘回车与控制栏按钮共用
   Future<void> showDanmakuInputDialog() async {
-    if (_isSubWindow) {
-      SmartDialog.showToast('请在主窗口发送弹幕');
-      return;
-    }
     if (!danmakuLogined) {
       await showDanmakuLoginDialog();
       playerFocusNode.requestFocus();

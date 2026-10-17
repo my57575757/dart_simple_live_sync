@@ -156,8 +156,7 @@ void main() {
     expect(claimCall.guardWebRid, '111');
   });
 
-  testWidgets('子窗入口收口：输入与全屏回车只 toast；登录提示为单确认框不导航',
-      (tester) async {
+  testWidgets('子窗输入入口不再 toast 拦截，未登录直接弹登录确认框', (tester) async {
     putCoordinator(_FakePort());
     await tester.pumpWidget(
       GetMaterialApp(
@@ -168,46 +167,13 @@ void main() {
     );
     final c = makeController();
 
-    await c.showDanmakuInputDialog();
+    // showDanmakuInputDialog 内部 await showDanmakuLoginDialog → Get.dialog，
+    // testWidgets 里先 await 会挂起；持 Future、泵帧渲染后再断言/点确定。
+    final inputEntry = c.showDanmakuInputDialog();
     await tester.pump();
-    expect(Get.isDialogOpen, isNot(true), reason: '不弹输入框/登录框');
-    expect(find.text('请在主窗口发送弹幕'), findsOneWidget,
-        reason: '输入按钮入口被 toast 拦截');
-
-    // smart_dialog normal toast 为串行队列：第二次 showToast 只排队不入栈
-    // （取证：flutter_smart_dialog 4.9.8+10 custom_toast.dart normalToast
-    // 中 toastQueue.length>1 直接 return），brief 原断言 findsNWidgets(2)
-    // 不可能成立；故先排空当前 toast，再独立验证全屏回车入口。
-    //
-    // 注意 dismiss 不能在 pump 之前 await：CustomToast.dismiss 内部是
-    // `await Future.delayed(animationTime=200ms); await delayed(50ms)`
-    // （custom_toast.dart dismiss），FakeAsync 下先 await 会死锁；
-    // 持 Future、推进帧/时间后再 await。
-    final dismissToast = SmartDialog.dismiss(status: SmartStatus.toast);
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 300));
-    await tester.pump();
-    await dismissToast;
     expect(find.text('请在主窗口发送弹幕'), findsNothing,
-        reason: '旧 toast 已排空');
-
-    c.fullScreenState.value = true;
-    c.handleKeyboardKey(const KeyDownEvent(
-      logicalKey: LogicalKeyboardKey.enter,
-      physicalKey: PhysicalKeyboardKey.enter,
-      // Flutter 3.47 的 KeyDownEvent 要求 timeStamp（brief 写作时缺省）
-      timeStamp: Duration.zero,
-    ));
-    await tester.pump();
-    expect(Get.isDialogOpen, isNot(true));
-    expect(find.text('请在主窗口发送弹幕'), findsOneWidget,
-        reason: '全屏回车入口同样只 toast，不弹输入框/登录框');
-
-    // 不能先 await 再 pump：showDanmakuLoginDialog 内部 await Get.dialog 的
-    // 回执 Future，testWidgets 里先 await 会在首帧前挂起，tap 永远排不上 →
-    // 10 分钟超时（已实测）。先持 Future、泵帧渲染、断言、点确定，最后再 await。
-    final loginDialog = c.showDanmakuLoginDialog();
-    await tester.pump();
+        reason: '入口不再被 toast 拦截');
+    expect(Get.isDialogOpen, isTrue, reason: '未登录直接弹登录确认框');
     expect(
       find.text('子窗口借用主窗口的登录身份，请在主窗口登录抖音并配置弹幕签名服务'),
       findsOneWidget,
@@ -218,18 +184,41 @@ void main() {
     await tester.tap(find.text('确定'));
     await tester.pump();
     expect(Get.isDialogOpen, isNot(true));
-    await loginDialog;
+    await inputEntry;
+  });
 
-    // 排空 SmartDialog toast 全部残留 Timer：dismiss(status: toast) 走非
-    // closeAll 路径，不取消 2000ms 展示 Timer（toast_tool.dart dismiss
-    // 仅首条出队）；200ms+50ms dismiss 延迟、post-frame 续体与 100ms
-    // interval 都靠后续帧/时间推进，最后再补帧+200ms 兜底，确保无 pending timer。
-    final dismissEnd = SmartDialog.dismiss(status: SmartStatus.toast);
+  testWidgets('子窗全屏回车不再 toast 拦截，未登录直接弹登录确认框', (tester) async {
+    putCoordinator(_FakePort());
+    await tester.pumpWidget(
+      GetMaterialApp(
+        navigatorObservers: [FlutterSmartDialog.observer],
+        builder: FlutterSmartDialog.init(),
+        home: const Scaffold(body: SizedBox()),
+      ),
+    );
+    final c = makeController();
+
+    c.fullScreenState.value = true;
+    c.handleKeyboardKey(const KeyDownEvent(
+      logicalKey: LogicalKeyboardKey.enter,
+      physicalKey: PhysicalKeyboardKey.enter,
+      // Flutter 3.47 的 KeyDownEvent 要求 timeStamp
+      timeStamp: Duration.zero,
+    ));
     await tester.pump();
-    await tester.pump(const Duration(seconds: 3));
+    expect(find.text('请在主窗口发送弹幕'), findsNothing,
+        reason: '全屏回车入口同样不再被 toast 拦截');
+    expect(Get.isDialogOpen, isTrue, reason: '未登录直接弹登录确认框');
+    expect(
+      find.text('子窗口借用主窗口的登录身份，请在主窗口登录抖音并配置弹幕签名服务'),
+      findsOneWidget,
+    );
+
+    // handleKeyboardKey 未 await showDanmakuInputDialog；关掉对话框让其续体收尾
+    await tester.tap(find.text('确定'));
     await tester.pump();
-    await tester.pump(const Duration(milliseconds: 200));
-    await dismissEnd;
+    expect(Get.isDialogOpen, isNot(true));
+    await tester.pump();
   });
 
   test('guardActionEnabled 子窗抖音恒可见；非子窗不绑定 IPC 通道', () {

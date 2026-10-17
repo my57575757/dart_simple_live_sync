@@ -11,7 +11,6 @@ import 'package:remixicon/remixicon.dart';
 import 'package:simple_live_app/app/app_style.dart';
 import 'package:simple_live_app/app/constant.dart';
 import 'package:simple_live_app/app/controller/app_settings_controller.dart';
-import 'package:simple_live_app/app/multiwindow/window/window_role.dart';
 import 'package:simple_live_app/app/sites.dart';
 import 'package:simple_live_app/app/utils.dart';
 import 'package:simple_live_app/modules/live_room/live_room_controller.dart';
@@ -1117,30 +1116,12 @@ class _SendDanmakuBarState extends State<SendDanmakuBar> {
           children: [
             Expanded(
               child: Platform.isWindows
-                  ? (MultiWindowRole.isSubWindow
-                      ? const Tooltip(
-                          message: '请在主窗口发送弹幕',
-                          child: InputDecorator(
-                            decoration: InputDecoration(
-                              enabled: false,
-                              hintText: '请在主窗口发送弹幕',
-                              counterText: '',
-                              isDense: true,
-                              border: OutlineInputBorder(
-                                borderRadius: BorderRadius.all(
-                                  Radius.circular(20),
-                                ),
-                              ),
-                            ),
-                            child: SizedBox(height: 24),
-                          ),
-                        )
-                      : NativeEditField(
-                          controller: _edit,
-                          hintText: '说点什么…',
-                          radius: 20,
-                          onSubmitted: submit,
-                        ))
+                  ? NativeEditField(
+                      controller: _edit,
+                      hintText: '说点什么…',
+                      radius: 20,
+                      onSubmitted: submit,
+                    )
                   : TextField(
                       focusNode: inputFocusNode,
                       controller: inputController,
@@ -1161,9 +1142,7 @@ class _SendDanmakuBarState extends State<SendDanmakuBar> {
             AppStyle.hGap8,
             Obx(
               () => IconButton(
-                onPressed: (roomController.sendingDanmaku.value ||
-                        (Platform.isWindows &&
-                            MultiWindowRole.isSubWindow))
+                onPressed: roomController.sendingDanmaku.value
                     ? null
                     : () => Platform.isWindows
                         ? _pressNativeSend()
