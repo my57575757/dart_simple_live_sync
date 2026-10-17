@@ -199,10 +199,12 @@ static const Duration handoffTimeout = Duration(seconds: 10);
 
 | 方向 | 方法 | 载荷 |
 |---|---|---|
-| 子→主 | `mw_request_move` | `{tabId, siteId, roomId, shareUrl, target}` |
-| 子→主 | `mw_list_windows` | 无参 |
+| 子→主 | `mw_request_move` | `{sourceWindowId, tabId, siteId, roomId, shareUrl, target}` |
+| 子→主 | `mw_list_windows` | 无参（回执不含来源信息，子端自行排除自己的 windowId） |
 | 主→子 | `mw_open_tab` | `{tabId, siteId, roomId, shareUrl, activate}` |
 | 主→子 | `mw_close_tab` | `{tabId}` |
+
+主端 method handler 收不到来源 windowId（dmw 事实，与 pr_ 载荷自带 windowId 同理），故 `mw_request_move` 必带 `sourceWindowId`（子端自己的 windowId）。
 
 target / window id 线值：
 
