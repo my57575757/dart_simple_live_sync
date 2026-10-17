@@ -1,5 +1,6 @@
 ﻿#include "native_edit_host.h"
 
+#include <commctrl.h>
 #include <imm.h>
 
 #include <flutter/standard_method_codec.h>
@@ -10,14 +11,16 @@
 #include <memory>
 #include <string>
 
+// SetWindowSubclass 在 comctl32；CMake 未显式链接，这里补齐。
+#pragma comment(lib, "comctl32.lib")
+
 namespace {
 
 constexpr int kMaxChars = 200;
 constexpr wchar_t kFontFace[] = L"Microsoft YaHei UI";
 constexpr wchar_t kPopupClass[] = L"SimpleLiveNativeEditPopup";
-
-// 进程只有一个顶层窗口、一个 NativeEditHost；窗口过程靠它找回对象。
-NativeEditHost* g_instance = nullptr;
+// SetWindowSubclass 的 uIdSubclass；返回值恒为 1，与 subclass_id_ 对齐。
+constexpr UINT_PTR kOwnerSubclassId = 1;
 
 std::wstring Utf8ToWide(const std::string& utf8) {
   if (utf8.empty()) {
@@ -94,7 +97,6 @@ void RegisterPopupClass() {
 NativeEditHost::NativeEditHost(HWND parent, HWND engine_window,
                                flutter::BinaryMessenger* messenger)
     : parent_(parent), engine_window_(engine_window) {
-  g_instance = this;
   bg_brush_ = CreateSolidBrush(bg_color_);
   channel_ = std::make_unique<flutter::MethodChannel<>>(
       messenger, "simple_live/native_edit",
@@ -104,29 +106,42 @@ NativeEditHost::NativeEditHost(HWND parent, HWND engine_window,
              std::unique_ptr<flutter::MethodResult<>> result) {
         HandleMethodCall(call, std::move(result));
       });
+  // 自宿主：owner 移动/激活/销毁由 subclass 自行处理；WM_NCDESTROY 时
+  // delete this，调用方不持有指针。父窗无效时挂不上，subclass_id_ 留 0。
+  subclass_id_ = SetWindowSubclass(parent_, OwnerSubclassProc, kOwnerSubclassId,
+                                   reinterpret_cast<DWORD_PTR>(this));
 }
 
 NativeEditHost::~NativeEditHost() {
-  if (edit_) {
+  // 若析构不是经由 OwnerSubclassProc 的 WM_NCDESTROY 触发（例如显式 delete），
+  // 此处补拆 subclass；已经拆过的路径会把 subclass_id_ 清 0。
+  if (subclass_id_ != 0 && parent_ && IsWindow(parent_)) {
+    RemoveWindowSubclass(parent_, OwnerSubclassProc, subclass_id_);
+    subclass_id_ = 0;
+  }
+  // owner 销毁时系统会先销毁 owned popup（句柄可能已失效），IsWindow 防踩。
+  if (edit_ && IsWindow(edit_)) {
     SetWindowLongPtrW(edit_, GWLP_WNDPROC,
                       reinterpret_cast<LONG_PTR>(original_edit_proc_));
     ImmAssociateContext(edit_, nullptr);
   }
-  if (popup_) {
+  if (popup_ && IsWindow(popup_)) {
     // 连带销毁其中的 EDIT。
     DestroyWindow(popup_);
   }
+  popup_ = nullptr;
+  edit_ = nullptr;
   if (himc_) {
     ImmDestroyContext(himc_);
+    himc_ = nullptr;
   }
   if (bg_brush_) {
     DeleteObject(bg_brush_);
+    bg_brush_ = nullptr;
   }
   if (font_) {
     DeleteObject(font_);
-  }
-  if (g_instance == this) {
-    g_instance = nullptr;
+    font_ = nullptr;
   }
 }
 
@@ -144,6 +159,8 @@ bool NativeEditHost::EnsureCreated() {
   if (!popup_) {
     return false;
   }
+  // 每窗一个 host：窗口过程经 GWLP_USERDATA 找回对象（取代进程单例）。
+  SetWindowLongPtrW(popup_, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
   edit_ = CreateWindowExW(0, L"EDIT", L"", WS_CHILD | ES_AUTOHSCROLL, 0, 0, 10,
                           10, popup_, nullptr, GetModuleHandleW(nullptr),
                           nullptr);
@@ -391,7 +408,8 @@ void NativeEditHost::HandleMethodCall(
 
 LRESULT CALLBACK NativeEditHost::PopupWndProc(HWND hwnd, UINT message,
                                               WPARAM wparam, LPARAM lparam) {
-  NativeEditHost* self = g_instance;
+  NativeEditHost* self = reinterpret_cast<NativeEditHost*>(
+      GetWindowLongPtrW(hwnd, GWLP_USERDATA));
   switch (message) {
     case WM_ERASEBKGND:
       // 圆角区域内 EDIT 铺满，四角露出的 popup 自身用底色填充，避免黑角。
@@ -421,13 +439,23 @@ LRESULT CALLBACK NativeEditHost::PopupWndProc(HWND hwnd, UINT message,
                    self->edit_h_, TRUE);
       }
       return 0;
+
+    case WM_NCDESTROY:
+      // 系统销毁 owned popup（owner 销毁链）时清句柄，析构 IsWindow 不再触碰。
+      if (self) {
+        self->popup_ = nullptr;
+        self->edit_ = nullptr;
+      }
+      break;
   }
   return DefWindowProcW(hwnd, message, wparam, lparam);
 }
 
 LRESULT CALLBACK NativeEditHost::EditWndProc(HWND hwnd, UINT message,
                                              WPARAM wparam, LPARAM lparam) {
-  NativeEditHost* self = g_instance;
+  // EDIT 是 popup 的子窗口，经 GetParent 取 popup 的 USERDATA 找回 host。
+  NativeEditHost* self = reinterpret_cast<NativeEditHost*>(
+      GetWindowLongPtrW(GetParent(hwnd), GWLP_USERDATA));
 
   switch (message) {
     case WM_GETDLGCODE:
@@ -518,4 +546,47 @@ LRESULT CALLBACK NativeEditHost::EditWndProc(HWND hwnd, UINT message,
 
   return CallWindowProcW(self ? self->original_edit_proc_ : DefWindowProcW,
                          hwnd, message, wparam, lparam);
+}
+
+// static
+LRESULT CALLBACK NativeEditHost::OwnerSubclassProc(HWND hwnd, UINT message,
+                                                   WPARAM wparam, LPARAM lparam,
+                                                   UINT_PTR subclass_id,
+                                                   DWORD_PTR ref_data) {
+  NativeEditHost* self = reinterpret_cast<NativeEditHost*>(ref_data);
+  switch (message) {
+    case WM_MOVE:
+    case WM_SIZE:
+      // popup 是屏幕坐标的顶层窗口，宿主移动/缩放时跟随原客户区锚点。
+      // 缩放的精确位置另由 Dart didChangeMetrics 重发 show 修正。
+      if (self) {
+        self->OnOwnerMoved();
+      }
+      break;
+
+    case WM_ACTIVATE:
+      // 变为激活（WA_ACTIVE/WA_CLICKACTIVE）时把焦点夺回可见的输入框，
+      // 否则基类会把焦点强制还给引擎子窗口。引擎经 HandleTopLevelWindowProc
+      // 仍能收到本条消息，故先放行再夺焦，与改造前最终焦点一致。
+      if (self && (LOWORD(wparam) == WA_ACTIVE ||
+                   LOWORD(wparam) == WA_CLICKACTIVE)) {
+        const LRESULT r = DefSubclassProc(hwnd, message, wparam, lparam);
+        self->Refocus();
+        return r;
+      }
+      break;
+
+    case WM_NCDESTROY:
+      // 先放行原过程，再拆 subclass 并自释放。MethodChannel 析构不触碰
+      // messenger；owned popup 多半已被系统先销毁，析构 IsWindow 防踩。
+      if (self) {
+        const LRESULT r = DefSubclassProc(hwnd, message, wparam, lparam);
+        RemoveWindowSubclass(hwnd, OwnerSubclassProc, self->subclass_id_);
+        self->subclass_id_ = 0;
+        delete self;
+        return r;
+      }
+      break;
+  }
+  return DefSubclassProc(hwnd, message, wparam, lparam);
 }

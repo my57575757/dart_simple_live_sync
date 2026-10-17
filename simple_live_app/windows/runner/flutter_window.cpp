@@ -34,13 +34,22 @@ bool FlutterWindow::OnCreate() {
         reinterpret_cast<flutter::FlutterViewController *>(controller);
     auto *registry = flutter_view_controller->engine();
     RegisterPlugins(registry);
+    // 子窗原生弹幕 EDIT：自注册自释放，不持有指针。owner 取顶层 HWND
+    // （与插件 desktop_multi_window_plugin.cpp 取法一致）。
+    HWND child = flutter_view_controller->view()->GetNativeWindow();
+    if (child) {
+      HWND top = GetAncestor(child, GA_ROOT);
+      if (top) {
+        new NativeEditHost(top, child, registry->messenger());
+      }
+    }
   });
 
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
 
-  native_edit_host_ = std::make_unique<NativeEditHost>(
-      GetHandle(), child_content(),
-      flutter_controller_->engine()->messenger());
+  // 主窗原生弹幕 EDIT：自注册自释放（owner WM_NCDESTROY 时 delete this）。
+  new NativeEditHost(GetHandle(), child_content(),
+                     flutter_controller_->engine()->messenger());
 
   flutter_controller_->engine()->SetNextFrameCallback([&]() {
     this->Show();
@@ -55,8 +64,8 @@ bool FlutterWindow::OnCreate() {
 }
 
 void FlutterWindow::OnDestroy() {
-  // host 的通道持有 engine messenger，必须先于 controller 释放。
-  native_edit_host_.reset();
+  // NativeEditHost 自释放于 owner 的 WM_NCDESTROY，这里不持有指针。
+  // 通道析构不触碰 messenger；引擎释放前窗口已先走 NCDESTROY。
 
   if (flutter_controller_) {
     flutter_controller_ = nullptr;
@@ -79,29 +88,9 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
     }
   }
 
-  switch (message) {
-    case WM_ACTIVATE:
-      // popup 可见时拦截基类 WM_ACTIVATE 里把焦点强制还给引擎窗口的行为；
-      // 引擎已在上面的 HandleTopLevelWindowProc 先收到过本条消息。
-      if (native_edit_host_ && native_edit_host_->visible() &&
-          LOWORD(wparam) != WA_INACTIVE) {
-        native_edit_host_->Refocus();
-        return 0;
-      }
-      break;
-
-    case WM_MOVE:
-    case WM_SIZE:
-      // popup 是屏幕坐标的顶层窗口，主窗口移动/缩放时让它跟随原客户区锚点。
-      // 缩放的精确位置另由 Dart didChangeMetrics 重发 show 修正。
-      if (native_edit_host_) {
-        native_edit_host_->OnOwnerMoved();
-      }
-      break;
-
-    case WM_FONTCHANGE:
-      flutter_controller_->engine()->ReloadSystemFonts();
-      break;
+  // NativeEditHost 的 WM_ACTIVATE/WM_MOVE/WM_SIZE 由其 SetWindowSubclass 自处理。
+  if (message == WM_FONTCHANGE) {
+    flutter_controller_->engine()->ReloadSystemFonts();
   }
 
   return Win32Window::MessageHandler(hwnd, message, wparam, lparam);
