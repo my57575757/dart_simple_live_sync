@@ -721,7 +721,12 @@ class LiveRoomController extends PlayerController
     required Map<String, dynamic> guardStatus,
     required bool reentered,
   }) async {
-    final generation = ++_presenceGeneration;
+    // 迟到防护：claim 在途时用户刷新 → presence 已回到 guest，本次 apply
+    // 必须整体放弃，不得翻回 account。reentered（rehome/fallback）不受此门约束。
+    if (!reentered && presence.value != RoomPresence.entering) return;
+    // rehome/fallback 必须递增世代以取消在途 yield 续体；普通进场只捕获不自增
+    // （自增会覆盖刷新的世代，使后续检查全部通过 → N3 迟到 apply 翻回 account）。
+    final generation = reentered ? ++_presenceGeneration : _presenceGeneration;
     await liveDanmaku.stop();
     if (generation != _presenceGeneration) return;
     detail.value = accountDetail;

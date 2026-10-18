@@ -393,6 +393,46 @@ void main() {
 
     gateway.stopHeartbeatForTesting();
   });
+
+  testWidgets('N3：claim 在途时刷新，迟到 apply 不得翻回 account', (tester) async {
+    final gateway = DouyinPresenceGateway(guard);
+
+    await tester.pumpWidget(
+      GetMaterialApp(
+        navigatorObservers: [FlutterSmartDialog.observer],
+        builder: FlutterSmartDialog.init(),
+        home: const Scaffold(body: SizedBox()),
+      ),
+    );
+    Get.put<DouyinAccountService>(FakeDouyinAccount());
+
+    final a = makeController(tabId: 'tabA', site: siteA, gateway: gateway);
+
+    // 布置：claim 在途（presence=entering）
+    a.presence.value = RoomPresence.entering;
+
+    // act：用户刷新（bump generation + 置 guest）
+    a.refreshRoom();
+    await tester.pump();
+    // 泵掉 loadData→SmartDialog.showLoading 的定时器链
+    for (var i = 0; i < 8; i++) {
+      await tester.pump(const Duration(milliseconds: 300));
+    }
+
+    // 迟到的 applyAccountEnter（claim HTTP 完成后由网关调用）
+    await a.applyAccountEnter(
+      accountDetail: siteA.buildDetail(asAccount: true),
+      guardStatus: {'joined': false, 'starGuard': false},
+      reentered: false,
+    );
+    await tester.pump();
+
+    // assert：不得翻回 account
+    expect(a.presence.value, RoomPresence.guest,
+        reason: '刷新后迟到的 applyAccountEnter 不得把已刷新标签翻回 account');
+
+    gateway.stopHeartbeatForTesting();
+  });
 }
 
 class _UnconfiguredGuard extends FakeGuard {
