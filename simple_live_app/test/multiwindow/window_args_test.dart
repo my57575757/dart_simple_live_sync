@@ -20,6 +20,7 @@ void main() {
         shield: ['垃圾词', 'bad'],
         volumes: {'douyin_123456': 33.0},
         followShareUrls: {'douyin_123456': 'https://live.douyin.com/123456', 'douyin_x': ''},
+        followUserNames: {'douyin_123456': '主播甲', 'bilibili_1': '测试主播'},
       ),
     );
 
@@ -39,6 +40,8 @@ void main() {
     expect(decoded.snapshot.followShareUrls['douyin_123456'],
         'https://live.douyin.com/123456');
     expect(decoded.snapshot.followShareUrls['douyin_x'], '');
+    expect(decoded.snapshot.followUserNames['douyin_123456'], '主播甲');
+    expect(decoded.snapshot.followUserNames['bilibili_1'], '测试主播');
   });
 
   test('缺省 snapshot 编解码得到空集合', () {
@@ -51,6 +54,7 @@ void main() {
     expect(decoded.snapshot.shield, isEmpty);
     expect(decoded.snapshot.volumes, isEmpty);
     expect(decoded.snapshot.followShareUrls, isEmpty);
+    expect(decoded.snapshot.followUserNames, isEmpty);
   });
 
   test('type 不匹配抛 FormatException', () {
@@ -93,5 +97,14 @@ void main() {
         jsonDecode('{"siteId":"douyin","roomId":"9","shareUrl":""}')
             as Map<String, dynamic>);
     expect(legacy.tabId, isNull);
+  });
+
+  test('旧版快照 JSON 缺 followUserNames 字段时解析为空表（向后兼容）', () {
+    final json = jsonDecode(
+      '{"type":"room_shell","tabs":[],"snapshot":{"settings":{},'
+      '"shield":[],"volumes":{},"followShareUrls":{}},"mainWindowId":""}',
+    ) as Map<String, dynamic>;
+    final decoded = RoomWindowArgs.fromJson(json);
+    expect(decoded.snapshot.followUserNames, isEmpty);
   });
 }

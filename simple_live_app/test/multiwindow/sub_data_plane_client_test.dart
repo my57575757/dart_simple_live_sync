@@ -191,8 +191,10 @@ void main() {
     client.handleChanged(DataPlaneProtocol.changed(
         kind: DataPlaneProtocol.kindFollow,
         key: 'bilibili_5',
-        value: 'http://5'));
+        value: 'http://5',
+        name: '关注主播'));
     expect(db.getFollowExist('bilibili_5'), isTrue);
+    expect(db.getFollowUserName('bilibili_5'), '关注主播');
     expect(controller.followed.value, isTrue);
 
     client.handleChanged(DataPlaneProtocol.changed(

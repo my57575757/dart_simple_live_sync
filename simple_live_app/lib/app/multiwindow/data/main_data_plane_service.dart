@@ -87,12 +87,13 @@ class MainDataPlaneService extends GetxService {
       DataPlaneProtocol.kindFollow,
       c.key.toString(),
       follow?.shareUrl,
+      name: follow?.userName,
       deleted: c.deleted || follow == null,
     );
   }
 
   void _onBoxChange(String kind, String key, Object? value,
-      {required bool deleted}) {
+      {String? name, required bool deleted}) {
     if (_suppressed.contains(kind)) return;
     if (kind == DataPlaneProtocol.kindKv) {
       // 扇出侧守卫：主窗本地登录等敏感写入也不得进入子引擎
@@ -100,7 +101,7 @@ class MainDataPlaneService extends GetxService {
       if (!DataPlaneProtocol.isAllowedValue(value)) return;
     }
     _fanout(DataPlaneProtocol.changed(
-        kind: kind, key: key, value: value, deleted: deleted));
+        kind: kind, key: key, value: value, name: name, deleted: deleted));
     if (_remoteWrite) _scheduleReload();
   }
 

@@ -38,6 +38,7 @@ class WindowSnapshot {
     this.shield = const [],
     this.volumes = const {},
     this.followShareUrls = const {},
+    this.followUserNames = const {},
   });
 
   final Map<String, dynamic> settings;
@@ -47,11 +48,15 @@ class WindowSnapshot {
   /// key=siteId_roomId，value=shareUrl（可能为空串，仅用于关注存在性判断）
   final Map<String, String> followShareUrls;
 
+  /// key=siteId_roomId，value=关注时保存的主播名（标签标题用）
+  final Map<String, String> followUserNames;
+
   Map<String, dynamic> toJson() => {
         'settings': settings,
         'shield': shield,
         'volumes': volumes,
         'followShareUrls': followShareUrls,
+        'followUserNames': followUserNames,
       };
 
   factory WindowSnapshot.fromJson(Map<String, dynamic> json) => WindowSnapshot(
@@ -63,6 +68,8 @@ class WindowSnapshot {
         volumes: ((json['volumes'] as Map?) ?? const {})
             .map((k, v) => MapEntry(k.toString(), (v as num).toDouble())),
         followShareUrls: ((json['followShareUrls'] as Map?) ?? const {})
+            .map((k, v) => MapEntry(k.toString(), v.toString())),
+        followUserNames: ((json['followUserNames'] as Map?) ?? const {})
             .map((k, v) => MapEntry(k.toString(), v.toString())),
       );
 }

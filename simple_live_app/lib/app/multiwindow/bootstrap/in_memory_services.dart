@@ -54,6 +54,7 @@ class InMemoryDBService extends DBService {
   final MemoryKvBox<double> _volume = MemoryKvBox<double>();
 
   final Map<String, String> _followShareUrls = {};
+  final Map<String, String> _followUserNames = {};
 
   @override
   Future<void> init() async {}
@@ -68,6 +69,9 @@ class InMemoryDBService extends DBService {
     _followShareUrls
       ..clear()
       ..addAll(snapshot.followShareUrls);
+    _followUserNames
+      ..clear()
+      ..addAll(snapshot.followUserNames);
   }
 
   // —— 广播种子（SubDataPlaneClient 调用，静默）——
@@ -84,12 +88,14 @@ class InMemoryDBService extends DBService {
     unawaited(_volume.seedClear());
   }
 
-  void seedFollowShare(String key, String shareUrl) {
+  void seedFollow(String key, {required String shareUrl, String userName = ''}) {
     _followShareUrls[key] = shareUrl;
+    _followUserNames[key] = userName;
   }
 
   void seedFollowRemove(String key) {
     _followShareUrls.remove(key);
+    _followUserNames.remove(key);
   }
 
   void _fire(String method, Object? arguments) {
@@ -112,6 +118,9 @@ class InMemoryDBService extends DBService {
   String? getFollowShareUrl(String id) => _followShareUrls[id];
 
   @override
+  String? getFollowUserName(String id) => _followUserNames[id];
+
+  @override
   List<FollowUser> getFollowList() => const [];
 
   @override
@@ -124,6 +133,7 @@ class InMemoryDBService extends DBService {
         ? existing
         : follow.shareUrl;
     _followShareUrls[follow.id] = share;
+    _followUserNames[follow.id] = follow.userName;
     follow.shareUrl = share;
     _fire(DataPlaneProtocol.mFollowSet,
         DataPlaneProtocol.followSet(follow.toJson()));
@@ -135,6 +145,7 @@ class InMemoryDBService extends DBService {
   @override
   Future<void> deleteFollow(String id) async {
     _followShareUrls.remove(id);
+    _followUserNames.remove(id);
     _fire(DataPlaneProtocol.mFollowRemove,
         DataPlaneProtocol.followRemove(id));
   }

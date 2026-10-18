@@ -217,7 +217,7 @@ void main() {
     await flushReloadTimer();
   });
 
-  test('dp_follow_set/remove：落盘、广播 shareUrl、发关注更新事件', () async {
+  test('dp_follow_set/remove：落盘、广播 shareUrl 与关注名、发关注更新事件', () async {
     bootstrap();
     final events = <Object?>[];
     final sub = EventBus.instance
@@ -247,6 +247,7 @@ void main() {
     expect(payload['kind'], DataPlaneProtocol.kindFollow);
     expect(payload['key'], 'bilibili_3');
     expect(payload['value'], 'http://3');
+    expect(payload['name'], 'u', reason: '关注广播携带关注时主播名');
 
     port.calls.clear();
     expect(

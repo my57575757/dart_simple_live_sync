@@ -35,6 +35,7 @@ void main() {
     db.applySnapshot(const WindowSnapshot(
       volumes: {'douyin_1': 33.0},
       followShareUrls: {'douyin_1': 'http://x', 'douyin_2': ''},
+      followUserNames: {'douyin_1': '关注主播', 'douyin_2': '另一个'},
     ));
 
     expect(db.getVolume('douyin_1'), 33.0);
@@ -44,6 +45,8 @@ void main() {
     expect(db.getFollowExist('douyin_3'), isFalse);
     expect(db.getFollowShareUrl('douyin_1'), 'http://x');
     expect(db.getFollowShareUrl('douyin_2'), '');
+    expect(db.getFollowUserName('douyin_1'), '关注主播');
+    expect(db.getFollowUserName('douyin_3'), isNull);
     expect(db.getFollowList(), isEmpty, reason: '子窗不承载完整关注对象');
   });
 
@@ -61,11 +64,14 @@ void main() {
       shareUrl: 'http://9',
     ));
     expect(db.getFollowExist('bilibili_9'), isTrue);
+    expect(db.getFollowUserName('bilibili_9'), 'u',
+        reason: '子窗关注写穿时本地同步保存关注名');
     expect(
         port.calls.any((c) => c.$1 == DataPlaneProtocol.mFollowSet), isTrue);
 
     await db.deleteFollow('bilibili_9');
     expect(db.getFollowExist('bilibili_9'), isFalse);
+    expect(db.getFollowUserName('bilibili_9'), isNull);
     expect(
         port.calls.any((c) => c.$1 == DataPlaneProtocol.mFollowRemove), isTrue);
 
@@ -96,5 +102,20 @@ void main() {
       addTime: DateTime(2026),
     ));
     expect(dbOffline.getFollowExist('bilibili_1'), isTrue);
+  });
+
+  test('InMemoryDBService：广播 seedFollow/Remove 同步关注名', () {
+    final db = InMemoryDBService();
+    db.seedFollow('bilibili_7', shareUrl: 'http://7', userName: '广播主播');
+    expect(db.getFollowExist('bilibili_7'), isTrue);
+    expect(db.getFollowUserName('bilibili_7'), '广播主播');
+
+    // 改名后的再次广播覆盖旧关注名
+    db.seedFollow('bilibili_7', shareUrl: 'http://7', userName: '新主播名');
+    expect(db.getFollowUserName('bilibili_7'), '新主播名');
+
+    db.seedFollowRemove('bilibili_7');
+    expect(db.getFollowExist('bilibili_7'), isFalse);
+    expect(db.getFollowUserName('bilibili_7'), isNull);
   });
 }

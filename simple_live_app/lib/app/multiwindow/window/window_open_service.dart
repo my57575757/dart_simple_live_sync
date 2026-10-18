@@ -39,6 +39,7 @@ class WindowSnapshotBuilder {
       shield: storage.shieldBox.values.toList(),
       volumes: db.exportVolumes(),
       followShareUrls: db.exportFollowShareUrls(),
+      followUserNames: db.exportFollowUserNames(),
     );
   }
 

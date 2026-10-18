@@ -117,7 +117,11 @@ class SubDataPlaneClient {
         if (e.deleted) {
           db.seedFollowRemove(e.key);
         } else {
-          db.seedFollowShare(e.key, e.value?.toString() ?? '');
+          db.seedFollow(
+            e.key,
+            shareUrl: e.value?.toString() ?? '',
+            userName: e.name ?? '',
+          );
         }
         registry.controllerForRoomKey(e.key)?.followed.value = !e.deleted;
     }

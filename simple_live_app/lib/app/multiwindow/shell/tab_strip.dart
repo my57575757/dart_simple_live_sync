@@ -12,11 +12,34 @@ import 'package:simple_live_app/app/multiwindow/window/window_open_service.dart'
 import 'package:simple_live_app/app/multiwindow/window/window_role.dart';
 import 'package:simple_live_app/app/utils.dart';
 import 'package:simple_live_app/modules/live_room/live_room_controller.dart';
+import 'package:simple_live_app/services/db_service.dart';
 
 import 'room_controller_registry.dart';
 import 'tab_descriptor.dart';
 import 'tab_move_menu.dart';
 import 'tab_store.dart';
+
+/// 标签标题解析：已关注用关注时保存的主播名（固定，不随主播改名更新），
+/// 未关注或关注名为空时用详情里的实时主播名；详情未加载回退直播间标题，
+/// 再不行用描述符标题（初始为房间号）。
+String resolveTabTitle({
+  required bool followed,
+  required String? followedUserName,
+  required String? realtimeUserName,
+  required String? roomTitle,
+  required String fallback,
+}) {
+  if (followed && followedUserName != null && followedUserName.isNotEmpty) {
+    return followedUserName;
+  }
+  if (realtimeUserName != null && realtimeUserName.isNotEmpty) {
+    return realtimeUserName;
+  }
+  if (roomTitle != null && roomTitle.isNotEmpty) {
+    return roomTitle;
+  }
+  return fallback;
+}
 
 class TabStrip extends StatelessWidget {
   const TabStrip({super.key});
@@ -107,7 +130,7 @@ class _TabItem extends StatelessWidget {
           if (registry.isRegistered(tabId)) {
             c = Get.find<LiveRoomController>(tag: tabId);
           }
-          final title = c?.detail.value?.title ?? descriptor.title.value;
+          final title = _resolveTabTitle(c);
           final error = c?.loadError.value ?? false;
           return Container(
             width: 180,
@@ -170,6 +193,20 @@ class _TabItem extends StatelessWidget {
           );
         }),
       ),
+    );
+  }
+
+  /// 标签标题：已关注用关注时保存的主播名（固定，不随主播改名更新），
+  /// 未关注用详情里的实时主播名；详情未加载回退描述符标题（初始为房间号）。
+  String _resolveTabTitle(LiveRoomController? c) {
+    if (c == null) return descriptor.title.value;
+    return resolveTabTitle(
+      followed: c.followed.value,
+      followedUserName:
+          DBService.instance.getFollowUserName('${c.site.id}_${c.roomId}'),
+      realtimeUserName: c.detail.value?.userName,
+      roomTitle: c.detail.value?.title,
+      fallback: descriptor.title.value,
     );
   }
 

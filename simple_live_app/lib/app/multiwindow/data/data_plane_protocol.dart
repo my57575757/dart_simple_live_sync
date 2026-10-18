@@ -114,6 +114,7 @@ class DataPlaneProtocol {
       kind: kind,
       key: key,
       value: arguments['value'],
+      name: arguments['name'] is String ? arguments['name'] as String : null,
       deleted: arguments['deleted'] == true,
       clear: arguments['clear'] == true,
     );
@@ -144,6 +145,7 @@ class DataPlaneProtocol {
     required String kind,
     required String key,
     Object? value,
+    String? name,
     bool deleted = false,
     bool clear = false,
   }) =>
@@ -151,6 +153,7 @@ class DataPlaneProtocol {
         'kind': kind,
         'key': key,
         if (value != null) 'value': value,
+        if (name != null) 'name': name,
         if (deleted) 'deleted': true,
         if (clear) 'clear': true,
       };
@@ -171,6 +174,7 @@ class ChangeEvent {
     required this.kind,
     required this.key,
     this.value,
+    this.name,
     this.deleted = false,
     this.clear = false,
   });
@@ -178,6 +182,9 @@ class ChangeEvent {
   final String kind;
   final String key;
   final Object? value;
+
+  /// kind=follow 时关注保存的主播名（标签标题用）
+  final String? name;
   final bool deleted;
   final bool clear;
 }

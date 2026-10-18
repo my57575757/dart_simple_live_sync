@@ -90,6 +90,19 @@ class DBService extends GetxService {
     return followBox.get(id)?.shareUrl;
   }
 
+  /// 关注时保存的主播名；未关注返回 null。标签标题固定显示关注名，
+  /// 不随主播改名后的实时名变化。
+  String? getFollowUserName(String id) {
+    return followBox.get(id)?.userName;
+  }
+
+  /// 导出关注房间 id → 关注时主播名（跨窗快照用）
+  Map<String, String> exportFollowUserNames() {
+    return {
+      for (final follow in followBox.values) follow.id: follow.userName,
+    };
+  }
+
   /// 导出全部房间音量（跨窗快照用）
   Map<String, double> exportVolumes() {
     return {
