@@ -1721,7 +1721,12 @@ class LiveRoomController extends PlayerController
     final bool showGlobalLoading = !_isBackgroundTab();
     try {
       if (showGlobalLoading) {
-        SmartDialog.showLoading(msg: "");
+        // 子窗 bootstrap 在 runApp 之前触发 onInit→loadData，此时
+        // FlutterSmartDialog 尚未 initState（loadingWidget 为 late 未初始化）。
+        // loading 纯 UI 亲和，初始化前跳过不崩溃。
+        try {
+          SmartDialog.showLoading(msg: "");
+        } catch (_) {}
       }
       loadError.value = false;
       error = null;
@@ -1806,7 +1811,9 @@ class LiveRoomController extends PlayerController
       // 打开验证页前必须先关全局 loading：SmartDialog 遮罩在 Navigator 之上，
       // 会罩住验证页导致滑块无法操作（表现为无限转圈/卡死）
       if (showGlobalLoading) {
-        SmartDialog.dismiss(status: SmartStatus.loading);
+        try {
+          SmartDialog.dismiss(status: SmartStatus.loading);
+        } catch (_) {}
       }
       // 全局去重：进房与关注列表后台刷新共用同一验证页，只弹一次
       final result = await DouyinGuestVerifyGate.instance.open(e.webRid);
@@ -1823,7 +1830,9 @@ class LiveRoomController extends PlayerController
       error = e;
     } finally {
       if (showGlobalLoading) {
-        SmartDialog.dismiss(status: SmartStatus.loading);
+        try {
+          SmartDialog.dismiss(status: SmartStatus.loading);
+        } catch (_) {}
       }
     }
   }
