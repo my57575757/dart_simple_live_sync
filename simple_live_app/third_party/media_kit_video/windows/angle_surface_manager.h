@@ -25,6 +25,8 @@
 
 #include <cstdint>
 #include <functional>
+#include <atomic>
+#include <mutex>
 
 // |ANGLESurfaceManager| provides an abstraction around ANGLE to easily draw
 // OpenGL ES 2.0 content & read as D3D 11 texture using shared |HANDLE|.
@@ -54,6 +56,11 @@ class ANGLESurfaceManager {
   void MakeCurrent(bool value);
 
  private:
+  // 假定调用方已持有 egl_global_mutex_，内部不再加锁（避免递归）。
+  void MakeCurrentLocked(bool value);
+
+  void CleanUpLocked(bool release_context);
+
   void SwapBuffers();
 
   void Create();
@@ -128,7 +135,10 @@ class ANGLESurfaceManager {
   };
 
   // Number of active instances of ANGLESurfaceManager.
-  static int32_t instance_count_;
+  static std::atomic<int32_t> instance_count_;
+  // Global lock for EGL calls (eglMakeCurrent 等)：多引擎各建 context 时
+  // 必须串行，否则 libGLESv2.dll 访问违例。
+  static std::mutex egl_global_mutex_;
 };
 
 #endif  // ANGLE_SURFACE_MANAGER_H_

@@ -8,6 +8,7 @@
 #include "angle_surface_manager.h"
 
 #include <iostream>
+#include <mutex>
 
 #pragma comment(lib, "dxgi.lib")
 #pragma comment(lib, "d3d11.lib")
@@ -22,7 +23,8 @@
     FAIL(message);             \
   }
 
-int ANGLESurfaceManager::instance_count_ = 0;
+std::atomic<int32_t> ANGLESurfaceManager::instance_count_{0};
+std::mutex ANGLESurfaceManager::egl_global_mutex_;
 
 ANGLESurfaceManager::ANGLESurfaceManager(int32_t width, int32_t height)
     : width_(width), height_(height) {
@@ -49,10 +51,12 @@ void ANGLESurfaceManager::SetSize(int32_t width, int32_t height) {
 
 void ANGLESurfaceManager::Draw(std::function<void()> callback) {
   ::WaitForSingleObject(mutex_, INFINITE);
-  MakeCurrent(true);
+  // 整段持有全局 EGL 锁：MakeCurrent 与回调之间不能被其它引擎线程切走 context。
+  std::lock_guard<std::mutex> lock(egl_global_mutex_);
+  MakeCurrentLocked(true);
   callback();
   SwapBuffers();
-  MakeCurrent(false);
+  MakeCurrentLocked(false);
   ::ReleaseMutex(mutex_);
 }
 
@@ -67,6 +71,11 @@ void ANGLESurfaceManager::Read() {
 }
 
 void ANGLESurfaceManager::MakeCurrent(bool value) {
+  std::lock_guard<std::mutex> lock(egl_global_mutex_);
+  MakeCurrentLocked(value);
+}
+
+void ANGLESurfaceManager::MakeCurrentLocked(bool value) {
   if (value) {
     eglMakeCurrent(display_, surface_, surface_, context_);
   } else {
@@ -79,7 +88,10 @@ void ANGLESurfaceManager::SwapBuffers() {
 }
 
 void ANGLESurfaceManager::Create() {
-  CleanUp(false);
+  // 整段持有全局 EGL 锁：CleanUp → CreateEGLDisplay → CreateAndBindEGLSurface
+  // 均含 EGL 调用，多实例并发必须串行。
+  std::lock_guard<std::mutex> lock(egl_global_mutex_);
+  CleanUpLocked(false);
   if (!CreateD3DTexture()) {
     throw std::runtime_error("Unable to create Windows Direct3D device.");
     return;
@@ -99,6 +111,11 @@ void ANGLESurfaceManager::Create() {
 }
 
 void ANGLESurfaceManager::CleanUp(bool release_context) {
+  std::lock_guard<std::mutex> lock(egl_global_mutex_);
+  CleanUpLocked(release_context);
+}
+
+void ANGLESurfaceManager::CleanUpLocked(bool release_context) {
   if (release_context) {
     if (display_ != EGL_NO_DISPLAY && surface_ != EGL_NO_SURFACE) {
       eglReleaseTexImage(display_, surface_, EGL_BACK_BUFFER);
@@ -111,9 +128,8 @@ void ANGLESurfaceManager::CleanUp(bool release_context) {
       eglDestroySurface(display_, surface_);
       surface_ = EGL_NO_SURFACE;
     }
-    if (instance_count_ == 1) {
-      eglTerminate(display_);
-    }
+    // 不调 eglTerminate：EGL_DEFAULT_DISPLAY 为进程级共享，Flutter 引擎
+    // 自己的 ANGLE surface 也在用，terminate 会让多窗场景 libGLESv2.dll 崩。
     display_ = EGL_NO_DISPLAY;
     // Release D3D device & context if the instance is being destroyed.
     if (d3d_11_device_context_) {
