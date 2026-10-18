@@ -70,6 +70,8 @@ Future<void> runSubEngine(WindowController self) async {
     () async {
       await windowManager.show();
       await windowManager.focus();
+      // SWP_FRAMECHANGED 强制 DWM 重注册窗口，否则 Win11 贴靠布局可能漏掉本窗
+      await windowManager.setTitleBarStyle(TitleBarStyle.normal);
     },
   );
 
