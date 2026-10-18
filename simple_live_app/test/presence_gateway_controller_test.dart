@@ -199,10 +199,12 @@ void main() {
   late FakeDouyinSite siteB;
   late FakeGuard guard;
 
-  setUp(() {
+  setUp(() async {
     siteA = FakeDouyinSite('111', 'room_111', FakeDanmaku());
     siteB = FakeDouyinSite('222', 'room_222', FakeDanmaku());
     guard = FakeGuard();
+    // 并发加载下前序 isolate 可能残留微任务回调：排空后再进用例，稳定首跑
+    await Future<void>.delayed(Duration.zero);
   });
 
   tearDown(() async {

@@ -39,7 +39,8 @@ class _FakeSite extends LiveSite {
 }
 
 Future<void> _waitFor(FutureOr<bool> Function() condition) async {
-  for (var i = 0; i < 500; i++) {
+  // 1000×20ms：并发负载下 timer 可能被压后，轮询上限放宽到 20s
+  for (var i = 0; i < 1000; i++) {
     if (await condition()) {
       return;
     }

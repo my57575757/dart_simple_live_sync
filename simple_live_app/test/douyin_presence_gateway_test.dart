@@ -1168,19 +1168,27 @@ void main() {
       expect(guard.enters.length, 2);
     });
 
-    test('suspended：换端口但不 apply，suspended 语义保留', () async {
-      final guard = FakeGuard();
-      final gw = DouyinPresenceGateway(guard);
-      addTearDown(gw.stopHeartbeatForTesting);
-      final a = FakeTab('A', '111');
-      await gw.claim(a);
-      guard.inRoomFalseBeats = 1;
-      await Future<void>.delayed(const Duration(seconds: 21));
-      expect(a.suspended, 1);
+    test('suspended：换端口但不 apply，suspended 语义保留', () {
+      fakeAsync((async) {
+        final guard = FakeGuard();
+        final gw = DouyinPresenceGateway(
+          guard,
+          heartbeatInterval: const Duration(milliseconds: 100),
+        );
+        addTearDown(gw.stopHeartbeatForTesting);
+        final a = FakeTab('A', '111');
+        gw.claim(a);
+        async.flushMicrotasks();
+        guard.inRoomFalseBeats = 1;
+        async.elapse(const Duration(milliseconds: 150));
+        expect(a.suspended, 1);
 
-      final a2 = FakeTab('A', '111');
-      await gw.rehome('A', newPort: a2);
-      expect(a2.reenteredOnlyCalls, 0);
+        final a2 = FakeTab('A', '111');
+        gw.rehome('A', newPort: a2);
+        async.flushMicrotasks();
+        expect(a2.reenteredOnlyCalls, 0);
+        gw.stopHeartbeatForTesting();
+      });
     });
 
     test('网关不跟踪的 tab：no-op，不绑定新端口', () async {
