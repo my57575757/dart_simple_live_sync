@@ -5,6 +5,7 @@
 #include "flutter/generated_plugin_registrant.h"
 #include "desktop_multi_window/desktop_multi_window_plugin.h"
 #include "native_edit_host.h"
+#include "win32_snap_eligibility.h"
 
 FlutterWindow::FlutterWindow(const flutter::DartProject& project)
     : project_(project) {}
@@ -40,6 +41,8 @@ bool FlutterWindow::OnCreate() {
     if (child) {
       HWND top = GetAncestor(child, GA_ROOT);
       if (top) {
+        // 子窗创建后立即补贴靠资格（WS_EX_APPWINDOW + ITaskbarList 登记）
+        EnsureSnapEligible(top);
         new NativeEditHost(top, child, registry->messenger());
       }
     }
@@ -50,6 +53,9 @@ bool FlutterWindow::OnCreate() {
   // 主窗原生弹幕 EDIT：自注册自释放（owner WM_NCDESTROY 时 delete this）。
   new NativeEditHost(GetHandle(), child_content(),
                      flutter_controller_->engine()->messenger());
+
+  // 主窗创建后补贴靠资格，与子窗同路径，避免主窗被 Snap Assist 当成另一软件
+  EnsureSnapEligible(GetHandle());
 
   flutter_controller_->engine()->SetNextFrameCallback([&]() {
     this->Show();

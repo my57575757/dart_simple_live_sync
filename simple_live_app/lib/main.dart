@@ -140,6 +140,8 @@ Future initWindow() async {
     await windowManager.focus();
     // SWP_FRAMECHANGED 强制 DWM 重注册窗口，否则 Win11 贴靠布局可能漏掉本窗
     await windowManager.setTitleBarStyle(TitleBarStyle.normal);
+    // 显示后再走一次 ITaskbarList::AddTab，补住建窗时 hiddenAtLaunch 的登记时机
+    await windowManager.setSkipTaskbar(false);
   });
 }
 
