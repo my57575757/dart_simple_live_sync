@@ -76,13 +76,15 @@ class WebLoginArgs {
 }
 
 class WebLoginController extends GetxController {
-  /// 无参深链时 Get.arguments 为 null：给出明确错误而非 cast 崩溃
-  WebLoginArgs get args {
+  /// 无参深链（Get.toNamed(kWebLogin) 不带 arguments）或类型不符时返回 null：
+  /// 调用方必须判空走安全默认/关闭页面，禁止 cast 崩溃。
+  WebLoginArgs? get args {
     final a = Get.arguments;
-    if (a is WebLoginArgs) return a;
-    throw StateError('WebLogin page opened without WebLoginArgs');
+    return a is WebLoginArgs ? a : null;
   }
-  final CookieManager cookieManager = CookieManager.instance();
+
+  /// 懒解析：单测构造控制器时无 InAppWebView 平台实例，eager 字段初始化会炸
+  CookieManager get cookieManager => CookieManager.instance();
   bool _finished = false;
 
   /// Cookie 检查进行中占位标志；在 await 之前同步置位，杜绝两次 onLoadStop 交叠
@@ -109,12 +111,15 @@ class WebLoginController extends GetxController {
 
   /// WebView2 环境一次性创建失败时插件不发任何事件，只能靠看门狗发现白屏
   late final WebLoadWatchdog _loadWatchdog = WebLoadWatchdog(
-    readyOnFirstStart: args.redirectMatch != null,
+    readyOnFirstStart: args?.redirectMatch != null,
   );
   Timer? _watchdogTimer;
   final RxBool loadFailed = false.obs;
   final RxBool loadRetryExhausted = false.obs;
   final RxInt webViewAttempt = 0.obs;
+
+  /// 无参深链/参数类型不符：页面层展示错误并提供关闭
+  final RxBool argsMissing = false.obs;
 
   /// 凭据记忆条控件（args.credential 非空时才创建）
   InAppWebViewController? _webViewController;
@@ -126,13 +131,29 @@ class WebLoginController extends GetxController {
   int _autofillAttempts = 0;
   static const int _autofillMaxAttempts = 12;
 
-  bool get _credentialEnabled => args.credential != null;
+  bool get _credentialEnabled => args?.credential != null;
+
+  /// 安全返回登录页：对齐 main.dart 的 canPop 守卫，栈底/无栈时 no-op
+  void closePage() {
+    final navigator = Get.key.currentState;
+    if (navigator != null && navigator.canPop()) {
+      Get.back();
+    }
+  }
 
   @override
   void onInit() {
     super.onInit();
+    final a = args;
+    if (a == null) {
+      // 无参深链：不启动加载看门狗，页面层展示参数错误并提供关闭
+      argsMissing.value = true;
+      loadFailed.value = true;
+      loadRetryExhausted.value = true;
+      return;
+    }
     if (_credentialEnabled) {
-      final cred = args.credential!;
+      final cred = a.credential!;
       accountController = TextEditingController(text: cred.account);
       passwordController = TextEditingController(text: cred.password);
       rememberCredential =
@@ -150,14 +171,16 @@ class WebLoginController extends GetxController {
 
   void _onCredentialChanged() {
     if (rememberCredential?.value ?? false) {
-      args.credential!
-          .onSave(accountController!.text.trim(), passwordController!.text);
+      final cred = args?.credential;
+      if (cred == null) return;
+      cred.onSave(accountController!.text.trim(), passwordController!.text);
     }
   }
 
   void toggleRememberCredential(bool value) {
+    final cred = args?.credential;
+    if (cred == null) return;
     rememberCredential!.value = value;
-    final cred = args.credential!;
     if (value) {
       cred.onSave(accountController!.text.trim(), passwordController!.text);
     } else {
@@ -227,7 +250,7 @@ class WebLoginController extends GetxController {
 
   /// 斗鱼 passport 登录页填充脚本：账号/密码经 jsonEncode 转义后嵌入
   String _buildAutofillScript(String account, String password) {
-    final tabText = jsonEncode(args.credential!.passwordTabText);
+    final tabText = jsonEncode(args?.credential?.passwordTabText ?? "");
     final accountJson = jsonEncode(account);
     final passwordJson = jsonEncode(password);
     return '''
@@ -281,8 +304,10 @@ class WebLoginController extends GetxController {
 
   void onLoadStop(InAppWebViewController controller, Uri? uri) async {
     _loadWatchdog.markLoadStop();
+    final a = args;
+    if (a == null) return;
     // 重定向提取模式：轮询处理授权按钮
-    if (args.redirectMatch != null) {
+    if (a.redirectMatch != null) {
       if (_finished) return;
       _startPolling(controller);
       return;
@@ -290,11 +315,11 @@ class WebLoginController extends GetxController {
     // 凭据自动填充：仅在登录页主机名下执行
     if (_credentialEnabled &&
         uri != null &&
-        uri.host == args.credential!.injectHost) {
+        uri.host == a.credential!.injectHost) {
       startCredentialAutofill(controller);
     }
     // 空 cookieUrl 时不能检查（requiredCookies 为空时 every 会空真误判成功）
-    if (args.cookieUrl.isEmpty || _finished || _checking) {
+    if (a.cookieUrl.isEmpty || _finished || _checking) {
       return;
     }
     _checking = true;
@@ -311,10 +336,10 @@ class WebLoginController extends GetxController {
       return;
     }
     var cookies = await cookieManager.getCookies(
-      url: WebUri(args.cookieUrl),
+      url: WebUri(a.cookieUrl),
     );
     var names = cookies.map((e) => e.name).toSet();
-    if (args.requiredCookies.every(names.contains)) {
+    if (a.requiredCookies.every(names.contains)) {
       _finished = true;
       var cookieStr = cookies
           .where((e) => e.value.isNotEmpty)
@@ -322,9 +347,9 @@ class WebLoginController extends GetxController {
           .join(";");
       // onSuccess 抛异常时也要返回登录页，避免页面卡死
       try {
-        args.onSuccess(cookieStr);
+        a.onSuccess(cookieStr);
       } finally {
-        Get.back();
+        closePage();
       }
     } else {
       // 尚未集齐必需 Cookie，放行后续 onLoadStop 继续检查
@@ -350,25 +375,25 @@ class WebLoginController extends GetxController {
 
   /// 重定向提取模式：匹配则拦截并解析 fragment；返回 true 表示已处理
   bool handleNavigation(Uri uri) {
-    if (_finished ||
-        args.redirectMatch == null ||
-        !uri.toString().startsWith(args.redirectMatch!)) {
+    final a = args;
+    final match = a?.redirectMatch;
+    if (_finished || match == null || !uri.toString().startsWith(match)) {
       return false;
     }
     _finished = true;
-    var value = Uri.splitQueryString(uri.fragment)[args.fragmentKey];
+    var value = Uri.splitQueryString(uri.fragment)[a!.fragmentKey];
     if (value == null || value.isEmpty) {
       // 已回到重定向 URI 但没有令牌（如用户拒绝授权）
       SmartDialog.showToast("未获得授权");
       _pollTimer?.cancel();
-      Get.back();
+      closePage();
       return true;
     }
     try {
-      args.onSuccess(value);
+      a.onSuccess(value);
     } finally {
       _pollTimer?.cancel();
-      Get.back();
+      closePage();
     }
     return true;
   }
@@ -377,17 +402,19 @@ class WebLoginController extends GetxController {
   /// shouldOverrideUrlLoading 不触发
   void onLoadStart(InAppWebViewController controller, Uri? uri) {
     _loadWatchdog.markLoadStart(DateTime.now().millisecondsSinceEpoch);
-    if (args.redirectMatch != null && !_finished) {
+    final a = args;
+    if (a == null) return;
+    if (a.redirectMatch != null && !_finished) {
       // onLoadStop 在部分页面不触发，提前启动轮询
       _startPolling(controller);
     }
     if (uri == null ||
         _finished ||
-        args.redirectMatch == null ||
-        !uri.toString().startsWith(args.redirectMatch!)) {
+        a.redirectMatch == null ||
+        !uri.toString().startsWith(a.redirectMatch!)) {
       return;
     }
-    // 必须在 Get.back() 之前停止加载，否则页面销毁后操作 controller
+    // 必须在 closePage() 之前停止加载，否则页面销毁后操作 controller
     controller.stopLoading();
     handleNavigation(uri);
   }
@@ -410,6 +437,25 @@ class WebLoginPage extends GetView<WebLoginController> {
   @override
   Widget build(BuildContext context) {
     var args = controller.args;
+    if (args == null) {
+      // 无参深链/参数类型不符：安全兜底页，不创建 WebView、不 crash
+      return Scaffold(
+        appBar: AppBar(title: const Text("登录")),
+        body: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text("页面参数缺失，请从账号设置入口进入"),
+              const SizedBox(height: 16),
+              TextButton(
+                onPressed: controller.closePage,
+                child: const Text("关闭页面"),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
     // 重定向提取模式（Twitch）：不用 CDP Fetch 实现的
     // shouldOverrideUrlLoading（POST→302 到 localhost 时会静默挂起），
     // 改依赖 WebView2 NavigationStarting 触发的 onLoadStart，最可靠。
@@ -456,7 +502,7 @@ class WebLoginPage extends GetView<WebLoginController> {
                 ),
               ),
             ),
-          if (controller.args.credential != null)
+          if (args.credential != null)
             _buildCredentialBar(context),
           Expanded(
             child: Stack(
@@ -475,7 +521,8 @@ class WebLoginPage extends GetView<WebLoginController> {
 
   Widget _buildCredentialBar(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
-    final credential = controller.args.credential!;
+    final credential = controller.args?.credential;
+    if (credential == null) return const SizedBox.shrink();
     final inputBorder = OutlineInputBorder(
       borderSide: BorderSide(color: colorScheme.outlineVariant),
     );
@@ -577,7 +624,7 @@ class WebLoginPage extends GetView<WebLoginController> {
           const SizedBox(height: 16),
           if (exhausted)
             TextButton(
-              onPressed: Get.back,
+              onPressed: controller.closePage,
               child: const Text("关闭页面"),
             )
           else
