@@ -76,7 +76,12 @@ class WebLoginArgs {
 }
 
 class WebLoginController extends GetxController {
-  WebLoginArgs get args => Get.arguments as WebLoginArgs;
+  /// 无参深链时 Get.arguments 为 null：给出明确错误而非 cast 崩溃
+  WebLoginArgs get args {
+    final a = Get.arguments;
+    if (a is WebLoginArgs) return a;
+    throw StateError('WebLogin page opened without WebLoginArgs');
+  }
   final CookieManager cookieManager = CookieManager.instance();
   bool _finished = false;
 
