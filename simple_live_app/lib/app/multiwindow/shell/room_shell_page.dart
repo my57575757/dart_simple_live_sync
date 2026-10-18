@@ -102,7 +102,8 @@ class _RoomShellPageState extends State<RoomShellPage> with WindowListener {
             ? WindowOpenService.instance.childWindowCount
             : 0;
 
-    if (store.tabs.isNotEmpty || childWindowCount > 0) {
+    // 单标签且无子窗：直接关，不弹确认（新建子窗只有 1 标签是常态）
+    if (store.tabs.length > 1 || childWindowCount > 0) {
       _closing = true;
       final message = widget.isSubWindow
           ? '还有 ${store.tabs.length} 个直播间标签正在播放，确定关闭吗？'
