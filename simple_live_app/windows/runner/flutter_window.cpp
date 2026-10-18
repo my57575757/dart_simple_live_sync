@@ -41,8 +41,8 @@ bool FlutterWindow::OnCreate() {
     if (child) {
       HWND top = GetAncestor(child, GA_ROOT);
       if (top) {
-        // 子窗创建后立即补贴靠资格（WS_EX_APPWINDOW + ITaskbarList 登记）
-        EnsureSnapEligible(top);
+        // 子窗创建后立即补贴靠资格，并挂 WM_SHOWWINDOW 钩子兜异步 Show 竞态
+        HookSnapEligibleOnShow(top);
         new NativeEditHost(top, child, registry->messenger());
       }
     }
@@ -54,8 +54,8 @@ bool FlutterWindow::OnCreate() {
   new NativeEditHost(GetHandle(), child_content(),
                      flutter_controller_->engine()->messenger());
 
-  // 主窗创建后补贴靠资格，与子窗同路径，避免主窗被 Snap Assist 当成另一软件
-  EnsureSnapEligible(GetHandle());
+  // 主窗创建后补贴靠资格，并挂 WM_SHOWWINDOW 钩子兜异步 Show 竞态
+  HookSnapEligibleOnShow(GetHandle());
 
   flutter_controller_->engine()->SetNextFrameCallback([&]() {
     this->Show();

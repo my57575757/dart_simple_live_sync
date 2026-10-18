@@ -100,6 +100,9 @@ mixin PlayerStateMixin on PlayerMixin {
   /// 是否处于全屏状态
   RxBool fullScreenState = false.obs;
 
+  /// 是否处于窗口内沉浸状态（桌面端：仅隐藏 OS 标题栏，非真全屏）
+  RxBool inWindowFullScreenState = false.obs;
+
   /// 显示手势 Tip
   RxBool showGestureTip = false.obs;
 
@@ -321,6 +324,39 @@ mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
     fullScreenState.value = false;
   }
 
+  /// 进入窗口内沉浸：仅隐藏 OS 标题栏，窗口位置/大小不变，不进入真全屏
+  Future<void> enterInWindowFullScreen() async {
+    if (Platform.isAndroid || Platform.isIOS) return;
+    if (fullScreenState.value ||
+        smallWindowState.value ||
+        inWindowFullScreenState.value) {
+      return;
+    }
+    inWindowFullScreenState.value = true;
+    await windowManager.setTitleBarStyle(TitleBarStyle.hidden);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      playerFocusNode.requestFocus();
+    });
+  }
+
+  /// 退出窗口内沉浸
+  Future<void> exitInWindowFullScreen() async {
+    if (Platform.isAndroid || Platform.isIOS) return;
+    inWindowFullScreenState.value = false;
+    await windowManager.setTitleBarStyle(TitleBarStyle.normal);
+  }
+
+  /// 顶部退出按钮统一分流：小窗 / 窗口内沉浸 / 真全屏
+  void exitImmersiveOrFull() {
+    if (smallWindowState.value) {
+      exitSmallWindow();
+    } else if (inWindowFullScreenState.value) {
+      exitInWindowFullScreen();
+    } else {
+      exitFull();
+    }
+  }
+
   Size? _lastWindowSize;
   Offset? _lastWindowPosition;
 
@@ -534,7 +570,9 @@ mixin PlayerGestureControlMixin
     if (isZoomed) {
       resetZoom();
     } else {
-      if (fullScreenState.value) {
+      if (inWindowFullScreenState.value) {
+        exitInWindowFullScreen();
+      } else if (fullScreenState.value) {
         exitFull();
       } else {
         enterFullScreen();
@@ -603,6 +641,14 @@ mixin PlayerGestureControlMixin
     if (lockControlsState.value || smallWindowState.value) return;
 
     final logicalKey = event.logicalKey;
+
+    // Esc 退出窗口内沉浸（真全屏由 main.dart 全局监听处理）
+    if (logicalKey == LogicalKeyboardKey.escape) {
+      if (inWindowFullScreenState.value) {
+        exitInWindowFullScreen();
+      }
+      return;
+    }
 
     // 缩放快捷键
     if (logicalKey == LogicalKeyboardKey.numpadAdd ||
@@ -945,6 +991,11 @@ class PlayerController extends BaseController
     Log.w("播放器关闭");
     if (smallWindowState.value) {
       exitSmallWindow();
+    } else if (!Platform.isAndroid &&
+        !Platform.isIOS &&
+        inWindowFullScreenState.value) {
+      // 沉浸态中标签被关闭，恢复 OS 标题栏，避免无标题栏残留
+      exitInWindowFullScreen();
     } else if (!Platform.isAndroid &&
         !Platform.isIOS &&
         fullScreenState.value) {

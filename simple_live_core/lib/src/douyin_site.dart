@@ -116,21 +116,31 @@ class DouyinSite implements LiveSite {
   }
 
   Future<Map<String, dynamic>> getRequestHeaders({bool asAccount = false}) async {
+    // 必须返回副本：双开并发 getRoomDetail/getPlay* 时若共享同一 Map，
+    // 后一次写入的 cookie 会覆盖前一次正在使用的请求头，导致串身份/取流失败。
+    Map<String, dynamic> build(String cookieValue) => {
+          "Authority": kDefaultAuthority,
+          "Referer": kDefaultReferer,
+          "User-Agent": kDefaultUserAgent,
+          "cookie": cookieValue,
+        };
     try {
       if (asAccount && loginCookie.contains("sessionid")) {
         headers["cookie"] = loginCookie;
-        return headers;
+        return build(loginCookie);
       }
 
       // 游客路径：设备 cookie 优先，否则默认匿名 ttwid；任何情况不带 loginCookie
-      headers["cookie"] = cookie.isNotEmpty ? cookie : kDefaultCookie;
-      return headers;
+      final guestCookie = cookie.isNotEmpty ? cookie : kDefaultCookie;
+      headers["cookie"] = guestCookie;
+      return build(guestCookie);
     } catch (e) {
       CoreLog.error(e);
-      if (!(headers["cookie"]?.toString().isNotEmpty ?? false)) {
-        headers["cookie"] = kDefaultCookie;
-      }
-      return headers;
+      final fallback =
+          (headers["cookie"]?.toString().isNotEmpty ?? false)
+              ? headers["cookie"].toString()
+              : kDefaultCookie;
+      return build(fallback);
     }
   }
 
@@ -789,14 +799,21 @@ class DouyinSite implements LiveSite {
       var streamData = pullData["stream_data"]?.toString() ?? "";
 
       if (!streamData.startsWith('{')) {
-        var flvList = (detail.data["flv_pull_url"] as Map).values
-            .cast<String>()
-            .toList();
-        var hlsList = (detail.data["hls_pull_url_map"] as Map).values
-            .cast<String>()
-            .toList();
-        for (var quality in qulityList) {
-          int level = quality["level"];
+        // stream_data 异常时退回 flv/hls 映射；缺字段时不得 as Map 硬转（双开/
+        // 风控降级下可能为空，会抛 TypeError 被吞成「无法读取播放清晰度」）。
+        final flvMap = detail.data["flv_pull_url"];
+        final hlsMap = detail.data["hls_pull_url_map"];
+        final flvList = flvMap is Map
+            ? flvMap.values.whereType<String>().toList()
+            : const <String>[];
+        final hlsList = hlsMap is Map
+            ? hlsMap.values.whereType<String>().toList()
+            : const <String>[];
+        final qualityList =
+            (qulityList is List) ? qulityList : const <dynamic>[];
+        for (var quality in qualityList) {
+          final level = asT<int?>(quality["level"]) ?? 0;
+          final name = quality["name"]?.toString() ?? "默认";
           List<String> urls = [];
           var flvIndex = flvList.length - level;
           if (flvIndex >= 0 && flvIndex < flvList.length) {
@@ -807,7 +824,7 @@ class DouyinSite implements LiveSite {
             urls.add(hlsList[hlsIndex]);
           }
           var qualityItem = LivePlayQuality(
-            quality: quality["name"],
+            quality: name,
             sort: level,
             data: urls,
           );
@@ -816,9 +833,14 @@ class DouyinSite implements LiveSite {
           }
         }
       } else {
-        var qualityData = json.decode(streamData)["data"] as Map;
+        final decoded = json.decode(streamData);
+        final qualityData = (decoded is Map && decoded["data"] is Map)
+            ? decoded["data"] as Map
+            : const <dynamic, dynamic>{};
+        final qualityList =
+            (qulityList is List) ? qulityList : const <dynamic>[];
 
-        for (var quality in qulityList) {
+        for (var quality in qualityList) {
           List<String> urls = [];
 
           var flvUrl = qualityData[quality["sdk_key"]]?["main"]?["flv"]
@@ -835,8 +857,8 @@ class DouyinSite implements LiveSite {
           }
 
           var qualityItem = LivePlayQuality(
-            quality: quality["name"],
-            sort: quality["level"],
+            quality: quality["name"]?.toString() ?? "默认",
+            sort: asT<int?>(quality["level"]) ?? 0,
             data: urls,
           );
           if (urls.isNotEmpty) {
@@ -862,7 +884,15 @@ class DouyinSite implements LiveSite {
     required LivePlayQuality quality,
   }) async {
     // 返回列表的副本，防止外部 clear() 影响原始数据
-    return LivePlayUrl(urls: List<String>.from(quality.data));
+    // 与 B 站/虎牙一致带上播放请求头：CDN 对无 Referer/UA 的拉流常 403。
+    // 不带 cookie：播放头会进 media_kit/日志链路，凭据不得落日志。
+    return LivePlayUrl(
+      urls: List<String>.from(quality.data),
+      headers: {
+        "referer": kDefaultReferer,
+        "user-agent": kDefaultUserAgent,
+      },
+    );
   }
 
   @override

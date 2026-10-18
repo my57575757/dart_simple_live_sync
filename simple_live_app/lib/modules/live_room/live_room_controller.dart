@@ -113,6 +113,9 @@ class LiveRoomController extends PlayerController
   /// 弹幕发送中
   var sendingDanmaku = false.obs;
 
+  /// 标签级静音（会话态，不落库；恢复时取该房间保存的 per-player 音量）
+  var muted = false.obs;
+
   /// 清晰度数据
   RxList<LivePlayQuality> qualites = RxList<LivePlayQuality>();
 
@@ -159,6 +162,11 @@ class LiveRoomController extends PlayerController
   Timer? _liveDurationTimer;
   // guard 心跳：观看期间每 20s 续租，服务端租约超时才退房
   Timer? _guardHeartbeatTimer;
+
+  // b 站观看心跳：进房后按服务端 next_interval 续拍，累计直播任务中心时长
+  Timer? _biliHeartbeatTimer;
+  int _biliHeartbeatInterval = 60;
+  bool _biliHeartbeatStopped = true;
 
   /// 抖音房间在场状态；bili/huya 保持原自动进入行为，不使用此状态
   final presence = RoomPresence.guest.obs;
@@ -227,12 +235,10 @@ class LiveRoomController extends PlayerController
   }
 
   /// 子窗弹幕发送 UI 本里程碑不开放（通道已铺好，输入 UI 留 M5）
-  bool get _isSubWindow =>
-      Platform.isWindows && MultiWindowRole.isSubWindow;
+  bool get _isSubWindow => Platform.isWindows && MultiWindowRole.isSubWindow;
 
   /// 子窗抖音标签：借用主窗登录身份参与 presence
-  bool get _isSubWindowDouyin =>
-      _isSubWindow && site.id == Constant.kDouyin;
+  bool get _isSubWindowDouyin => _isSubWindow && site.id == Constant.kDouyin;
 
   /// 子引擎 presence 接线入口（onInit 与测试共用）：向主端登记死亡对账
   /// 索引并持有 per-tab IPC client。返回 true 表示已走子端通道，
@@ -443,9 +449,7 @@ class LiveRoomController extends PlayerController
   /// 全局关 wakelock 导致正在观看的标签息屏。
   /// 无标签壳（Android / 路由模式）保持释放 wakelock 后退出进程。
   Future<void> _handleAutoExit() async {
-    if (Platform.isWindows &&
-        tabId != null &&
-        Get.isRegistered<TabStore>()) {
+    if (Platform.isWindows && tabId != null && Get.isRegistered<TabStore>()) {
       final store = Get.find<TabStore>();
       if (store.tabs.any((t) => t.tabId == tabId)) {
         final navigator = Get.key.currentState;
@@ -617,9 +621,8 @@ class LiveRoomController extends PlayerController
       return false;
     }
     final client = _presenceClient;
-    final future = client == null
-        ? _doEnterAsAccount()
-        : _doEnterViaGateway(client);
+    final future =
+        client == null ? _doEnterAsAccount() : _doEnterViaGateway(client);
     _enteringFuture = future;
     try {
       return await future;
@@ -829,6 +832,55 @@ class LiveRoomController extends PlayerController
     _guardHeartbeatTimer = null;
   }
 
+  /// 房间详情加载成功后启动 b 站观看心跳；仅 b 站登录房间生效。
+  /// 只要播放器在播放就续拍（含后台标签），暂停/未起播则跳过本拍延后重试。
+  void _startBiliHeartbeat() {
+    if (site.id != Constant.kBiliBili ||
+        !BiliBiliAccountService.instance.logined.value) {
+      return;
+    }
+    final roomId = detail.value?.roomId;
+    if (roomId == null || roomId.isEmpty) {
+      return;
+    }
+    _stopBiliHeartbeat();
+    _biliHeartbeatStopped = false;
+    _biliHeartbeatInterval = 60;
+
+    Future<void> beat() async {
+      if (_biliHeartbeatStopped) return;
+      if (!player.state.playing) {
+        _biliHeartbeatTimer =
+            Timer(Duration(seconds: _biliHeartbeatInterval), beat);
+        return;
+      }
+      try {
+        final next = await (site.liveSite as BiliBiliSite).reportHeartbeat(
+          roomId: roomId,
+          lastInterval: _biliHeartbeatInterval,
+        );
+        if (next > 0) {
+          _biliHeartbeatInterval = next;
+        }
+      } catch (e) {
+        Log.logPrint("b站观看心跳失败: $e");
+      }
+      if (!_biliHeartbeatStopped) {
+        _biliHeartbeatTimer =
+            Timer(Duration(seconds: _biliHeartbeatInterval), beat);
+      }
+    }
+
+    // 首拍延后 3s，等自动起播完成以通过 playing 判定
+    _biliHeartbeatTimer = Timer(const Duration(seconds: 3), beat);
+  }
+
+  void _stopBiliHeartbeat() {
+    _biliHeartbeatStopped = true;
+    _biliHeartbeatTimer?.cancel();
+    _biliHeartbeatTimer = null;
+  }
+
   /// 退出直播间时让服务端页面回到首页；best-effort，失败只记日志
   Future<void> _exitGuardRoom() async {
     _stopGuardHeartbeat();
@@ -863,9 +915,7 @@ class LiveRoomController extends PlayerController
     final client = _presenceClient;
     if (client != null) {
       final inStack = client.isClaimed;
-      if (unconditional ||
-          presence.value == RoomPresence.account ||
-          inStack) {
+      if (unconditional || presence.value == RoomPresence.account || inStack) {
         await client.release();
       }
       return;
@@ -949,8 +999,7 @@ class LiveRoomController extends PlayerController
               return DanmakuSendResult(
                 success: false,
                 errorCode: "guard",
-                errorMessage:
-                    msg is String && msg.isNotEmpty ? msg : "网络请求失败",
+                errorMessage: msg is String && msg.isNotEmpty ? msg : "网络请求失败",
               );
             }
           }
@@ -1276,10 +1325,9 @@ class LiveRoomController extends PlayerController
     final intimacy = _taskInt(tasks["intimacy"]);
     final nextIntimacy = _taskInt(tasks["nextIntimacy"]);
     final medalName = tasks["medalName"]?.toString() ?? "";
-    final items = (tasks["tasks"] as List?)
-            ?.whereType<Map>()
-            .toList(growable: false) ??
-        const <Map>[];
+    final items =
+        (tasks["tasks"] as List?)?.whereType<Map>().toList(growable: false) ??
+            const <Map>[];
 
     return AlertDialog(
       title: Text(isStarRoom ? "每日任务 · 点点星光" : "每日任务"),
@@ -1446,7 +1494,7 @@ class LiveRoomController extends PlayerController
   @override
   void handleKeyboardKey(KeyEvent event) {
     if (event is KeyDownEvent &&
-        fullScreenState.value &&
+        (fullScreenState.value || inWindowFullScreenState.value) &&
         !lockControlsState.value &&
         !smallWindowState.value &&
         (event.logicalKey == LogicalKeyboardKey.enter ||
@@ -1800,6 +1848,7 @@ class LiveRoomController extends PlayerController
         addSysMsg("当前主播未开播，不连接弹幕服务器");
       }
       startLiveDurationTimer(); // 启动开播时长定时器
+      _startBiliHeartbeat(); // b 站登录房间启动观看心跳（任务中心时长）
     } on DouyinGuestVerifyRequired catch (e) {
       Log.logPrint(e);
       if (guestVerifyReplays >= 1) {
@@ -1892,8 +1941,8 @@ class LiveRoomController extends PlayerController
     currentLineInfo.value = "";
     currentLineIndex = -1;
     try {
-      var playUrl = await site.liveSite
-          .getPlayUrls(detail: detail.value!, quality: qualites[currentQuality]);
+      var playUrl = await site.liveSite.getPlayUrls(
+          detail: detail.value!, quality: qualites[currentQuality]);
       if (playUrl.urls.isEmpty) {
         SmartDialog.showToast("无法读取播放地址");
         return;
@@ -2101,8 +2150,7 @@ class LiveRoomController extends PlayerController
       } catch (e) {
         Log.logPrint(e);
         if (attempt < maxAttempts) {
-          await Future.delayed(
-              Duration(seconds: attempt < 3 ? 3 : 15));
+          await Future.delayed(Duration(seconds: attempt < 3 ? 3 : 15));
         }
       }
     }
@@ -2279,6 +2327,7 @@ class LiveRoomController extends PlayerController
     var id = "${site.id}_$roomId";
     var volumeVal = DBService.instance.getVolume(id);
     double volume = volumeVal!.toDouble();
+    muted.value = volume == 0;
     player.setVolume(volume);
     AppSettingsController.instance.setPlayerVolume(volume);
     SmartDialog.showAttach(
@@ -2304,6 +2353,7 @@ class LiveRoomController extends PlayerController
                   player.setVolume(newValue);
                   addOrUpdateVolume(newValue);
                   AppSettingsController.instance.setPlayerVolume(newValue);
+                  muted.value = newValue == 0;
                 },
               ),
             ),
@@ -2757,12 +2807,26 @@ ${error is Error ? (error as Error).stackTrace : ""}''');
         .setStopRequestedHandler(tabId ?? 'android', null);
     danmakuController = null;
     _liveDurationTimer?.cancel();
+    _stopBiliHeartbeat();
     super.onClose();
   }
 
   void addOrUpdateVolume(double newValue) async {
     var id = "${site.id}_$roomId";
     DBService.instance.addOrUpdateVolume(id, newValue);
+  }
+
+  /// 标签栏喇叭按钮：静音与该房间保存音量之间切换
+  Future<void> toggleMute() async {
+    if (muted.value) {
+      muted.value = false;
+      final id = "${site.id}_$roomId";
+      final volume = DBService.instance.getVolume(id)?.toDouble() ?? 100.0;
+      await player.setVolume(volume);
+    } else {
+      muted.value = true;
+      await player.setVolume(0);
+    }
   }
 }
 

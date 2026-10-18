@@ -29,10 +29,7 @@ class WindowSnapshotBuilder {
       if (DataPlaneProtocol.isSensitiveKey(key)) continue;
       final value = entry.value;
       // IPC/JSON 只接受基础类型；LocalStorage 现存值均为 num/String/bool
-      if (value == null ||
-          value is num ||
-          value is String ||
-          value is bool) {
+      if (value == null || value is num || value is String || value is bool) {
         settings[key] = value;
       }
     }
@@ -111,16 +108,14 @@ class WindowOpenService extends GetxService {
   /// 对账发现子窗进程消失（无临终消息）时推送被摘除 windowId 集。
   /// MainPresenceService 订阅后批量释放该窗名下远端 presence 标签。
   /// 广播流不补发历史，订阅必须先于对账事件建立（MainPresenceService 在 onInit 订阅，早于任何开窗）。
-  Stream<Set<String>> get onChildWindowsClosed =>
-      _childWindowsClosed.stream;
+  Stream<Set<String>> get onChildWindowsClosed => _childWindowsClosed.stream;
 
   @override
   void onInit() {
     super.onInit();
     _windowsChangedSub = port.windowsChanged.listen((_) async {
       try {
-        final removed =
-            registry.reconcile(await port.listWindowIds());
+        final removed = registry.reconcile(await port.listWindowIds());
         if (removed.isNotEmpty) {
           _childWindowsClosed.add(removed);
         }
@@ -195,8 +190,7 @@ class WindowOpenService extends GetxService {
   Future<Object?> handleWindowCall(String method, Object? arguments) async {
     switch (method) {
       case WindowControlProtocol.mRequestMove:
-        final call =
-            WindowControlProtocol.decodeRequestMove(arguments);
+        final call = WindowControlProtocol.decodeRequestMove(arguments);
         if (call == null) {
           return WindowControlProtocol.encodeMoveResult(false,
               message: '移动失败，请重试');
@@ -244,9 +238,7 @@ class WindowOpenService extends GetxService {
       // 1. 取请求四元组（tabId 为权威身份，presence 全程不换）
       TabOpenRequest? request;
       if (fromMain) {
-        request = store.tabs
-            .firstWhereOrNull((t) => t.tabId == tabId)
-            ?.request;
+        request = store.tabs.firstWhereOrNull((t) => t.tabId == tabId)?.request;
       } else if (siteId != null && roomId != null) {
         request = TabOpenRequest(
             siteId: siteId, roomId: roomId, shareUrl: shareUrl ?? '');
@@ -303,8 +295,7 @@ class WindowOpenService extends GetxService {
       }
 
       // 3. presence 无缝 handoff（非抖音/未跟踪得 null，壳流程不等）
-      final handoff =
-          presenceService?.prepareHandoff(tabId, destWindowId);
+      final handoff = presenceService?.prepareHandoff(tabId, destWindowId);
       // 立即挂 catchError 防 unhandled：覆盖后续所有提前 return / 不 await
       // 分支；正常 await handoff 收口语义不变（成功/超时/失败既有行为不动）。
       if (handoff != null) {
@@ -371,8 +362,7 @@ class WindowOpenService extends GetxService {
           await port.invoke(
             sourceWindowId,
             WindowControlProtocol.mCloseTab,
-            WindowControlProtocol.encodeCloseTab(
-                CloseTabCall(tabId: tabId)),
+            WindowControlProtocol.encodeCloseTab(CloseTabCall(tabId: tabId)),
           );
         } catch (_) {}
       }

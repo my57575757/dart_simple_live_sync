@@ -142,6 +142,25 @@ class _TabItem extends StatelessWidget {
                     ),
                   ),
                 ),
+                if (c != null)
+                  Tooltip(
+                    message: c.muted.value ? '取消静音' : '静音',
+                    child: InkWell(
+                      onTap: c.toggleMute,
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 2),
+                        child: Icon(
+                          c.muted.value
+                              ? Icons.volume_off
+                              : Icons.volume_up,
+                          size: 14,
+                          color: c.muted.value
+                              ? theme.colorScheme.error
+                              : theme.hintColor,
+                        ),
+                      ),
+                    ),
+                  ),
                 InkWell(
                   onTap: () => store.close(tabId),
                   child: const Icon(Icons.close, size: 15),

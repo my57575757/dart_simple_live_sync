@@ -93,6 +93,10 @@ class NativeEditFieldState extends State<NativeEditField>
     with WidgetsBindingObserver {
   final GlobalKey _fieldKey = GlobalKey();
   bool _active = false;
+
+  /// 当前挂载所在的模态路由；只订阅一次 popped
+  ModalRoute<dynamic>? _route;
+
   late final void Function(String) _submitCallback = _handleSubmit;
   late final void Function() _closedCallback = _handleClosed;
 
@@ -125,9 +129,40 @@ class NativeEditFieldState extends State<NativeEditField>
       if (_svc.onClosed == _closedCallback) {
         _svc.onClosed = null;
       }
-      unawaited(_svc.hide());
+      // 只隐藏本实例仍持有的 popup。路由弹出时 completed 已抢先 hide（比
+      // dispose 早约 300ms）；若无条件 hide，快速重开时旧实例 dispose 会把
+      // 下一个实例刚 show 的 popup 一并关掉。
+      if (_active) {
+        _active = false;
+        unawaited(_svc.hide());
+      }
     }
     super.dispose();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (!Platform.isWindows) {
+      return;
+    }
+    final route = ModalRoute.of(context);
+    if (route == null || route == _route) {
+      return;
+    }
+    _route = route;
+    // Get.dialog 反向转场默认约 300ms，dispose（原生 hide）在转场结束后才
+    // 执行；这期间 EDIT 仍持有系统键盘焦点，下一次回车会被旧 popup 吞掉并
+    // 打在正在退出的路由上（框闪退后消失、再按无反应、第三次才出现）。
+    // 路由一弹出（didPop 同步完成 popped，早于反向转场与 dispose 约 300ms）
+    // 就立即隐藏 popup、把焦点还给引擎窗口。注意不能用 Route.completed：
+    // 它在反向转场结束、overlay 移除后才完成，和 dispose 一样晚。
+    route.popped.then((_) {
+      if (_active) {
+        _active = false;
+        unawaited(_svc.hide());
+      }
+    });
   }
 
   @override

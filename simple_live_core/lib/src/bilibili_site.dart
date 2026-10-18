@@ -397,6 +397,25 @@ class BiliBiliSite implements LiveSite {
     return (asT<int?>(result["data"]["live_status"]) ?? 0) == 1;
   }
 
+  /// web 观看心跳：返回服务端下发的下次心跳间隔（秒）。带登录 cookie 时
+  /// 才会计入直播任务中心的观看时长。
+  Future<int> reportHeartbeat(
+      {required String roomId, int lastInterval = 60}) async {
+    // web 端观看心跳：hb 为 base64("上次next_interval|真实房间号|1|0")，pf=web；
+    // 带登录 cookie 时才会计入直播任务中心的观看时长。
+    final hb = base64Encode(utf8.encode("$lastInterval|$roomId|1|0"));
+    final result = await HttpClient.instance.getJson(
+      "https://live-trace.bilibili.com/xlive/rdata-interface/v1/heartbeat/webHeartBeat",
+      queryParameters: {
+        "hb": hb,
+        "pf": "web",
+      },
+      header: await getHeader(),
+    );
+    return asT<num?>(result["data"]?["next_interval"])?.toInt() ??
+        lastInterval;
+  }
+
   @override
   Future<List<LiveSuperChatMessage>> getSuperChatMessage(
       {required String roomId}) async {

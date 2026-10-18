@@ -9,6 +9,16 @@
 #include "video_output.h"
 
 #include <algorithm>
+#include <mutex>
+
+// 进程级串行：ANGLE/EGL 建上下文与 mpv_render_context_create 跨
+// VideoOutputManager（多引擎）时 ThreadPool 各自为政，仅靠
+// ANGLESurfaceManager::egl_global_mutex_ 盖不住 MakeCurrent 之后到
+// render_context_create 之间的窗口，双开第二路会建失败/黑屏。
+static std::mutex& VideoOutputInitMutex() {
+  static std::mutex m;
+  return m;
+}
 
 // Limit the frame size to 1080p in software rendering.
 // This is for performance reasons & to avoid allocating too much memory.
@@ -40,6 +50,7 @@ VideoOutput::VideoOutput(int64_t handle,
     // Attempt to use H/W rendering.
     if (configuration.enable_hardware_acceleration) {
       try {
+        std::lock_guard<std::mutex> init_lock(VideoOutputInitMutex());
         // OpenGL context needs to be set before |mpv_render_context_create|.
         surface_manager_ = std::make_unique<ANGLESurfaceManager>(
             static_cast<int32_t>(width_.value_or(1)),

@@ -349,13 +349,6 @@ void NativeEditHost::Submit() {
       "submit", std::make_unique<flutter::EncodableValue>(text));
 }
 
-void NativeEditHost::Refocus() {
-  if (shown_ && popup_ && edit_) {
-    ShowWindow(popup_, SW_SHOWNOACTIVATE);
-    SetFocus(edit_);
-  }
-}
-
 void NativeEditHost::OnOwnerMoved() {
   if (!shown_ || !popup_) {
     return;
@@ -439,6 +432,22 @@ LRESULT CALLBACK NativeEditHost::PopupWndProc(HWND hwnd, UINT message,
                    self->edit_h_, TRUE);
       }
       return 0;
+
+    case WM_MOUSEACTIVATE:
+      // popup 常驻时用户从其他应用直接点输入框切回：WS_EX_NOACTIVATE 使系统
+      // 不激活任何窗口，键盘消息仍去原前台应用，表现为点得中却输不进字。
+      // 主动激活 owner 主窗（popup 自己仍不当前台，避免主窗标题灰显），
+      // 随后点击消息到 EDIT，其默认处理正常取得键盘焦点。
+      if (self && self->shown_) {
+        HWND owner = GetWindow(hwnd, GW_OWNER);
+        if (owner && GetForegroundWindow() != owner) {
+          SetForegroundWindow(owner);
+          if (self->edit_) {
+            SetFocus(self->edit_);
+          }
+        }
+      }
+      return MA_NOACTIVATE;
 
     case WM_NCDESTROY:
       // 系统销毁 owned popup（owner 销毁链）时清句柄，析构 IsWindow 不再触碰。
@@ -565,14 +574,13 @@ LRESULT CALLBACK NativeEditHost::OwnerSubclassProc(HWND hwnd, UINT message,
       break;
 
     case WM_ACTIVATE:
-      // 变为激活（WA_ACTIVE/WA_CLICKACTIVE）时把焦点夺回可见的输入框，
-      // 否则基类会把焦点强制还给引擎子窗口。引擎经 HandleTopLevelWindowProc
-      // 仍能收到本条消息，故先放行再夺焦，与改造前最终焦点一致。
-      if (self && (LOWORD(wparam) == WA_ACTIVE ||
-                   LOWORD(wparam) == WA_CLICKACTIVE)) {
-        const LRESULT r = DefSubclassProc(hwnd, message, wparam, lparam);
-        self->Refocus();
-        return r;
+      // 失活前把键盘焦点从常驻 popup 的 EDIT 撤回引擎窗口：否则线程重新被
+      // 激活时系统会把焦点（连同前台窗口）恢复给 WS_EX_NOACTIVATE 的 popup，
+      // 主窗标题栏持续灰显，点击只用于激活而送不到 Flutter（标签栏切不动、
+      // 按钮点了没反应）。激活时不再 Refocus——那正是焦点被抢走的根源。
+      if (self && LOWORD(wparam) == WA_INACTIVE && self->shown_ &&
+          self->engine_window_) {
+        SetFocus(self->engine_window_);
       }
       break;
 

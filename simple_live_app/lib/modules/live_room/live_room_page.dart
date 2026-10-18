@@ -93,11 +93,12 @@ class LiveRoomPage extends GetView<LiveRoomController> {
             ),
           );
         }
-        if (controller.fullScreenState.value) {
+        if (controller.fullScreenState.value ||
+            controller.inWindowFullScreenState.value) {
           return PopScope(
             canPop: false,
             onPopInvokedWithResult: (e, r) {
-              controller.exitFull();
+              controller.exitImmersiveOrFull();
             },
             child: Scaffold(
               body: buildMediaPlayer(),
@@ -690,8 +691,7 @@ class LiveRoomPage extends GetView<LiveRoomController> {
                       ? Border.all(color: Colors.orange.shade400)
                       : null,
                 ),
-                padding:
-                    AppStyle.edgeInsetsA4.copyWith(left: 12, right: 12),
+                padding: AppStyle.edgeInsetsA4.copyWith(left: 12, right: 12),
                 child: textWidget,
               ),
             ),

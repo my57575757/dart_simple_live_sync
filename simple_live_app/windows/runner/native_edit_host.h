@@ -33,9 +33,6 @@ class NativeEditHost {
 
   bool visible() const { return shown_; }
 
-  // 输入框可见时夺回焦点，阻止基类把焦点还给引擎子窗口。
-  void Refocus();
-
   // 宿主窗口移动/缩放后调用：把 popup 重新贴到目标矩形的屏幕坐标。
   void OnOwnerMoved();
 
