@@ -213,6 +213,9 @@ class FakeTab implements DouyinPresenceTab {
   String? lastDetailCookie;
   bool closed = false;
 
+  /// 非 null 时 applyReentered 在计数后挂起，用于构造补放在途
+  Completer<void>? reenterGate;
+
   @override
   String get tabId => id;
 
@@ -252,6 +255,10 @@ class FakeTab implements DouyinPresenceTab {
   Future<void> applyReentered(Map<String, dynamic> guardStatus) async {
     reenteredOnlyCalls++;
     reenteredStatusCalls.add(Map<String, dynamic>.from(guardStatus));
+    final gate = reenterGate;
+    if (gate != null) {
+      await gate.future;
+    }
     if (applyThrows) throw StateError('reenter apply failed');
   }
 
@@ -1250,6 +1257,95 @@ void main() {
       a2.reenteredOnlyCalls = 0;
       await gw.rehome('A');
       expect(a2.reenteredOnlyCalls, 1, reason: '新进场 status 已重新缓存');
+    });
+
+    test('MINOR-1：补放期间 release，pending 不残留', () {
+      fakeAsync((async) {
+        final guard = FakeGuard();
+        final gw = DouyinPresenceGateway(guard);
+        addTearDown(gw.stopHeartbeatForTesting);
+        final a = FakeTab('A', '111');
+
+        gw.claim(a);
+        async.flushMicrotasks();
+        expect(gw.holderTabId, 'A');
+
+        // rehome 复刻失败 → pending 置位
+        final b = FakeTab('A', '222');
+        b.applyThrows = true;
+        gw.rehome('A', newPort: b);
+        async.flushMicrotasks();
+        expect(b.reenteredOnlyCalls, 1);
+        expect(gw.hasPendingApplyReplay('A'), isTrue);
+
+        // claim 短路：摘除 pending、补放挂起在 applyReentered 闸门
+        final gate = Completer<void>();
+        b.reenterGate = gate;
+        gw.claim(b);
+        async.flushMicrotasks();
+        expect(b.reenteredOnlyCalls, 2, reason: '补放已开始');
+        expect(gw.hasPendingApplyReplay('A'), isFalse, reason: '短路已摘除 pending');
+
+        // 补放在途时 release
+        gw.release('A');
+        async.flushMicrotasks();
+
+        // 释放闸门 → 补放失败（applyThrows 仍为 true）
+        gate.complete();
+        async.flushMicrotasks();
+
+        expect(
+          gw.hasPendingApplyReplay('A'),
+          isFalse,
+          reason: '补放失败 catch 不得在 release 后重置 pending',
+        );
+      });
+    });
+
+    test('MINOR-1：两代 rehome 补放不互清 pending', () {
+      fakeAsync((async) {
+        final guard = FakeGuard();
+        final gw = DouyinPresenceGateway(guard);
+        addTearDown(gw.stopHeartbeatForTesting);
+        final a = FakeTab('A', '111');
+
+        gw.claim(a);
+        async.flushMicrotasks();
+        expect(gw.holderTabId, 'A');
+
+        // 第一代 rehome 复刻失败 → pending 置位
+        final b1 = FakeTab('A', '222');
+        b1.applyThrows = true;
+        gw.rehome('A', newPort: b1);
+        async.flushMicrotasks();
+        expect(b1.reenteredOnlyCalls, 1);
+        expect(gw.hasPendingApplyReplay('A'), isTrue);
+
+        // claim 短路：摘除 pending、补放挂起（闸门释放后将成功）
+        b1.applyThrows = false;
+        final gate = Completer<void>();
+        b1.reenterGate = gate;
+        gw.claim(b1);
+        async.flushMicrotasks();
+        expect(b1.reenteredOnlyCalls, 2, reason: '补放已开始');
+        expect(gw.hasPendingApplyReplay('A'), isFalse, reason: '短路已摘除 pending');
+
+        // 补放仍在途时第二代 rehome：复刻失败 → pending 置位
+        final b2 = FakeTab('A', '333');
+        b2.applyThrows = true;
+        gw.rehome('A', newPort: b2);
+        async.flushMicrotasks();
+
+        // 释放闸门 → 首次补放晚到成功
+        gate.complete();
+        async.flushMicrotasks();
+
+        expect(
+          gw.hasPendingApplyReplay('A'),
+          isTrue,
+          reason: '首次补放成功不得清掉第二代 rehome 的 pending',
+        );
+      });
     });
   });
 }

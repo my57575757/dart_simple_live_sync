@@ -85,8 +85,9 @@ class DouyinPresenceGateway extends GetxService
     bindTab(tab);
     if (arbiter.holder == tab.tabId && _ready.contains(tab.tabId)) {
       if (_pendingApplyReplay.remove(tab.tabId)) {
-        // best-effort，不阻塞 granted：失败由补放函数自行重新置位
-        unawaited(_replayEnter(tab));
+        // best-effort，不阻塞 granted：失败由补放函数自行重新置位。
+        // 入串行链后排在 claim 之后、任何后续 release/rehome 之前（MINOR-1）。
+        unawaited(_serialized(() => _replayEnter(tab)));
       }
       return const PresenceClaimResult.granted();
     }
@@ -443,6 +444,10 @@ class DouyinPresenceGateway extends GetxService
   /// （生产中 ready 与 accountId 同置，该分支为防御性不可达，靠接缝验证）。
   @visibleForTesting
   void debugDropAccountId(String tabId) => _accountIds.remove(tabId);
+
+  /// 测试接缝：查询补放待办（MINOR-1 竞态断言用）
+  @visibleForTesting
+  bool hasPendingApplyReplay(String tabId) => _pendingApplyReplay.contains(tabId);
 
   /// 幸存者重新进场并接管唯一心跳；进场失败时 holder 已迁移但不在 _ready
   /// 中、心跳暂停，用户在该标签的下一次写动作经 claim 重走完整进场序列。
