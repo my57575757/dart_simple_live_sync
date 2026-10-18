@@ -576,6 +576,7 @@ class DouyinPresenceGateway extends GetxService
   /// 404-reregister 失败共用此路径。
   Future<void> _suspend(DouyinPresenceTab tab) async {
     _heartbeatTimer?.cancel();
+    Log.logPrint('presence: 心跳 suspended 收口: ${tab.tabId}');
     _ready.remove(tab.tabId);
     arbiter.markSuspended(tab.tabId);
     try {

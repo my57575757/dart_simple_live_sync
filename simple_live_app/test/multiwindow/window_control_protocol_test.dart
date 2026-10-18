@@ -57,6 +57,42 @@ void main() {
           }),
           isNull);
     });
+
+    test('target 校验：控制字符/超长 → null；__new__/__main__/窗口 ID 通过', () {
+      Map<String, Object?> payload(Object? target) => {
+            'sourceWindowId': 'w2',
+            'tabId': 't1',
+            'siteId': 'douyin',
+            'roomId': 'r1',
+            'shareUrl': '',
+            'target': target,
+          };
+
+      expect(WindowControlProtocol.decodeRequestMove(payload('a\nb')), isNull,
+          reason: 'target 不得含换行');
+      expect(WindowControlProtocol.decodeRequestMove(payload('a\rb')), isNull,
+          reason: 'target 不得含回车');
+      expect(WindowControlProtocol.decodeRequestMove(payload('a\tb')), isNull,
+          reason: 'target 不得含制表符');
+      expect(
+          WindowControlProtocol.decodeRequestMove(
+              payload('w' * 129)),
+          isNull,
+          reason: 'target 长度上限 128');
+      expect(WindowControlProtocol.decodeRequestMove(payload('')), isNull,
+          reason: 'target 不得空串');
+
+      for (final t in [
+        WindowControlProtocol.targetNew,
+        WindowControlProtocol.targetMain,
+        'w1',
+        'w' * 128,
+      ]) {
+        final d = WindowControlProtocol.decodeRequestMove(payload(t));
+        expect(d, isNotNull, reason: '合法 target 应通过: $t');
+        expect(d!.target, t);
+      }
+    });
   });
 
   group('open_tab / close_tab', () {

@@ -440,7 +440,13 @@ class MainPresenceService extends GetxService
   }
 
   /// 子→主：主窗 store.open 后控制器已 bindTab 本地端口。摘远端索引/
-  /// RemoteTab，网关 rehome(newPort:null) 换到本地端口并复刻；幂等。
+  /// RemoteTab，网关 rehome(newPort:null) 换到本地端口并复刻。
+  ///
+  /// 幂等边界：仅「索引摘除」与「handoff 结算」是幂等的——重复调用时
+  /// remove/settle 对已摘除/已结算对象为空操作，不会二次抛错或重复
+  /// complete。但 gateway.rehome 的账号态复刻不是幂等的：二次调用会
+  /// 再次触发复刻（零 enter/exit 事件，不重复进场），因此本方法整体
+  /// 不应被当作纯幂等 API 反复调用。
   @override
   Future<void> rehomeLocal(String tabId) async {
     final old = _remoteTabs.remove(tabId);

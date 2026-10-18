@@ -21,6 +21,16 @@ class WindowControlProtocol {
     return v is String && v.isNotEmpty ? v : null;
   }
 
+  /// target 线值上限：窗口 ID / 特殊哨兵均远短于此。
+  static const int _maxTargetLen = 128;
+
+  /// target 校验：非空、无控制字符（`\n`/`\r`/`\t`）、长度 ≤ 128。
+  /// 控制字符可注入路由键/日志换行，一律拒绝。
+  static bool _isValidTarget(String t) {
+    if (t.length > _maxTargetLen) return false;
+    return !t.contains('\n') && !t.contains('\r') && !t.contains('\t');
+  }
+
   // ---- request_move ----
 
   static Map<String, Object?> encodeRequestMove(WindowMoveCall call) => {
@@ -38,7 +48,8 @@ class WindowControlProtocol {
     final tabId = _nonEmptyStr(args, 'tabId');
     final siteId = _nonEmptyStr(args, 'siteId');
     final roomId = _nonEmptyStr(args, 'roomId');
-    final target = _nonEmptyStr(args, 'target');
+    final rawTarget = _nonEmptyStr(args, 'target');
+    final target = rawTarget != null && _isValidTarget(rawTarget) ? rawTarget : null;
     final shareUrl = args['shareUrl'];
     if (sourceWindowId == null ||
         tabId == null ||
