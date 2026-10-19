@@ -9,7 +9,19 @@ import 'package:simple_live_app/modules/search/search_list_view.dart';
 import 'package:simple_live_app/widgets/native_edit_field.dart';
 
 class SearchPage extends GetView<AppSearchController> {
-  const SearchPage({Key? key}) : super(key: key);
+  const SearchPage({Key? key, this.onBack}) : super(key: key);
+
+  /// 嵌入壳内主页标签（Windows）时由宿主提供退出动作；
+  /// 不传即为路由场景，返回走 Get.back。
+  final VoidCallback? onBack;
+
+  void _back() {
+    if (onBack != null) {
+      onBack!();
+    } else {
+      Get.back();
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -41,7 +53,7 @@ class SearchPage extends GetView<AppSearchController> {
             ? Row(
                 children: [
                   IconButton(
-                    onPressed: Get.back,
+                    onPressed: _back,
                     icon: const Icon(Icons.arrow_back),
                   ),
                   modeDropdown,
