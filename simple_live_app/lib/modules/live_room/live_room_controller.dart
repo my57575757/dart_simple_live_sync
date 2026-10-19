@@ -803,9 +803,15 @@ class LiveRoomController extends PlayerController
           extra: _guardExtraArgs(),
         );
         if (data["inRoom"] != true) {
-          // 同账号已在其他端进入别的直播间：本端退让停止心跳，
-          // 避免互相踢；等用户在本端主动发弹幕时再抢占
+          // 同账号已在其他设备进入别的直播间：本端退让停止心跳，
+          // 避免互相踢；抖音同时回退游客态使「进入直播间」恢复可点，
+          // 等用户在本端主动点击/发弹幕时再抢占（与多窗口网关侧
+          // applySuspended 语义一致）。
           _stopGuardHeartbeat();
+          if (site.id == Constant.kDouyin &&
+              presence.value == RoomPresence.account) {
+            await applySuspended();
+          }
           return;
         }
       } on DioException catch (e) {

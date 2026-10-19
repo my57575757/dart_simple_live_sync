@@ -83,6 +83,8 @@ class FakeGuard extends GuardServerService {
   final exits = <String>[];
   final sentDanmaku = <String>[];
   final sentActions = <String>[];
+  int heartbeatCalls = 0;
+  bool heartbeatInRoom = true;
 
   final FakeDanmaku Function() danmakuAtEnter;
 
@@ -167,7 +169,8 @@ class FakeGuard extends GuardServerService {
     String webRid = '',
     Map<String, dynamic>? extra,
   }) async {
-    return {'inRoom': true};
+    heartbeatCalls++;
+    return {'inRoom': heartbeatInRoom};
   }
 }
 
@@ -258,6 +261,36 @@ void main() {
     final args = fakeSite.danmaku.lastArgs as DouyinDanmakuArgs;
     expect(args.cookie, 'sessionid=abc');
     expect(controller.messages, isNotEmpty);
+  });
+
+  testWidgets('多端互踢：心跳告知已在他端进入别房，本端回游客态并停心跳不抢回', (
+    tester,
+  ) async {
+    await bootstrap(tester);
+
+    // 手动驱动进场（runAction 结尾会停心跳，本用例要保活心跳）
+    final future = controller.enterAsAccount();
+    await tester.pump();
+    expect(await future, isTrue);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 250));
+    expect(controller.presence.value, RoomPresence.account);
+
+    // 另一端（同账号）进入别的房间：服务端下一拍心跳宣告本端失房
+    fakeGuard.heartbeatInRoom = false;
+    await tester.pump(const Duration(seconds: 20));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 10));
+    expect(controller.presence.value, RoomPresence.guest,
+        reason: '被他端抢占后「进入直播间」按钮必须恢复可点');
+    final beatsAfterKick = fakeGuard.heartbeatCalls;
+    expect(beatsAfterKick, 1);
+
+    // 再等两个心跳周期：心跳已停，不自动抢回（避免多端乒乓互踢）
+    await tester.pump(const Duration(seconds: 40));
+    expect(fakeGuard.heartbeatCalls, beatsAfterKick);
+
+    controller.stopGuardHeartbeatForTesting();
   });
 
   testWidgets('账号详情失败：回 guest，弹幕未停、guard 未进场', (tester) async {
