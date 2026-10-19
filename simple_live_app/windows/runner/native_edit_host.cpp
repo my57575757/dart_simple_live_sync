@@ -7,7 +7,10 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdarg>
 #include <cstdint>
+#include <cstdio>
+#include <cstring>
 #include <memory>
 #include <string>
 
@@ -92,6 +95,68 @@ void RegisterPopupClass() {
   RegisterClassW(&wc);  // 重复注册返回 0/ERROR_CLASS_ALREADY_EXISTS，忽略
 }
 
+// IME 故障常驻取证：跨进程切窗后搜狗字母直通、候选窗不弹是焦点/激活时序
+// 竞态，事后无法复盘。关键事件落 %TEMP%\simple_live_ime.log，进程首次写时
+// 截断重建（只留本进程），事件低频，无需轮转。内容全 ASCII，规避日志编码。
+void ImeDiagLog(const char* fmt, ...) {
+  static wchar_t log_path[MAX_PATH] = {};
+  static DWORD creation = OPEN_ALWAYS;
+  if (log_path[0] == L'\0') {
+    const DWORD n = GetTempPathW(MAX_PATH, log_path);
+    if (n == 0 || n >= MAX_PATH) {
+      return;
+    }
+    wcscat_s(log_path, L"simple_live_ime.log");
+    creation = CREATE_ALWAYS;
+  }
+
+  char line[1200];
+  const int head = _snprintf_s(line, _countof(line), _TRUNCATE,
+                               "%llu tid=%lu ",
+                               static_cast<unsigned long long>(GetTickCount64()),
+                               GetCurrentThreadId());
+  if (head > 0) {
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf_s(line + head, _countof(line) - static_cast<size_t>(head),
+                _TRUNCATE, fmt, args);
+    va_end(args);
+  }
+  size_t used = strnlen(line, _countof(line));
+  if (used + 2 < _countof(line)) {
+    line[used++] = '\r';
+    line[used++] = '\n';
+  }
+
+  HANDLE file = CreateFileW(log_path, FILE_APPEND_DATA,
+                            FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
+                            creation, FILE_ATTRIBUTE_NORMAL, nullptr);
+  creation = OPEN_ALWAYS;
+  if (file == INVALID_HANDLE_VALUE) {
+    return;
+  }
+  DWORD written = 0;
+  WriteFile(file, line, static_cast<DWORD>(used), &written, nullptr);
+  CloseHandle(file);
+}
+
+// 记一条 HIMC 三指标（打开态/转换模式/整句模式）+ 当前线程键盘布局。
+// 故障态下三者全部看似正常（open=1、conv 含 NATIVE、hkl=08040804），
+// 但 IME 已不吞键——用于与 DIRECT_KEY 指纹对照定性。
+void ImeDiagImeState(const char* tag, HIMC himc) {
+  DWORD open = 0;
+  DWORD conv = 0;
+  DWORD sentence = 0;
+  if (himc) {
+    open = ImmGetOpenStatus(himc) ? 1u : 0u;
+    ImmGetConversionStatus(himc, &conv, &sentence);
+  }
+  ImeDiagLog("%s himc=%p open=%lu conv=%08lx sentence=%08lx hkl=%08lx", tag,
+             himc, open, conv, sentence,
+             static_cast<unsigned long>(reinterpret_cast<ULONG_PTR>(
+                 GetKeyboardLayout(0))));
+}
+
 }  // namespace
 
 NativeEditHost::NativeEditHost(HWND parent, HWND engine_window,
@@ -110,9 +175,13 @@ NativeEditHost::NativeEditHost(HWND parent, HWND engine_window,
   // delete this，调用方不持有指针。父窗无效时挂不上，subclass_id_ 留 0。
   subclass_id_ = SetWindowSubclass(parent_, OwnerSubclassProc, kOwnerSubclassId,
                                    reinterpret_cast<DWORD_PTR>(this));
+  ImeDiagLog("HOST_CREATE host=%p parent=%p engine=%p subclass=%llu", this,
+             parent_, engine_window_,
+             static_cast<unsigned long long>(subclass_id_));
 }
 
 NativeEditHost::~NativeEditHost() {
+  ImeDiagLog("HOST_DESTROY host=%p", this);
   // 若析构不是经由 OwnerSubclassProc 的 WM_NCDESTROY 触发（例如显式 delete），
   // 此处补拆 subclass；已经拆过的路径会把 subclass_id_ 清 0。
   if (subclass_id_ != 0 && parent_ && IsWindow(parent_)) {
@@ -179,7 +248,31 @@ bool NativeEditHost::EnsureCreated() {
     ImmAssociateContext(edit_, himc_);
     ImmSetOpenStatus(himc_, TRUE);
   }
+  ImeDiagLog("ENSURE host=%p popup=%p edit=%p himc=%p", this, popup_, edit_,
+             himc_);
   return true;
+}
+
+void NativeEditHost::ReattachImeContext(const char* reason) {
+  if (!himc_ || !edit_) {
+    return;
+  }
+  // 实测（搜狗，跨进程切窗后）：HIMC 的打开态、转换模式、与 EDIT 的关联句柄
+  // 全部正常，但 IME 不再吞键，字母直达 EDIT、候选窗不弹——TSF 把此窗口的
+  // 文档焦点留在了半初始化状态。先解除再重新关联专属 HIMC，逼 IME 重走
+  // activate/focus 流程，并补回打开态与中文转换位。EDIT 获焦、输入语言切换
+  // 两个时机各调一次，覆盖「切语言后打字」与「不切语言直接打字」两条路径。
+  ImeDiagLog("REATTACH reason=%s edit=%p", reason, edit_);
+  ImeDiagImeState("REATTACH_BEFORE", himc_);
+  ImmAssociateContext(edit_, nullptr);
+  ImmAssociateContext(edit_, himc_);
+  ImmSetOpenStatus(himc_, TRUE);
+  DWORD conv = 0;
+  DWORD sentence = 0;
+  if (ImmGetConversionStatus(himc_, &conv, &sentence)) {
+    ImmSetConversionStatus(himc_, conv | IME_CMODE_NATIVE, sentence);
+  }
+  ImeDiagImeState("REATTACH_AFTER", himc_);
 }
 
 void NativeEditHost::LayoutPopup(int x, int y, int w, int h) {
@@ -294,6 +387,7 @@ void NativeEditHost::Show(const flutter::EncodableMap& args) {
                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
   shown_ = true;
   SetFocus(edit_);
+  ImeDiagLog("SHOW host=%p edit=%p focus=%p", this, edit_, GetFocus());
 }
 
 void NativeEditHost::ApplyRegion(int width, int height) {
@@ -312,6 +406,7 @@ void NativeEditHost::Hide(bool notify_dart) {
     return;
   }
   shown_ = false;
+  ImeDiagLog("HIDE host=%p notify=%d", this, notify_dart ? 1 : 0);
   if (popup_) {
     ShowWindow(popup_, SW_HIDE);
   }
@@ -438,6 +533,10 @@ LRESULT CALLBACK NativeEditHost::PopupWndProc(HWND hwnd, UINT message,
       // 不激活任何窗口，键盘消息仍去原前台应用，表现为点得中却输不进字。
       // 主动激活 owner 主窗（popup 自己仍不当前台，避免主窗标题灰显），
       // 随后点击消息到 EDIT，其默认处理正常取得键盘焦点。
+      if (self) {
+        ImeDiagLog("MOUSEACT shown=%d fg=%p", self->shown_ ? 1 : 0,
+                   GetForegroundWindow());
+      }
       if (self && self->shown_) {
         HWND owner = GetWindow(hwnd, GW_OWNER);
         if (owner && GetForegroundWindow() != owner) {
@@ -479,18 +578,64 @@ LRESULT CALLBACK NativeEditHost::EditWndProc(HWND hwnd, UINT message,
       }
       break;
 
-    case WM_SETFOCUS:
+    case WM_SETFOCUS: {
+      // 先让 EDIT 默认过程处理（它在此期间同步发出 WM_IME_SETCONTEXT），
+      // 再强制重建 IME 上下文，兜住跨进程往返后 TSF 文档焦点半初始化。
+      const LRESULT focus_result = CallWindowProcW(
+          self ? self->original_edit_proc_ : DefWindowProcW, hwnd, message,
+          wparam, lparam);
       if (self) {
         self->has_focus_ = true;
         InvalidateRect(hwnd, nullptr, TRUE);
+        ImeDiagLog("EDIT_SETFOCUS edit=%p", hwnd);
+        self->ReattachImeContext("setfocus");
       }
-      break;
+      return focus_result;
+    }
 
     case WM_KILLFOCUS:
       if (self) {
         self->has_focus_ = false;
         InvalidateRect(hwnd, nullptr, TRUE);
       }
+      // wParam 为即将获得焦点的窗口：焦点被系统抢回引擎窗口的抖动靠此条定位。
+      ImeDiagLog("EDIT_KILLFOCUS edit=%p to=%p", hwnd,
+                 reinterpret_cast<void*>(wparam));
+      break;
+
+    case WM_INPUTLANGCHANGE:
+      // 切语言后同样重建一次：故障原本就在 Win+Space 切回搜狗后的竞态窗口。
+      // wParam 是字符集，lParam 是新 HKL（0x08040804=搜狗，0x04090409=英语）。
+      ImeDiagLog("LANGCHANGE charset=%lu hkl=%08lx",
+                 static_cast<unsigned long>(wparam),
+                 static_cast<unsigned long>(lparam));
+      if (self) {
+        self->ReattachImeContext("langchange");
+      }
+      break;
+
+    case WM_IME_SETCONTEXT:
+      // wParam=激活/失活，lParam=UI 能力位。失焦时 HIDE 标志紧跟 KILLFOCUS，
+      // 是焦点回抢时序的关键证据。记录后仍交 EDIT 默认过程处理。
+      ImeDiagLog("IME_SETCONTEXT active=%lu flags=%08lx",
+                 static_cast<unsigned long>(wparam),
+                 static_cast<unsigned long>(lparam));
+      break;
+
+    case WM_IME_STARTCOMPOSITION:
+      // 正常组字每段一条：它出现即证明 IME 在吞键，与 DIRECT_KEY 互斥。
+      ImeDiagLog("COMP_START");
+      break;
+
+    case WM_IME_ENDCOMPOSITION:
+      ImeDiagLog("COMP_END");
+      break;
+
+    case WM_IME_NOTIFY:
+      // 失效态指纹：按键不产生 STARTCOMPOSITION，只每键一条
+      // IMN_SETCOMPOSITIONWINDOW(0x000B) 通知，候选窗永不弹。
+      ImeDiagLog("IME_NOTIFY cmd=%04lx",
+                 static_cast<unsigned long>(wparam));
       break;
 
     case WM_KEYDOWN:
@@ -509,6 +654,19 @@ LRESULT CALLBACK NativeEditHost::EditWndProc(HWND hwnd, UINT message,
         } else if (wparam == VK_ESCAPE) {
           self->Hide(true);
           return 0;
+        }
+        // 失效指纹：中文键盘布局下 IME 处于打开态，真实字母键码却直达 EDIT；
+        // 正常链路 IME 吞键后 EDIT 只能收到 VK_PROCESSKEY(0xE5)。
+        const DWORD kbd_lang =
+            static_cast<DWORD>(reinterpret_cast<ULONG_PTR>(
+                GetKeyboardLayout(0))) &
+            0xFFFF;
+        if (self->himc_ && wparam >= 'A' && wparam <= 'Z' &&
+            kbd_lang == 0x0804 && ImmGetOpenStatus(self->himc_)) {
+          ImeDiagLog("DIRECT_KEY vk=%02lx comp_len=%ld",
+                     static_cast<unsigned long>(wparam),
+                     ImmGetCompositionStringW(self->himc_, GCS_COMPSTR,
+                                              nullptr, 0));
         }
       }
       break;
@@ -578,6 +736,11 @@ LRESULT CALLBACK NativeEditHost::OwnerSubclassProc(HWND hwnd, UINT message,
       // 激活时系统会把焦点（连同前台窗口）恢复给 WS_EX_NOACTIVATE 的 popup，
       // 主窗标题栏持续灰显，点击只用于激活而送不到 Flutter（标签栏切不动、
       // 按钮点了没反应）。激活时不再 Refocus——那正是焦点被抢走的根源。
+      if (self) {
+        // WA_INACTIVE=0、WA_ACTIVE=1、WA_CLICKACTIVE=2；跨进程往返时序靠它。
+        ImeDiagLog("OWNER_ACT state=%u shown=%d", LOWORD(wparam),
+                   self->shown_ ? 1 : 0);
+      }
       if (self && LOWORD(wparam) == WA_INACTIVE && self->shown_ &&
           self->engine_window_) {
         SetFocus(self->engine_window_);

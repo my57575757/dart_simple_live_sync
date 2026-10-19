@@ -48,6 +48,11 @@ class NativeEditHost {
       const flutter::MethodCall<>& call,
       std::unique_ptr<flutter::MethodResult<>> result);
   bool EnsureCreated();
+  // EDIT 获焦或输入语言切换后，detach/reattach 专属 HIMC 强制 IME 重走
+  // activate/focus：跨进程切窗后 TSF 文档上下文可能半初始化（HIMC 打开态与
+  // 关联句柄都正常，但搜狗字母直通、候选窗不弹）。
+  // reason 仅写入常驻 IME 诊断日志，标识触发路径（setfocus/langchange）。
+  void ReattachImeContext(const char* reason);
   void Show(const flutter::EncodableMap& args);
   void Hide(bool notify_dart);
   void SetText(const std::string& utf8);
