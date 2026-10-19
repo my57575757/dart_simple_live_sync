@@ -62,8 +62,11 @@ class HomePage extends GetView<HomeController> {
           ),
         ),
         Obx(
-          () => controller.isSearching.value
-              ? SearchPage(onBack: controller.closeSearch)
+          () => controller.isSearchOverlayVisible
+              ? SearchPage(
+                  onBack: controller.closeSearch,
+                  autofocus: controller.takeSearchAutofocus(),
+                )
               : const SizedBox.shrink(),
         ),
       ],

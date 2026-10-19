@@ -9,11 +9,16 @@ import 'package:simple_live_app/modules/search/search_list_view.dart';
 import 'package:simple_live_app/widgets/native_edit_field.dart';
 
 class SearchPage extends GetView<AppSearchController> {
-  const SearchPage({Key? key, this.onBack}) : super(key: key);
+  const SearchPage({Key? key, this.onBack, this.autofocus = true})
+      : super(key: key);
 
   /// 嵌入壳内主页标签（Windows）时由宿主提供退出动作；
   /// 不传即为路由场景，返回走 Get.back。
   final VoidCallback? onBack;
+
+  /// 嵌入态从房间标签切回时视图重新挂载，但不应再次抢焦弹原生输入框，
+  /// 由宿主按是否新搜索会话传入；路由场景恒为 true。
+  final bool autofocus;
 
   void _back() {
     if (onBack != null) {
@@ -61,7 +66,7 @@ class SearchPage extends GetView<AppSearchController> {
                   Expanded(
                     child: NativeEditField(
                       controller: controller.searchField,
-                      autofocus: true,
+                      autofocus: autofocus,
                       hintText: '搜点什么吧',
                       radius: 24,
                       onSubmitted: (_) => controller.doSearch(),
@@ -79,7 +84,7 @@ class SearchPage extends GetView<AppSearchController> {
               )
             : TextField(
                 controller: controller.searchController,
-                autofocus: true,
+                autofocus: autofocus,
                 decoration: InputDecoration(
                   hintText: "搜点什么吧",
                   border: OutlineInputBorder(

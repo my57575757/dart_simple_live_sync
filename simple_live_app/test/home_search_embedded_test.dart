@@ -80,11 +80,12 @@ void main() {
     expect(second.searchController.text, isEmpty);
   });
 
-  test('搜索态前台打开房间标签：切到房间标签时搜索自动收起', () {
+  test('搜索态前台打开房间标签：浮层隐藏但搜索会话保留（控制器不销毁）', () {
     final store = TabStore(registry: _FakeRegistry());
     Get.put(store);
     final controller = boot();
     controller.toSearch();
+    Get.find<AppSearchController>().searchController.text = '主播名';
     expect(controller.isSearching.value, isTrue);
 
     store.open(
@@ -93,12 +94,35 @@ void main() {
     );
 
     expect(store.activeTabId.value, isNotNull);
-    expect(controller.isSearching.value, isFalse,
-        reason: '切到房间标签后搜索浮层必须收起，否则原生输入框 popup 仍浮在房间上');
-    expect(Get.isRegistered<AppSearchController>(), isFalse);
+    expect(controller.isSearching.value, isTrue,
+        reason: '切到房间标签不结束搜索会话，切回主页还要看到搜索页');
+    expect(controller.isSearchOverlayVisible, isFalse,
+        reason: '房间标签激活时搜索浮层必须不可见，原生 popup 随之 dispose 隐藏');
+    expect(Get.isRegistered<AppSearchController>(), isTrue);
   });
 
-  test('搜索态后台打开标签（右键新标签页打开）：留在搜索页不收起', () {
+  test('从房间标签切回主页：搜索浮层恢复，关键词与控制器实例保留', () {
+    final store = TabStore(registry: _FakeRegistry());
+    Get.put(store);
+    final controller = boot();
+    controller.toSearch();
+    final searchController = Get.find<AppSearchController>();
+    searchController.searchController.text = '主播名';
+    store.open(
+      TabOpenRequest(siteId: 'douyin', roomId: '123'),
+      activate: true,
+    );
+    expect(controller.isSearchOverlayVisible, isFalse);
+
+    store.activateHome();
+
+    expect(controller.isSearchOverlayVisible, isTrue);
+    expect(identical(Get.find<AppSearchController>(), searchController), isTrue);
+    expect(Get.find<AppSearchController>().searchController.text, '主播名',
+        reason: '切回后搜索词仍在');
+  });
+
+  test('搜索态后台打开标签（右键新标签页打开）：仍停留在搜索页', () {
     final store = TabStore(registry: _FakeRegistry());
     Get.put(store);
     final controller = boot();
@@ -111,6 +135,7 @@ void main() {
 
     expect(store.activeTabId.value, isNull);
     expect(controller.isSearching.value, isTrue);
+    expect(controller.isSearchOverlayVisible, isTrue);
     expect(Get.isRegistered<AppSearchController>(), isTrue);
   });
 }
