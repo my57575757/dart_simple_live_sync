@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:simple_live_app/app/controller/base_controller.dart';
 import 'package:simple_live_app/app/event_bus.dart';
+import 'package:simple_live_app/app/multiwindow/shell/tab_store.dart';
 import 'package:simple_live_app/app/sites.dart';
 import 'package:simple_live_app/modules/home/home_list_controller.dart';
 import 'package:simple_live_app/modules/search/search_controller.dart';
@@ -20,8 +21,13 @@ class HomeController extends GetxController
         TabController(length: Sites.supportSites.length, vsync: this);
   }
 
-  /// Windows：搜索是主页标签内置换的视图（不压路由），标签条始终是壳的那一条
+  /// Windows：搜索是主页标签内的视图（不压路由），标签条始终是壳的那一条
   final isSearching = false.obs;
+
+  /// 切到房间标签即收起搜索：Windows 搜索输入框是独立原生 popup，
+  /// 不随标签 Offstage 隐藏，必须关闭搜索视图经 dispose 隐藏 popup。
+  /// 懒订阅：kShell binding 中 HomeController 早于 TabStore put 注册。
+  Worker? _shellActiveWorker;
 
   StreamSubscription<dynamic>? streamSubscription;
 
@@ -53,11 +59,24 @@ class HomeController extends GetxController
   void toSearch() {
     if (Platform.isWindows) {
       // 壳内主页标签直接置换为搜索视图，避免搜索页压住壳路由
+      _ensureShellActiveSubscription();
       Get.put(AppSearchController());
       isSearching.value = true;
     } else {
       Get.toNamed(RoutePath.kSearch);
     }
+  }
+
+  void _ensureShellActiveSubscription() {
+    if (_shellActiveWorker != null || !Get.isRegistered<TabStore>()) {
+      return;
+    }
+    _shellActiveWorker =
+        ever(Get.find<TabStore>().activeTabId, (String? activeTabId) {
+      if (activeTabId != null && isSearching.value) {
+        closeSearch();
+      }
+    });
   }
 
   /// Windows 退出壳内搜索视图：销毁搜索态全部控制器，等同原路由 pop 的清理
@@ -73,6 +92,7 @@ class HomeController extends GetxController
   @override
   void onClose() {
     streamSubscription?.cancel();
+    _shellActiveWorker?.dispose();
     super.onClose();
   }
 }
