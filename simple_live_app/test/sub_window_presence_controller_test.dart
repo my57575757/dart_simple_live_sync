@@ -12,7 +12,9 @@ import 'package:simple_live_app/app/multiwindow/window/window_role.dart';
 import 'package:simple_live_app/app/sites.dart';
 import 'package:simple_live_app/modules/live_room/live_room_controller.dart';
 import 'package:simple_live_app/services/douyin_account_service.dart';
+import 'package:simple_live_app/services/bilibili_account_service.dart';
 import 'package:simple_live_app/services/douyu_account_service.dart';
+import 'package:simple_live_app/services/huya_account_service.dart';
 import 'package:simple_live_app/services/guard_server_service.dart';
 import 'package:simple_live_app/services/twitch_account_service.dart';
 import 'package:simple_live_core/simple_live_core.dart';
@@ -218,6 +220,8 @@ void main() {
         accounts: Get.find<DouyinAccountService>(),
         douyuAccounts: DouyuAccountService(),
         twitchAccounts: TwitchAccountService(),
+        biliAccounts: BiliBiliAccountService(),
+        huyaAccounts: HuyaAccountService(),
       ),
       permanent: true,
     );

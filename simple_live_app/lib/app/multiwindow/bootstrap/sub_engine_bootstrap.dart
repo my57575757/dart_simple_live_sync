@@ -154,6 +154,8 @@ Future<void> runSubEngine(WindowController self) async {
             accounts: Get.find<DouyinAccountService>(),
             douyuAccounts: Get.find<DouyuAccountService>(),
             twitchAccounts: Get.find<TwitchAccountService>(),
+            biliAccounts: Get.find<BiliBiliAccountService>(),
+            huyaAccounts: Get.find<HuyaAccountService>(),
           ),
           permanent: true,
         );

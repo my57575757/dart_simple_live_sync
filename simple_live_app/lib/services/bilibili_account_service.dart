@@ -62,6 +62,21 @@ class BiliBiliAccountService extends GetxService {
     site.cookie = cookie;
   }
 
+  /// 子窗口借用主窗口登录身份（presence IPC）。
+  ///
+  /// 纯内存单点：只写 cookie/uid 并经 setSite() 同步 site（播放 playurl
+  /// 与 getRoomDetail 读 site.cookie，弹幕 args 读 site.userId），不写 KV、
+  /// 不翻转 logined/name、不注册 guard 账号。yield/suspended/子窗关闭/
+  /// 刷新等失效点由 coordinator 传 null 清除，进程退出即消失。
+  void setBorrowedLoginCookie(String? cookie) {
+    this.cookie = cookie ?? '';
+    uid = int.tryParse(
+          RegExp(r'DedeUserID=(\d+)').firstMatch(this.cookie)?.group(1) ?? '',
+        ) ??
+        0;
+    setSite();
+  }
+
   void setCookie(String cookie) {
     this.cookie = cookie;
     LocalStorageService.instance

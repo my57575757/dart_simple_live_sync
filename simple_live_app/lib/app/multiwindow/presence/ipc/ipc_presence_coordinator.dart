@@ -1,8 +1,10 @@
 import 'package:get/get.dart';
 import 'package:simple_live_app/app/constant.dart';
 import 'package:simple_live_app/app/log.dart';
+import 'package:simple_live_app/services/bilibili_account_service.dart';
 import 'package:simple_live_app/services/douyin_account_service.dart';
 import 'package:simple_live_app/services/douyu_account_service.dart';
+import 'package:simple_live_app/services/huya_account_service.dart';
 import 'package:simple_live_app/services/twitch_account_service.dart';
 import 'package:simple_live_core/simple_live_core.dart';
 
@@ -46,11 +48,15 @@ class IpcPresenceCoordinator extends GetxService
     required DouyinAccountService accounts,
     required DouyuAccountService douyuAccounts,
     required TwitchAccountService twitchAccounts,
+    required BiliBiliAccountService biliAccounts,
+    required HuyaAccountService huyaAccounts,
   })  : _port = port,
         _resolveTarget = resolveTarget,
         _accounts = accounts,
         _douyuAccounts = douyuAccounts,
-        _twitchAccounts = twitchAccounts;
+        _twitchAccounts = twitchAccounts,
+        _biliAccounts = biliAccounts,
+        _huyaAccounts = huyaAccounts;
 
   final String windowId;
   final SubPresencePort _port;
@@ -58,6 +64,8 @@ class IpcPresenceCoordinator extends GetxService
   final DouyinAccountService _accounts;
   final DouyuAccountService _douyuAccounts;
   final TwitchAccountService _twitchAccounts;
+  final BiliBiliAccountService _biliAccounts;
+  final HuyaAccountService _huyaAccounts;
 
   /// tabId → siteId：register 时写入，apply_enter 按站点分发凭据到对应
   /// 账号服务。切房后 refreshRemoteTab 会以新 siteId 覆盖。
@@ -118,11 +126,13 @@ class IpcPresenceCoordinator extends GetxService
   }
 
   /// 四个失效点（yield/suspended/onClose/refreshRemoteTab）共用：
-  /// 三站借用凭据一并清空，语义安全且不依赖当刻 siteId。
+  /// 五站借用凭据一并清空，语义安全且不依赖当刻 siteId。
   void _clearBorrowedCredentials() {
     _accounts.setBorrowedLoginCookie(null);
     _douyuAccounts.setBorrowedLoginCookie(null);
     _twitchAccounts.setBorrowedLoginCreds(null);
+    _biliAccounts.setBorrowedLoginCookie(null);
+    _huyaAccounts.setBorrowedLoginCookie(null);
   }
 
   /// 控制器持有的 per-tab presence 客户端；guard 参数每次 claim 当刻
@@ -229,11 +239,17 @@ class IpcPresenceCoordinator extends GetxService
       case Constant.kDouyu:
         _douyuAccounts.setBorrowedLoginCookie(call.cookie);
         break;
+      case Constant.kBiliBili:
+        _biliAccounts.setBorrowedLoginCookie(call.cookie);
+        break;
+      case Constant.kHuya:
+        _huyaAccounts.setBorrowedLoginCookie(call.cookie);
+        break;
       case Constant.kTwitch:
         _twitchAccounts.setBorrowedLoginCreds(call.creds);
         break;
       default:
-        // 抖音（及未知站点回落）：单串 cookie
+        // 抖音：单串 cookie
         _accounts.setBorrowedLoginCookie(call.cookie);
         break;
     }

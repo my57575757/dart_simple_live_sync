@@ -1091,13 +1091,23 @@ class LiveRoomController extends PlayerController
     await liveDanmaku.start(newArgs);
   }
 
-  /// M5 Task 3：凭据下发后按需重启该站弹幕连接（douyu/twitch）。
+  /// M5 Task 3：凭据下发后按需重启该站弹幕连接（douyu/twitch）；
+  /// bilibili 子窗借用 cookie 后需重取播放档位（游客态该房间只有原画单档，
+  /// 登录态解锁低码率档位）。
   ///
-  /// 仅 douyu/twitch：bili/huya 写路径走代理（Task 4/5），抖音走 presence
-  /// applyAccountEnter 自带账号弹幕切换。凭据非空且弹幕已随房间详情启动时，
-  /// 按 reloginDouyu 同构路径 stop → getDanmaku() → start(新 args 带凭据)；
-  /// 凭据空则不重启，保持 Guest（发送报 not_login，现有文案）。
+  /// 弹幕仅 douyu/twitch 需要重启：bili/huya 写路径走代理（Task 4/5），抖音
+  /// 走 presence applyAccountEnter 自带账号弹幕切换。凭据非空且弹幕已随房间
+  /// 详情启动时，按 reloginDouyu 同构路径 stop → getDanmaku() → start(新 args
+  /// 带凭据)；凭据空则不重启，保持 Guest（发送报 not_login，现有文案）。
   Future<void> applyBorrowedCredentials(String siteId) async {
+    if (siteId == Constant.kBiliBili) {
+      // apply_enter 是本地 IPC，通常先于房间详情返回；播放尚未开始时无需动作，
+      // 首次取流自然带登录 cookie。仅在游客流已起播时重取，避免错过晚到。
+      if (detail.value == null || qualites.isEmpty) return;
+      if (BiliBiliAccountService.instance.cookie.isEmpty) return;
+      getPlayQualites();
+      return;
+    }
     if (siteId != Constant.kDouyu && siteId != Constant.kTwitch) return;
     final detailValue = detail.value;
     if (detailValue == null || !canStartDanmaku(detailValue)) return;

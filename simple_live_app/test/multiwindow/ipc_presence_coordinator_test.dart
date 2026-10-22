@@ -5,8 +5,10 @@ import 'package:simple_live_app/app/multiwindow/presence/ipc/presence_protocol.d
 import 'package:simple_live_app/app/multiwindow/presence/ipc/sub_presence_port.dart';
 import 'package:simple_live_app/app/multiwindow/presence/presence_client.dart';
 import 'package:simple_live_app/app/sites.dart';
+import 'package:simple_live_app/services/bilibili_account_service.dart';
 import 'package:simple_live_app/services/douyin_account_service.dart';
 import 'package:simple_live_app/services/douyu_account_service.dart';
+import 'package:simple_live_app/services/huya_account_service.dart';
 import 'package:simple_live_app/services/twitch_account_service.dart';
 import 'package:simple_live_core/simple_live_core.dart';
 
@@ -108,9 +110,13 @@ void main() {
   late DouyinAccountService accounts;
   late DouyuAccountService douyuAccounts;
   late TwitchAccountService twitchAccounts;
+  late BiliBiliAccountService biliAccounts;
+  late HuyaAccountService huyaAccounts;
   final site = Sites.allSites['douyin']!.liveSite as DouyinSite;
   final douyuSite = Sites.allSites['douyu']!.liveSite as DouyuSite;
   final twitchSite = Sites.allSites['twitch']!.liveSite as TwitchSite;
+  final biliSite = Sites.allSites['bilibili']!.liveSite as BiliBiliSite;
+  final huyaSite = Sites.allSites['huya']!.liveSite as HuyaSite;
 
   IpcPresenceCoordinator coord(
     Map<String, PresenceApplyTarget> targets,
@@ -122,6 +128,8 @@ void main() {
         accounts: accounts,
         douyuAccounts: douyuAccounts,
         twitchAccounts: twitchAccounts,
+        biliAccounts: biliAccounts,
+        huyaAccounts: huyaAccounts,
       );
 
   PresenceClaimArgs args({String guardRoomId = 'room_1'}) =>
@@ -138,6 +146,8 @@ void main() {
     accounts = DouyinAccountService();
     douyuAccounts = DouyuAccountService();
     twitchAccounts = TwitchAccountService();
+    biliAccounts = BiliBiliAccountService();
+    huyaAccounts = HuyaAccountService();
   });
 
   tearDown(() {
@@ -146,6 +156,9 @@ void main() {
     twitchSite.oauthToken = '';
     twitchSite.userLogin = '';
     twitchSite.clientId = TwitchSite.kWebClientId;
+    biliSite.cookie = '';
+    biliSite.userId = 0;
+    huyaSite.cookie = '';
   });
 
   test('apply_enter：写借用 cookie（logined 不翻转）→ 自取详情 → apply 透传',
@@ -477,6 +490,8 @@ void main() {
       accounts: accounts,
       douyuAccounts: douyuAccounts,
       twitchAccounts: twitchAccounts,
+      biliAccounts: biliAccounts,
+      huyaAccounts: huyaAccounts,
     );
     await c2.handleCall(
       PresenceProtocol.mApplyEnter,
@@ -560,6 +575,53 @@ void main() {
     expect(target.detailCalls, 0);
     expect(target.enters, 0);
 
+    // bilibili → BiliBiliAccountService.cookie（子窗 B站登录态下发，
+    // 缺失时新标签页恒为游客、只有原画单档）
+    await c.registerRemoteTab(
+        tabId: 'tbili', siteId: 'bilibili', roomId: '11', shareUrl: '');
+    await c.handleCall(
+      PresenceProtocol.mApplyEnter,
+      PresenceProtocol.encodeApplyEnter(
+        const PresenceApplyEnterCall(
+          tabId: 'tbili',
+          cookie: 'SESSDATA=abc; DedeUserID=44630239;',
+          status: <String, Object?>{},
+          reentered: false,
+        ),
+      ),
+    );
+    expect(biliAccounts.cookie, 'SESSDATA=abc; DedeUserID=44630239;');
+    expect(biliSite.cookie, 'SESSDATA=abc; DedeUserID=44630239;',
+        reason: 'getRoomPlayInfo 当刻读 site.cookie');
+    expect(biliSite.userId, 44630239);
+    expect(accounts.loginCookie, '', reason: 'bilibili 不写抖音借用 cookie');
+    expect(appliedTab, 'tbili');
+    expect(appliedSite, 'bilibili');
+    expect(target.detailCalls, 0, reason: '非抖音不走 fetchAccountDetail');
+    expect(target.enters, 0, reason: '非抖音不走 applyAccountEnter');
+
+    // huya → HuyaAccountService.cookie（与 bilibili 同构，曾落入 default
+    // 误写抖音服务，子窗虎牙恒为游客）
+    await c.registerRemoteTab(
+        tabId: 'thuya', siteId: 'huya', roomId: '12', shareUrl: '');
+    await c.handleCall(
+      PresenceProtocol.mApplyEnter,
+      PresenceProtocol.encodeApplyEnter(
+        const PresenceApplyEnterCall(
+          tabId: 'thuya',
+          cookie: 'udb_biztoken=abc; yyuid=999;',
+          status: <String, Object?>{},
+          reentered: false,
+        ),
+      ),
+    );
+    expect(huyaAccounts.cookie, 'udb_biztoken=abc; yyuid=999;');
+    expect(huyaSite.cookie, 'udb_biztoken=abc; yyuid=999;',
+        reason: 'getRoomDetail 当刻读 site.cookie 构造弹幕 args');
+    expect(accounts.loginCookie, '', reason: 'huya 不写抖音借用 cookie');
+    expect(appliedTab, 'thuya');
+    expect(appliedSite, 'huya');
+
     // 未 register 的 tabId 回落 douyin：写抖音 cookie，仍不调 target
     await c.handleCall(
       PresenceProtocol.mApplyEnter,
@@ -576,7 +638,7 @@ void main() {
     expect(target.detailCalls, 0, reason: 'unknown tab 无 target 不进场');
   });
 
-  test('yield/suspended/refresh/onClose：三站借用凭据一并清零', () async {
+  test('yield/suspended/refresh/onClose：五站借用凭据一并清零', () async {
     final target = _FakeTarget(_detail('1'));
     final c = coord({'t1': target});
 
@@ -588,6 +650,8 @@ void main() {
         'userLogin': 'user1',
         'clientId': 'cid1',
       });
+      biliAccounts.setBorrowedLoginCookie('SESSDATA=abc; DedeUserID=1;');
+      huyaAccounts.setBorrowedLoginCookie('udb_biztoken=abc; yyuid=1;');
     }
 
     void expectAllCleared(String reason) {
@@ -595,35 +659,38 @@ void main() {
       expect(douyuAccounts.cookie, '', reason: reason);
       expect(twitchAccounts.oauthToken, '', reason: reason);
       expect(twitchAccounts.userLogin, '', reason: reason);
+      expect(biliAccounts.cookie, '', reason: reason);
+      expect(biliSite.userId, 0, reason: reason);
+      expect(huyaAccounts.cookie, '', reason: reason);
     }
 
-    // yield 清三站
+    // yield 清五站
     seedAll();
     await c.handleCall(
       PresenceProtocol.mApplyYield,
       PresenceProtocol.encodeTabApply('t1'),
     );
-    expectAllCleared('yield 清三站借用凭据');
+    expectAllCleared('yield 清五站借用凭据');
 
-    // suspended 清三站
+    // suspended 清五站
     seedAll();
     await c.handleCall(
       PresenceProtocol.mApplySuspended,
       PresenceProtocol.encodeTabApply('t1'),
     );
-    expectAllCleared('suspended 清三站借用凭据');
+    expectAllCleared('suspended 清五站借用凭据');
 
     // refreshRemoteTab 先清再 register
     seedAll();
     await c.refreshRemoteTab(
         tabId: 't1', siteId: 'douyu', roomId: '1', shareUrl: '');
-    expectAllCleared('refresh 清三站借用凭据');
+    expectAllCleared('refresh 清五站借用凭据');
     expect(port.calls.last.$1, PresenceProtocol.mRegister);
 
-    // onClose 清三站
+    // onClose 清五站
     seedAll();
     c.onClose();
-    expectAllCleared('onClose 清三站借用凭据');
+    expectAllCleared('onClose 清五站借用凭据');
   });
 
   test('refreshRemoteTab：先清借用凭据再发 register；register 抛错清理仍生效',
