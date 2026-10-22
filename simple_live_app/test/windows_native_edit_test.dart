@@ -70,6 +70,61 @@ void main() {
     expect(await WindowsNativeEdit.instance.commit(), '你好');
   });
 
+  test('切标签挂起会话：隐藏 popup、清空回调，旧会话 submit 不再送达', () async {
+    // 多标签 IndexedStack 下所有房间输入框常驻：房间 A 打开原生输入框后切到
+    // B，A 的 popup 被遮挡但回调仍挂在单例上，回车会串发到 A。
+    final calls = <String>[];
+    messenger.setMockMethodCallHandler(channel, (call) async {
+      calls.add(call.method);
+      return null;
+    });
+    await WindowsNativeEdit.instance.show(
+      rect: const Rect.fromLTWH(0, 0, 10, 10),
+      fontSizePx: 16,
+      bgColor: 0,
+      textColor: 0,
+      hintColor: 0,
+      radiusPx: 0,
+      padXPx: 0,
+      hintText: '',
+      text: '',
+    );
+
+    final submitted = <String>[];
+    var closedCount = 0;
+    WindowsNativeEdit.instance.onSubmit = submitted.add;
+    WindowsNativeEdit.instance.onClosed = () => closedCount++;
+
+    WindowsNativeEdit.instance.suspendSession();
+
+    expect(calls, contains('hide'));
+    expect(closedCount, 1);
+    expect(WindowsNativeEdit.instance.onSubmit, isNull);
+    expect(WindowsNativeEdit.instance.onClosed, isNull);
+
+    // 挂起后原生再回报 submit（焦点残影等），必须无人接收。
+    await messenger.handlePlatformMessage(
+      channel.name,
+      const StandardMethodCodec()
+          .encodeMethodCall(const MethodCall('submit', '串房弹幕')),
+      null,
+    );
+    await Future<void>.delayed(Duration.zero);
+    expect(submitted, isEmpty);
+  });
+
+  test('无会话时挂起为 no-op，不发 hide', () async {
+    final calls = <String>[];
+    messenger.setMockMethodCallHandler(channel, (call) async {
+      calls.add(call.method);
+      return null;
+    });
+
+    WindowsNativeEdit.instance.suspendSession();
+
+    expect(calls, isEmpty);
+  });
+
   test('原生反向调用 submit/closed 路由到当前回调', () async {
     // 先 show 一次以安装 incoming handler
     messenger.setMockMethodCallHandler(channel, (call) async => null);

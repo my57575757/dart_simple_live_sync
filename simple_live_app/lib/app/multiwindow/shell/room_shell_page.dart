@@ -10,6 +10,7 @@ import 'package:simple_live_app/app/multiwindow/window/window_role.dart';
 import 'package:simple_live_app/modules/indexed/indexed_page.dart';
 import 'package:simple_live_app/modules/live_room/live_room_controller.dart';
 import 'package:simple_live_app/modules/live_room/live_room_page.dart';
+import 'package:simple_live_app/services/windows_native_edit.dart';
 
 import 'room_controller_registry.dart';
 import 'tab_store.dart';
@@ -50,7 +51,11 @@ class _RoomShellPageState extends State<RoomShellPage> with WindowListener {
         }
       });
     }
-    _activeWorker = ever(store.activeTabId, (_) => _bindTitle());
+    _activeWorker = ever(store.activeTabId, (_) {
+      _bindTitle();
+      // 旧标签的原生输入 popup 只被 Offstage 遮挡、仍持键盘焦点，不挂起会串房。
+      WindowsNativeEdit.instance.suspendSession();
+    });
     _bindTitle();
   }
 

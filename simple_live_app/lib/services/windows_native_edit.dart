@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/services.dart';
 import 'package:simple_live_app/app/log.dart';
 
@@ -85,6 +87,23 @@ class WindowsNativeEdit {
   }
 
   Future<void> hide() => _silent(() => _channel.invokeMethod<void>('hide'));
+
+  /// 多标签/首页切换时挂起当前输入会话：隐藏常驻 popup、把键盘焦点还给引擎窗口、
+  /// 释放全局回调，并经 closed 通知持有会话的输入框同步草稿、回到未激活态。
+  ///
+  /// 本服务是进程单例、只有一组回调，而壳内 IndexedStack 使所有房间/搜索输入框
+  /// 常驻挂载；切标签时旧房间 popup 只被 Offstage 遮挡仍持键盘焦点，不挂起则
+  /// 回车会经旧 EDIT → 单例回调送进已切走的房间（弹幕串房）。
+  void suspendSession() {
+    final closed = onClosed;
+    if (onSubmit == null && closed == null) {
+      return;
+    }
+    onSubmit = null;
+    onClosed = null;
+    unawaited(hide());
+    closed?.call();
+  }
 
   Future<void> setText(String text) =>
       _silent(() => _channel.invokeMethod<void>('setText', text));
