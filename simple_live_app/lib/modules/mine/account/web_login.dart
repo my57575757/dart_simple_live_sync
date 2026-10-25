@@ -19,6 +19,14 @@ class LoginCredential {
   /// 桌面 UA 下页面默认停在验证码登录，自动填充前需点击该文本的 tab
   final String passwordTabText;
 
+  /// 登录表单账号/密码输入框的 CSS 选择器（斗鱼 passport 与虎牙壳页不同）
+  final String accountSelector;
+  final String passwordSelector;
+
+  /// 页面加载后先执行的引导脚本（如虎牙登录页是嵌入式壳页，需模拟父页
+  /// postMessage 握手才渲染表单）；随每次填充轮询执行，脚本自身须幂等
+  final String? bootstrapScript;
+
   /// 仅在该主机名下的页面执行填充 JS
   final String injectHost;
   final void Function(String account, String password) onSave;
@@ -32,7 +40,54 @@ class LoginCredential {
     this.accountHint = "手机号 / 昵称",
     this.passwordTabText = "密码登录",
     this.injectHost = "passport.douyu.com",
+    this.accountSelector = 'input[name="nicknameOrPhone"]',
+    this.passwordSelector = 'input[type=password][name="password"]',
+    this.bootstrapScript,
   });
+}
+
+/// 生成登录页自动填充脚本：先跑（幂等的）平台引导脚本，再把账号密码写入表单。
+/// 账号/密码经 jsonEncode 转义；选择器仅允许由调用方写死，不接受用户输入。
+String buildCredentialAutofillScript({
+  required LoginCredential cred,
+  required String account,
+  required String password,
+}) {
+  final tabText = jsonEncode(cred.passwordTabText);
+  final accountJson = jsonEncode(account);
+  final passwordJson = jsonEncode(password);
+  final accountSelector = jsonEncode(cred.accountSelector);
+  final passwordSelector = jsonEncode(cred.passwordSelector);
+  final bootstrap = cred.bootstrapScript ?? "";
+  return '''
+(function(){
+  $bootstrap
+  var acc = document.querySelector($accountSelector);
+  var pwd = document.querySelector($passwordSelector);
+  if(!acc || !pwd || !acc.offsetParent || !pwd.offsetParent){
+    if($tabText){
+      var divs = document.getElementsByTagName('div');
+      for(var i=0;i<divs.length;i++){
+        var d = divs[i];
+        if(d.children.length===0 && (d.innerText||'').trim()===$tabText && d.offsetParent){
+          d.click();
+          break;
+        }
+      }
+    }
+    return false;
+  }
+  if(acc.value===$accountJson && pwd.value===$passwordJson) return true;
+  var setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set;
+  setter.call(acc, $accountJson);
+  acc.dispatchEvent(new Event('input',{bubbles:true}));
+  acc.dispatchEvent(new Event('change',{bubbles:true}));
+  setter.call(pwd, $passwordJson);
+  pwd.dispatchEvent(new Event('input',{bubbles:true}));
+  pwd.dispatchEvent(new Event('change',{bubbles:true}));
+  return true;
+})()
+''';
 }
 
 class WebLoginArgs {
@@ -129,7 +184,7 @@ class WebLoginController extends GetxController {
   RxBool? rememberCredential;
   Timer? _autofillTimer;
   int _autofillAttempts = 0;
-  static const int _autofillMaxAttempts = 12;
+  static const int _autofillMaxAttempts = 20;
 
   bool get _credentialEnabled => args?.credential != null;
 
@@ -248,37 +303,15 @@ class WebLoginController extends GetxController {
     });
   }
 
-  /// 斗鱼 passport 登录页填充脚本：账号/密码经 jsonEncode 转义后嵌入
+  /// 登录页填充脚本：账号/密码由 [buildCredentialAutofillScript] 按平台配置生成
   String _buildAutofillScript(String account, String password) {
-    final tabText = jsonEncode(args?.credential?.passwordTabText ?? "");
-    final accountJson = jsonEncode(account);
-    final passwordJson = jsonEncode(password);
-    return '''
-(function(){
-  var acc = document.querySelector('input[name="nicknameOrPhone"]');
-  var pwd = document.querySelector('input[type=password][name="password"]');
-  if(!acc || !pwd || !acc.offsetParent || !pwd.offsetParent){
-    var divs = document.getElementsByTagName('div');
-    for(var i=0;i<divs.length;i++){
-      var d = divs[i];
-      if(d.children.length===0 && (d.innerText||'').trim()===$tabText && d.offsetParent){
-        d.click();
-        break;
-      }
-    }
-    return false;
-  }
-  if(acc.value===$accountJson && pwd.value===$passwordJson) return true;
-  var setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set;
-  setter.call(acc, $accountJson);
-  acc.dispatchEvent(new Event('input',{bubbles:true}));
-  acc.dispatchEvent(new Event('change',{bubbles:true}));
-  setter.call(pwd, $passwordJson);
-  pwd.dispatchEvent(new Event('input',{bubbles:true}));
-  pwd.dispatchEvent(new Event('change',{bubbles:true}));
-  return true;
-})()
-''';
+    final cred = args?.credential;
+    if (cred == null) return "false";
+    return buildCredentialAutofillScript(
+      cred: cred,
+      account: account,
+      password: password,
+    );
   }
 
   void onReceivedError(

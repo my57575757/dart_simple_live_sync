@@ -1,5 +1,5 @@
 name: simple_live_app
-version: 1.12.72+11272
+version: 1.12.73+11273
 publish_to: none
 description: "Simple Live APP"
 environment:

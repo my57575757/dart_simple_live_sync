@@ -130,14 +130,21 @@ class SyncDeviceController extends BaseController {
 
   void syncHuyaAccount() async {
     try {
-      if (!HuyaAccountService.instance.logined.value) {
+      var service = HuyaAccountService.instance;
+      if (!service.logined.value &&
+          service.loginAccount.isEmpty &&
+          service.loginPassword.isEmpty) {
         SmartDialog.showToast("未登录虎牙");
         return;
       }
       SmartDialog.showLoading(msg: "同步中...");
 
       await request.syncHuyaAccount(
-          client, HuyaAccountService.instance.cookie);
+        client,
+        service.cookie,
+        account: service.loginAccount,
+        password: service.loginPassword,
+      );
       SmartDialog.showToast("已同步虎牙账号");
     } catch (e) {
       SmartDialog.showToast("同步失败:$e");

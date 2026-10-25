@@ -83,6 +83,8 @@ class LocalSyncController extends BaseController {
     var douyuAccount = jsonMap['douyuAccount'];
     var douyuPassword = jsonMap['douyuPassword'];
     var huyaData = jsonMap['huyaData'] ?? "";
+    var huyaAccount = jsonMap['huyaAccount'];
+    var huyaPassword = jsonMap['huyaPassword'];
     var douyinData = jsonMap['douyinData'] ?? "";
     var twitchData = jsonMap['twitchData'] ?? "";
     if(""!=userData){
@@ -108,8 +110,13 @@ class LocalSyncController extends BaseController {
         password: douyuPassword?.toString(),
       );
     }
-    if(""!=huyaData){
-      controller.syncHuyaAccount(dataStr: huyaData,isOverlay: false);
+    if(""!=huyaData || huyaAccount != null || huyaPassword != null){
+      controller.syncHuyaAccount(
+        dataStr: huyaData,
+        isOverlay: false,
+        account: huyaAccount?.toString(),
+        password: huyaPassword?.toString(),
+      );
     }
     if(""!=douyinData){
       controller.syncDouyinAccount(dataStr: douyinData,isOverlay: false);

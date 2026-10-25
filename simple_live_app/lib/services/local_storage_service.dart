@@ -152,6 +152,12 @@ class LocalStorageService extends GetxService {
   /// 虎牙cookie
   static const String kHuyaCookie = "HuyaCookie";
 
+  /// 虎牙登录账号（登录页自动填充用）
+  static const String kHuyaLoginAccount = "HuyaLoginAccount";
+
+  /// 虎牙登录密码（登录页自动填充用，明文存储）
+  static const String kHuyaLoginPassword = "HuyaLoginPassword";
+
   /// Twitch Client ID
   static const String kTwitchClientId = "TwitchClientId";
 

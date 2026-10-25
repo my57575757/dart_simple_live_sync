@@ -181,13 +181,20 @@ class SyncDeviceControllerMy extends BaseController {
   void syncHuyaAccount({
     String dataStr = "",
     bool isOverlay = true,
+    String? account,
+    String? password,
   }) async {
     try {
       if(isOverlay) {
         SmartDialog.showLoading(msg: "同步中...");
       }
       var huya = ""==dataStr?HuyaAccountService.instance.cookie:dataStr;
-      await request.syncHuyaAccount(client, huya);
+      await request.syncHuyaAccount(
+        client,
+        huya,
+        account: account,
+        password: password,
+      );
       if(isOverlay) {
         SmartDialog.showToast("已同步虎牙账号");
       }

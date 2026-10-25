@@ -1812,6 +1812,11 @@ class LiveRoomController extends PlayerController
           DouyuAccountService.instance.logined.value) {
         await DouyuAccountService.instance.cloudRefreshDouyuIfExpired();
       }
+      // 虎牙无本地过期信号：本地未登录（重装/清数据）时尝试从云端恢复一次
+      if (site.id == Constant.kHuya &&
+          !HuyaAccountService.instance.logined.value) {
+        await HuyaAccountService.instance.cloudPullHuyaIfAbsent();
+      }
       if (liveSite is DouyinSite) {
         // 默认游客身份读取：不带 sessionid，不受房间黑名单影响
         detail.value = await liveSite.getRoomDetail(
