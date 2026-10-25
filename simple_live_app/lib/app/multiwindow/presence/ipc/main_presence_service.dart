@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:dio/dio.dart';
 import 'package:get/get.dart';
 import 'package:simple_live_app/app/constant.dart';
 import 'package:simple_live_app/app/multiwindow/window/sub_window_port.dart';
@@ -395,6 +396,17 @@ class MainPresenceService extends GetxService
           success: data['success'] == true,
           code: data['platformCode']?.toString(),
           message: data['message']?.toString(),
+        ),
+      );
+    } on DioException catch (e) {
+      // 透传 guard 错误信封（如虎牙 guard_not_login/中文消息），子窗据此
+      // 弹重登引导或 toast 真实原因
+      final mapped = GuardServerService.mapHttpError(e);
+      return PresenceProtocol.encodeSendResult(
+        PresenceSendResult(
+          success: false,
+          code: mapped.errorCode,
+          message: mapped.errorMessage,
         ),
       );
     } catch (_) {

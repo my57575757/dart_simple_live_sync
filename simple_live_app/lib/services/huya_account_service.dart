@@ -63,8 +63,8 @@ class HuyaAccountService extends GetxService {
     });
   }
 
-  void startWebLogin() {
-    Get.toNamed(
+  Future<void> startWebLogin() async {
+    await Get.toNamed(
       RoutePath.kWebLogin,
       arguments: WebLoginArgs(
         title: "虎牙账号登录",

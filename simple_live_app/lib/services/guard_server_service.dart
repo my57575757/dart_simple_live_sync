@@ -5,7 +5,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:get/get.dart';
 import 'package:simple_live_core/simple_live_core.dart'
-    show DouyinGuestVerifyRequired, DouyinLoginRequired, DouyinRiskControl;
+    show DanmakuSendResult, DouyinGuestVerifyRequired, DouyinLoginRequired, DouyinRiskControl;
 import 'package:simple_live_app/app/log.dart';
 import 'package:simple_live_app/services/local_storage_service.dart';
 
@@ -134,6 +134,22 @@ class GuardServerService extends GetxService {
       options: _options,
     );
     return res.data["data"]["accountId"].toString();
+  }
+
+  /// guard HTTP 失败信封（502 {message,errorCode} 或网络层错误）映射为
+  /// 发送结果。服务端 errorCode 加 guard_ 前缀，避免与平台业务码混淆；
+  /// guard_not_login 由发送流程拦截并弹窗引导重新登录
+  static DanmakuSendResult mapHttpError(DioException e) {
+    final data = e.response?.data;
+    final msg = data is Map ? data["message"] : null;
+    final serverCode = data is Map ? data["errorCode"]?.toString() : null;
+    return DanmakuSendResult(
+      success: false,
+      errorCode: (serverCode != null && serverCode.isNotEmpty)
+          ? "guard_${serverCode.toLowerCase()}"
+          : "guard",
+      errorMessage: msg is String && msg.isNotEmpty ? msg : "网络请求失败",
+    );
   }
 
   Future<Map<String, dynamic>> sendDanmaku({

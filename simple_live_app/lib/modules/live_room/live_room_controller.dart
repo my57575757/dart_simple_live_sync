@@ -1000,13 +1000,7 @@ class LiveRoomController extends PlayerController
                   return sendOnce(newId, retried: true);
                 }
               }
-              final data = e.response?.data;
-              final msg = data is Map ? data["message"] : null;
-              return DanmakuSendResult(
-                success: false,
-                errorCode: "guard",
-                errorMessage: msg is String && msg.isNotEmpty ? msg : "网络请求失败",
-              );
+              return GuardServerService.mapHttpError(e);
             }
           }
 
@@ -1024,6 +1018,9 @@ class LiveRoomController extends PlayerController
         if (site.id == Constant.kDouyu &&
             result.errorCode == "session_expired") {
           await reloginDouyu();
+        } else if (site.id == Constant.kHuya &&
+            result.errorCode == "guard_not_login") {
+          await reloginHuya();
         } else {
           SmartDialog.showToast(
             danmakuErrorText(site.id, result),
@@ -1074,6 +1071,18 @@ class LiveRoomController extends PlayerController
     await DouyuAccountService.instance.startWebLogin();
     if (!DouyuAccountService.instance.logined.value) return;
     await _restartDouyuDanmaku();
+  }
+
+  /// 虎牙登录态过期（guard 进房只渲染登录提示）：弹窗引导 Web 重新登录。
+  /// 成功后登录页回调已用新 cookie 注册新 guard 账号；观看弹幕走匿名 WS
+  /// 无需重连，用户重新发送即可
+  Future<void> reloginHuya() async {
+    final go = await Utils.showAlertDialog(
+      "虎牙登录态已过期，是否重新登录？",
+      title: "登录已过期",
+    );
+    if (!go) return;
+    await HuyaAccountService.instance.startWebLogin();
   }
 
   Future<void> _restartDouyuDanmaku() async {
