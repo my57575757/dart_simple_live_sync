@@ -456,16 +456,24 @@ Widget buildGuardActions(LiveRoomController controller) {
               color: Colors.white,
             ),
           ),
+          if (!controller.guardJoined.value ||
+              (controller.site.id == "douyin" &&
+                  !controller.guardBadgeActive.value))
+            IconButton(
+              tooltip: !controller.guardJoined.value
+                  ? "加入粉丝团"
+                  : "点亮粉丝团",
+              onPressed: busy ? null : () => controller.joinFansClub(),
+              icon: const Icon(
+                Remix.team_line,
+                color: Colors.white,
+              ),
+            ),
           IconButton(
-            tooltip: !controller.guardJoined.value
-                ? "加入粉丝团"
-                : (controller.site.id != "douyin" ||
-                        controller.guardBadgeActive.value
-                    ? "每日任务"
-                    : "点亮粉丝团"),
-            onPressed: busy ? null : () => controller.joinFansClub(),
+            tooltip: "每日任务",
+            onPressed: busy ? null : () => controller.showDailyTasks(),
             icon: const Icon(
-              Remix.team_line,
+              Remix.list_check,
               color: Colors.white,
             ),
           ),

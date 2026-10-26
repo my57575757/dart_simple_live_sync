@@ -1464,11 +1464,7 @@ class LiveRoomController extends PlayerController
     );
   }
 
-  Widget _buildDailyTasksDialog(
-      Map<String, dynamic> tasks, String primaryAction) {
-    final isStarRoom = primaryAction == "fans_badge" &&
-        site.id == "douyin" &&
-        guardStarRoom.value;
+  Widget _buildDailyTasksDialog(Map<String, dynamic> tasks) {
     final theme = Theme.of(Get.context!);
     final level = _taskInt(tasks["level"]);
     final intimacy = _taskInt(tasks["intimacy"]);
@@ -1479,7 +1475,7 @@ class LiveRoomController extends PlayerController
             const <Map>[];
 
     return AlertDialog(
-      title: Text(isStarRoom ? "每日任务 · 点点星光" : "每日任务"),
+      title: const Text("每日任务"),
       content: SizedBox(
         width: 340,
         child: Column(
@@ -1529,11 +1525,7 @@ class LiveRoomController extends PlayerController
       actions: [
         TextButton(
           onPressed: () => Get.back(result: false),
-          child: const Text("取消"),
-        ),
-        TextButton(
-          onPressed: () => Get.back(result: true),
-          child: Text(isStarRoom ? "送出星光" : "送出灯牌"),
+          child: const Text("关闭"),
         ),
       ],
     );
@@ -1574,24 +1566,25 @@ class LiveRoomController extends PlayerController
     );
   }
 
+  /// 查看粉丝团每日任务（只读）：独立入口，不 claim、不进场，与入团/送灯牌解耦
+  Future<void> showDailyTasks() async {
+    final tasks = await _queryDailyTasks();
+    if (tasks == null) {
+      SmartDialog.showToast("每日任务查询失败，请确认已登录并加入该主播粉丝团");
+      return;
+    }
+    await Get.dialog<bool>(_buildDailyTasksDialog(tasks));
+  }
+
   Future<void> joinFansClub() async {
-    // 已入团：抖音勋章熄灭先引导点亮；否则展示每日任务，确认后送灯牌
+    // 已入团：抖音勋章熄灭先引导点亮，其余平台无需重复加入
     if (guardJoined.value) {
       if (site.id == "douyin" && !guardBadgeActive.value) {
         SmartDialog.showToast("粉丝团勋章已熄灭，需重新点亮");
         await lightUpFansBadge();
         return;
       }
-      final isStarRoom = site.id == "douyin" && guardStarRoom.value;
-      final tasks = await _queryDailyTasks();
-      final confirmed = await Get.dialog<bool>(
-        tasks != null
-            ? _buildDailyTasksDialog(tasks, "fans_badge")
-            : _buildSendBadgeConfirmDialog(isStarRoom),
-      );
-      if (confirmed == true) {
-        await _sendGuardAction("fans_badge");
-      }
+      SmartDialog.showToast("已加入该主播粉丝团");
       return;
     }
     final contentText = site.id == "douyin"
