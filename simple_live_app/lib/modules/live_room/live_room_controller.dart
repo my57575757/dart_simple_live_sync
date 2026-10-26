@@ -1270,14 +1270,48 @@ class LiveRoomController extends PlayerController
         }
       }
 
-      final data = await runOnce(accountId);
+      var data = await runOnce(accountId);
+      var heartbeatAccountId = accountId;
+      // 抖音写操作被网关判登录态失效（guard 内部已重发一次仍 20003）：
+      // 拉云端最新 cookie 无感恢复、以新账号重进后重发一次；
+      // 拉不到/重进失败则引导重新登录
+      if (data["success"] != true &&
+          site.id == Constant.kDouyin &&
+          data["platformCode"]?.toString() == "20003" &&
+          !_isSubWindowDouyin) {
+        final recovered =
+            await DouyinAccountService.instance.cloudRefreshDouyinIfExpired();
+        if (recovered && await _reenterDouyinAfterCredentialChange()) {
+          final newId = await guard.ensureAccount(site.id);
+          if (newId != null) {
+            heartbeatAccountId = newId;
+            data = await runOnce(newId);
+          }
+        } else {
+          await reloginDouyin();
+          return;
+        }
+      }
       if (data["success"] != true) {
-        SmartDialog.showToast(data["message"]?.toString() ?? "操作失败");
+        if (site.id == Constant.kDouyin &&
+            data["platformCode"]?.toString() == "20003") {
+          // 云端恢复重发仍失效；或子窗借用的主窗身份已过期
+          if (_isSubWindowDouyin) {
+            await Utils.showMessageDialog(
+              "主窗口抖音登录态已过期，请在主窗口重新登录抖音",
+              title: "登录已过期",
+            );
+          } else {
+            await reloginDouyin();
+          }
+        } else {
+          SmartDialog.showToast(data["message"]?.toString() ?? "操作失败");
+        }
       } else {
         _applyGuardActionSuccessFlags(action);
         // 主动操作已在服务端抢占房间，恢复本端心跳保活
         if (_presenceClient == null) {
-          _startGuardHeartbeat(accountId);
+          _startGuardHeartbeat(heartbeatAccountId);
         }
       }
     } on DioException catch (e) {
@@ -1294,7 +1328,7 @@ class LiveRoomController extends PlayerController
     }
   }
 
-  /// 抖音 presence 通道互动动作 + not_holder 一次重claim重发。
+  /// 抖音 presence 通道互动动作 + not_holder 一次重claim重发 + 20003 云端恢复重发。
   Future<void> _sendActionViaPresence(
     PresenceClient client,
     String action,
@@ -1306,8 +1340,34 @@ class LiveRoomController extends PlayerController
         r = await client.sendAction(action);
       }
     }
+    // 抖音写操作被网关判登录态失效（guard 内部已重发一次仍 20003）：
+    // 主窗拉云端最新 cookie 无感恢复、强制重进后重发一次；子窗身份借自主窗，
+    // 本端不持 cookie，仅提示去主窗重新登录
+    if (!r.success &&
+        site.id == Constant.kDouyin &&
+        r.code == "20003" &&
+        !_isSubWindowDouyin) {
+      final recovered =
+          await DouyinAccountService.instance.cloudRefreshDouyinIfExpired();
+      if (recovered && await _reenterDouyinAfterCredentialChange()) {
+        r = await (_presenceClient ?? client).sendAction(action);
+      } else {
+        await reloginDouyin();
+        return;
+      }
+    }
     if (r.success) {
       _applyGuardActionSuccessFlags(action);
+    } else if (site.id == Constant.kDouyin && r.code == "20003") {
+      // 云端恢复重发仍失效；或子窗借用的主窗身份已过期
+      if (_isSubWindowDouyin) {
+        await Utils.showMessageDialog(
+          "主窗口抖音登录态已过期，请在主窗口重新登录抖音",
+          title: "登录已过期",
+        );
+      } else {
+        await reloginDouyin();
+      }
     } else {
       SmartDialog.showToast(
         r.message ??
