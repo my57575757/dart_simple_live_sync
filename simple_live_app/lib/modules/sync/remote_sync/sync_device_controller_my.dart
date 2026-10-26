@@ -209,13 +209,20 @@ class SyncDeviceControllerMy extends BaseController {
   void syncDouyinAccount({
     String dataStr = "",
     bool isOverlay = true,
+    String? account,
+    String? password,
   }) async {
     try {
       if(isOverlay) {
         SmartDialog.showLoading(msg: "同步中...");
       }
       var douyin = ""==dataStr?DouyinAccountService.instance.loginCookie:dataStr;
-      await request.syncDouyinAccount(client, douyin);
+      await request.syncDouyinAccount(
+        client,
+        douyin,
+        account: account,
+        password: password,
+      );
       if(isOverlay) {
         SmartDialog.showToast("已同步抖音账号");
       }

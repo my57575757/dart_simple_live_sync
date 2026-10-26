@@ -156,14 +156,21 @@ class SyncDeviceController extends BaseController {
 
   void syncDouyinAccount() async {
     try {
-      if (!DouyinAccountService.instance.logined.value) {
+      var service = DouyinAccountService.instance;
+      if (!service.logined.value &&
+          service.loginAccount.isEmpty &&
+          service.loginPassword.isEmpty) {
         SmartDialog.showToast("未登录抖音");
         return;
       }
       SmartDialog.showLoading(msg: "同步中...");
 
       await request.syncDouyinAccount(
-          client, DouyinAccountService.instance.loginCookie);
+        client,
+        service.loginCookie,
+        account: service.loginAccount,
+        password: service.loginPassword,
+      );
       SmartDialog.showToast("已同步抖音账号");
     } catch (e) {
       SmartDialog.showToast("同步失败:$e");

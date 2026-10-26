@@ -172,12 +172,19 @@ class SyncClientRequest {
     }
   }
 
-  Future<bool> syncDouyinAccount(SyncClinet client, String cookie) async {
+  Future<bool> syncDouyinAccount(
+    SyncClinet client,
+    String cookie, {
+    String? account,
+    String? password,
+  }) async {
     var url = "http://${client.address}:${client.port}/sync/account/douyin";
     var data = await HttpClient.instance.postJson(
       url,
       data: {
         "cookie": cookie,
+        if (account != null) "account": account,
+        if (password != null) "password": password,
       },
     );
 
@@ -288,6 +295,37 @@ class SyncClientRequest {
   Future<Map<String, dynamic>> getHuyaData(
       String userName, String syncUrl) async {
     var url = syncUrl + "/simpleLive/getHuya";
+    var data = await HttpClient.instance.postJson(
+      url,
+      data: {
+        "userName": userName,
+      },
+    );
+    if (data != null) {
+      return data;
+    } else {
+      return {};
+    }
+  }
+
+  /// 仅同步抖音登录信息（登录 cookie/账号/密码），登录成功后自动上传
+  Future<bool> updateDouyin(String parmsStr, String syncUrl) async {
+    var url = syncUrl + "/simpleLive/updateDouyin";
+    var data = await HttpClient.instance.postJson(
+      url,
+      data: parmsStr,
+    );
+    if (data["action"] == 'done') {
+      return true;
+    } else {
+      throw data["message"];
+    }
+  }
+
+  /// 仅拉取抖音登录信息，本地未登录/登录态失效时从云端恢复
+  Future<Map<String, dynamic>> getDouyinData(
+      String userName, String syncUrl) async {
+    var url = syncUrl + "/simpleLive/getDouyin";
     var data = await HttpClient.instance.postJson(
       url,
       data: {

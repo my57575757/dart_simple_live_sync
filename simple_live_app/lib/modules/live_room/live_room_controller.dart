@@ -950,68 +950,21 @@ class LiveRoomController extends PlayerController
     }
     sendingDanmaku.value = true;
     try {
-      DanmakuSendResult result;
-      final presenceClient = _presenceClient;
-      final guard = GuardServerService.instance;
-
-      if (site.id == Constant.kDouyin && presenceClient != null) {
-        // 主窗标签 / 子窗标签抖音发送统一走 presence 串行域，不再直连
-        // GuardServerService、不在控制器起心跳（消除发送瞬间 holder 切换）。
-        result = await _sendDanmakuViaPresence(presenceClient, content);
-      } else if (_isSubWindow &&
-          (site.id == Constant.kBiliBili || site.id == Constant.kHuya) &&
-          _writeClient != null) {
-        // 子窗 bili/huya：经主窗 GuardServerService 代理发送（无仲裁语义）。
-        // _sendDanmakuViaPresence 含一次 not_holder 重试；bili/huya 无
-        // holder 语义，重试安全（幂等由服务端决定）。
-        result = await _sendDanmakuViaPresence(_writeClient!, content);
-      } else {
-        String? accountId;
-        if (guard.configured && _guardPlatforms.contains(site.id)) {
-          // 发送时按需注册：未注册则用本地保存的登录 cookie 自动注册
-          accountId = await guard.ensureAccount(site.id);
-        }
-
-        if (accountId != null) {
-          Future<DanmakuSendResult> sendOnce(String id,
-              {bool retried = false}) async {
-            try {
-              final data = await guard.sendDanmaku(
-                platform: site.id,
-                accountId: id,
-                roomId: _guardRoomId,
-                webRid: _guardWebRid,
-                content: content,
-                extra: _guardExtraArgs(),
-              );
-              return DanmakuSendResult(
-                success: data["success"] == true,
-                errorCode: data["platformCode"] != null
-                    ? data["platformCode"].toString()
-                    : "guard",
-                errorMessage: data["message"]?.toString() ?? "",
-              );
-            } on DioException catch (e) {
-              if (e.response?.statusCode == 404 && !retried) {
-                // 服务端会话丢失（如容器重启）：accountId 由 cookie 哈希决定，
-                // 重新注册得到的 ID 与原 ID 相同，故不能比较 ID，注册成功即重试一次
-                final newId = await guard.reregister(site.id);
-                if (newId != null) {
-                  return sendOnce(newId, retried: true);
-                }
-              }
-              return GuardServerService.mapHttpError(e);
-            }
-          }
-
-          result = await sendOnce(accountId);
-          if (result.success && _presenceClient == null) {
-            // 网关模式下唯一心跳由网关维护；仅 Android / bili/huya 直连路径
-            // 才在控制器起 Timer。
-            _startGuardHeartbeat(accountId);
-          }
+      var result = await _dispatchDanmakuSend(content);
+      // 抖音登录态失效（guard 内部已重试一次仍 20003）：先拉云端最新 cookie
+      // 无感恢复、以新账号重进后自动重发一次；拉不到/重进失败则引导重新登录。
+      // 子窗登录身份借自主窗，本端不持 cookie，仅提示去主窗处理。
+      if (!result.success &&
+          site.id == Constant.kDouyin &&
+          result.errorCode == "20003" &&
+          !_isSubWindowDouyin) {
+        final recovered =
+            await DouyinAccountService.instance.cloudRefreshDouyinIfExpired();
+        if (recovered && await _reenterDouyinAfterCredentialChange()) {
+          result = await _dispatchDanmakuSend(content);
         } else {
-          result = await liveDanmaku.sendMessage(content);
+          await reloginDouyin();
+          return;
         }
       }
       if (!result.success) {
@@ -1021,6 +974,17 @@ class LiveRoomController extends PlayerController
         } else if (site.id == Constant.kHuya &&
             result.errorCode == "guard_not_login") {
           await reloginHuya();
+        } else if (site.id == Constant.kDouyin &&
+            result.errorCode == "20003") {
+          // 云端恢复重发仍失效；或子窗借用的主窗身份已过期
+          if (_isSubWindowDouyin) {
+            await Utils.showMessageDialog(
+              "主窗口抖音登录态已过期，请在主窗口重新登录抖音",
+              title: "登录已过期",
+            );
+          } else {
+            await reloginDouyin();
+          }
         } else {
           SmartDialog.showToast(
             danmakuErrorText(site.id, result),
@@ -1061,6 +1025,92 @@ class LiveRoomController extends PlayerController
     );
   }
 
+  /// 单次弹幕发送（不含失效恢复）：抖音走 presence 串行域；子窗
+  /// bili/huya 走主窗代理；其余平台/Android 走 guard 直连或内置连接。
+  Future<DanmakuSendResult> _dispatchDanmakuSend(String content) async {
+    final presenceClient = _presenceClient;
+    final guard = GuardServerService.instance;
+
+    if (site.id == Constant.kDouyin && presenceClient != null) {
+      // 主窗标签 / 子窗标签抖音发送统一走 presence 串行域，不再直连
+      // GuardServerService、不在控制器起心跳（消除发送瞬间 holder 切换）。
+      return _sendDanmakuViaPresence(presenceClient, content);
+    } else if (_isSubWindow &&
+        (site.id == Constant.kBiliBili || site.id == Constant.kHuya) &&
+        _writeClient != null) {
+      // 子窗 bili/huya：经主窗 GuardServerService 代理发送（无仲裁语义）。
+      // _sendDanmakuViaPresence 含一次 not_holder 重试；bili/huya 无
+      // holder 语义，重试安全（幂等由服务端决定）。
+      return _sendDanmakuViaPresence(_writeClient!, content);
+    } else {
+      String? accountId;
+      if (guard.configured && _guardPlatforms.contains(site.id)) {
+        // 发送时按需注册：未注册则用本地保存的登录 cookie 自动注册
+        accountId = await guard.ensureAccount(site.id);
+      }
+
+      if (accountId != null) {
+        Future<DanmakuSendResult> sendOnce(String id,
+            {bool retried = false}) async {
+          try {
+            final data = await guard.sendDanmaku(
+              platform: site.id,
+              accountId: id,
+              roomId: _guardRoomId,
+              webRid: _guardWebRid,
+              content: content,
+              extra: _guardExtraArgs(),
+            );
+            return DanmakuSendResult(
+              success: data["success"] == true,
+              errorCode: data["platformCode"] != null
+                  ? data["platformCode"].toString()
+                  : "guard",
+              errorMessage: data["message"]?.toString() ?? "",
+            );
+          } on DioException catch (e) {
+            if (e.response?.statusCode == 404 && !retried) {
+              // 服务端会话丢失（如容器重启）：accountId 由 cookie 哈希决定，
+              // 重新注册得到的 ID 与原 ID 相同，故不能比较 ID，注册成功即重试一次
+              final newId = await guard.reregister(site.id);
+              if (newId != null) {
+                return sendOnce(newId, retried: true);
+              }
+            }
+            return GuardServerService.mapHttpError(e);
+          }
+        }
+
+        final result = await sendOnce(accountId);
+        if (result.success && _presenceClient == null) {
+          // 网关模式下唯一心跳由网关维护；仅 Android / bili/huya 直连路径
+          // 才在控制器起 Timer。
+          _startGuardHeartbeat(accountId);
+        }
+        return result;
+      } else {
+        return liveDanmaku.sendMessage(content);
+      }
+    }
+  }
+
+  /// 云端恢复 / 重新登录写入新 cookie 后：同步重注册 guard，并强制 presence
+  /// 以新账号完整重进。accountId 由 cookie 哈希决定，网关对 holder+ready 的
+  /// claim 会短路，必须先 release 摘掉标签（旧账号发 exit）再重新 claim。
+  Future<bool> _reenterDouyinAfterCredentialChange() async {
+    final guard = GuardServerService.instance;
+    if (guard.configured) {
+      // setLoginCookie 的注册是 fire-and-forget，重进前同步确保新 accountId 落库
+      await guard.reregister(Constant.kDouyin);
+    }
+    final client = _presenceClient;
+    presence.value = RoomPresence.guest;
+    if (client != null) {
+      await client.release();
+    }
+    return ensureAccountPresence();
+  }
+
   /// 斗鱼弹幕登录态（7 天）过期：弹窗引导重新登录，成功后用新 cookie 重启弹幕
   Future<void> reloginDouyu() async {
     final go = await Utils.showAlertDialog(
@@ -1083,6 +1133,20 @@ class LiveRoomController extends PlayerController
     );
     if (!go) return;
     await HuyaAccountService.instance.startWebLogin();
+  }
+
+  /// 抖音登录态过期：弹窗引导 Web 重新登录（记住的账号密码自动填充，
+  /// 滑块用户自行通过）；成功后以新 cookie 重注册并重新进场
+  Future<void> reloginDouyin() async {
+    final go = await Utils.showAlertDialog(
+      "抖音登录态已过期，是否重新登录？",
+      title: "登录已过期",
+    );
+    if (!go) return;
+    final service = DouyinAccountService.instance;
+    await service.startWebLogin();
+    if (!service.logined.value) return;
+    await _reenterDouyinAfterCredentialChange();
   }
 
   Future<void> _restartDouyuDanmaku() async {
@@ -1671,6 +1735,8 @@ class LiveRoomController extends PlayerController
           return "未登录或登录已失效";
         case "9":
           return "账号已被封禁";
+        case "20003":
+          return "登录态已失效，请重新登录";
         case "50001":
           return "你已被禁言";
         case "50004":
@@ -1816,6 +1882,13 @@ class LiveRoomController extends PlayerController
       if (site.id == Constant.kHuya &&
           !HuyaAccountService.instance.logined.value) {
         await HuyaAccountService.instance.cloudPullHuyaIfAbsent();
+      }
+      // 抖音本地无登录态（重装/清数据/换设备）时尝试从云端恢复一次；
+      // 子窗身份借自主窗，不参与云拉
+      if (site.id == Constant.kDouyin &&
+          !_isSubWindowDouyin &&
+          !DouyinAccountService.instance.logined.value) {
+        await DouyinAccountService.instance.cloudPullDouyinIfAbsent();
       }
       if (liveSite is DouyinSite) {
         // 默认游客身份读取：不带 sessionid，不受房间黑名单影响

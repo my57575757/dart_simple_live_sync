@@ -47,6 +47,8 @@ class SyncDataController extends BaseController {
         'huyaAccount': HuyaAccountService.instance.loginAccount,
         'huyaPassword': HuyaAccountService.instance.loginPassword,
         'douyinData': douyin,
+        'douyinAccount': DouyinAccountService.instance.loginAccount,
+        'douyinPassword': DouyinAccountService.instance.loginPassword,
         'twitchData': twitch,
       };
       var params = {
