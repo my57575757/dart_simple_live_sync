@@ -105,6 +105,9 @@ class NativeEditHost {
   // EDIT 重建（直通惰性自愈）期间 popup 临时持有键盘焦点，其 WM_SETFOCUS
   // 暂不把焦点抢回即将销毁的旧 EDIT。
   bool healing_bounce_ = false;
+  // WM_MOUSEACTIVATE 检出前台属于其他进程时武装；popup 的 WM_SETFOCUS
+  // redirect 分支消费它，Post 一拍后强制 TSF 焦点重建（见 kMsgTsfReassert）。
+  bool tsf_reassert_pending_ = false;
   // popup 目标矩形（主窗口客户区物理像素坐标），供 OnOwnerMoved 重定位。
   int rect_x_ = 0;
   int rect_y_ = 0;

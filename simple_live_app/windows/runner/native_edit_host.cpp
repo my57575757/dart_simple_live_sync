@@ -2,6 +2,11 @@
 
 #include <commctrl.h>
 #include <imm.h>
+#include <objbase.h>
+// initguid 必须在 msctf.h 前：让 CLSID_TF_ThreadMgr 在本编译单元内成为定义，
+// 免去额外链接 uuid.lib。
+#include <initguid.h>
+#include <msctf.h>
 #include <richedit.h>
 
 #include <flutter/standard_method_codec.h>
@@ -17,6 +22,7 @@
 
 // SetWindowSubclass 在 comctl32；CMake 未显式链接，这里补齐。
 #pragma comment(lib, "comctl32.lib")
+#pragma comment(lib, "ole32.lib")
 
 namespace {
 
@@ -50,6 +56,9 @@ constexpr UINT_PTR kOwnerSubclassId = 1;
 // （见 RecreateEditWindow）。不做切语言/切窗时的预防性重建——健康路径上
 // 反复销毁 TSF 文档本身就是毒化源；指纹零误判，代价仅是毒化瞬间那一个键。
 constexpr UINT kMsgHealRecreate = WM_APP + 1;
+// 跨进程窗口归还后，跨消息循环一拍执行 TSF 焦点强制重建：等同步的
+// SETFOCUS/KILLFOCUS 抖动全部排空后再 revoke/reassign，落在稳定终态上。
+constexpr UINT kMsgTsfReassert = WM_APP + 2;
 
 std::wstring Utf8ToWide(const std::string& utf8) {
   if (utf8.empty()) {
@@ -207,6 +216,58 @@ void ImeDiagLogWnd(const char* tag, HWND wnd) {
   ImeDiagLog("WND tag=%s wnd=%p cls=%s tid=%lu owner=%p child=%d vis=%d", tag,
              wnd, cls, wnd_tid, owner,
              (style & WS_CHILD) ? 1 : 0, visible ? 1 : 0);
+}
+
+// 跨进程窗口（非 TSF 的 SDL/Qt 窗等）往返后，RichEdit 虽重新收到 WM_SETFOCUS，
+// TSF 线程管理器侧的 focused document 却不保证重新指回它——日志标志是切搜狗后
+// IME_NOTIFY 缺失 cmd=0003（edit context 建档），此后字母直通、候选窗不弹。
+// 在焦点真正落地 EDIT 的当口强制重建：先 ITfThreadMgr::SetFocus(NULL) 显式
+// revoke，再让 Win32 焦点离开 EDIT 并回来（popup 的 WM_SETFOCUS redirect 会
+// 同步把焦点弹回 EDIT），触发 RichEdit 在 WM_SETFOCUS 中重新 push 它的 TSF
+// document。仅 SetFocus(EDIT) 无效：Win32 焦点未变就没有 WM_SETFOCUS，
+// RichEdit 不会重新认账文档。前后各取一次 ITfDocumentMgr 指针入日志。
+void TsfReassertEditFocus(HWND edit, const char* tag) {
+  if (GetFocus() != edit) {
+    ImeDiagLog("TSF_REASSERT %s skip focus=%p edit=%p", tag, GetFocus(), edit);
+    return;
+  }
+  const HRESULT init_hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+  const bool need_uninit = SUCCEEDED(init_hr);
+  ITfThreadMgr* thread_mgr = nullptr;
+  const HRESULT hr = CoCreateInstance(
+      CLSID_TF_ThreadMgr, nullptr, CLSCTX_INPROC_SERVER,
+      IID_ITfThreadMgr, reinterpret_cast<void**>(&thread_mgr));
+  if (FAILED(hr) || thread_mgr == nullptr) {
+    ImeDiagLog("TSF_REASSERT %s cocreate fail hr=0x%08lx init=0x%08lx", tag,
+               static_cast<unsigned long>(hr),
+               static_cast<unsigned long>(init_hr));
+    if (need_uninit) {
+      CoUninitialize();
+    }
+    return;
+  }
+  ITfDocumentMgr* doc_before = nullptr;
+  thread_mgr->GetFocus(&doc_before);
+  thread_mgr->SetFocus(nullptr);
+  // 焦点让位给 popup 容器：其 WM_SETFOCUS redirect 会立即 SetFocus(edit)，
+  // EDIT 同步走一遍 KILLFOCUS→SETFOCUS，RichEdit 据此重新 push 文档。
+  HWND popup = GetParent(edit);
+  SetFocus(popup ? popup : edit);
+  SetFocus(edit);
+  ITfDocumentMgr* doc_after = nullptr;
+  thread_mgr->GetFocus(&doc_after);
+  ImeDiagLog("TSF_REASSERT %s winfocus=%p doc_before=%p doc_after=%p", tag,
+             GetFocus(), doc_before, doc_after);
+  if (doc_before) {
+    doc_before->Release();
+  }
+  if (doc_after) {
+    doc_after->Release();
+  }
+  thread_mgr->Release();
+  if (need_uninit) {
+    CoUninitialize();
+  }
 }
 
 }  // namespace
@@ -707,8 +768,16 @@ LRESULT CALLBACK NativeEditHost::PopupWndProc(HWND hwnd, UINT message,
       // 例外：healing_bounce_ 期间焦点是重建 EDIT 流程中故意暂存在 popup 的，
       // 抢回会让旧 EDIT 复活、重建无法进行。
       if (self && self->shown_ && self->edit_ && !self->healing_bounce_) {
-        ImeDiagLog("POPUP_GOTFOCUS redirect->edit focus=%p", GetFocus());
+        const bool reassert = self->tsf_reassert_pending_;
+        self->tsf_reassert_pending_ = false;
+        ImeDiagLog("POPUP_GOTFOCUS redirect->edit focus=%p reassert=%d",
+                   GetFocus(), reassert ? 1 : 0);
         SetFocus(self->edit_);
+        // 此刻紧随其后还有系统补发的 EDIT KILLFOCUS/SETFOCUS 自抖动，
+        // 不能同步 reassert；Post 一拍，等队列里的焦点消息排空到稳定终态。
+        if (reassert) {
+          PostMessageW(hwnd, kMsgTsfReassert, 0, 0);
+        }
       } else if (self && self->healing_bounce_) {
         ImeDiagLog("HEAL_HOLD popup keeps focus");
       }
@@ -717,6 +786,12 @@ LRESULT CALLBACK NativeEditHost::PopupWndProc(HWND hwnd, UINT message,
     case kMsgHealRecreate:
       if (self) {
         self->RecreateEditWindow("directkey");
+      }
+      return 0;
+
+    case kMsgTsfReassert:
+      if (self && self->shown_ && self->edit_) {
+        TsfReassertEditFocus(self->edit_, "post-extreturn");
       }
       return 0;
 
@@ -750,6 +825,9 @@ LRESULT CALLBACK NativeEditHost::PopupWndProc(HWND hwnd, UINT message,
         const bool external =
             owner != nullptr && !local_return && fg_tid != 0 &&
             fg_tid != cur_tid;
+        // 仅跨进程归还武装 TSF 重建；同进程点击（owner/popup 已有前台）
+        // 原有焦点路径健康，不引入额外 revoke。
+        self->tsf_reassert_pending_ = external;
         bool attached = false;
         if (external) {
           attached = AttachThreadInput(cur_tid, fg_tid, TRUE) != FALSE;
@@ -791,6 +869,11 @@ LRESULT CALLBACK NativeEditHost::EditWndProc(HWND hwnd, UINT message,
       // 入队，KEYDOWN 里 return 0 拦不住；单行 EDIT 默认过程收到 '\r' 会响一声
       // 错误提示。发送已在 WM_KEYDOWN 处理，这里把回车字符吞掉消音。
       if (wparam == VK_RETURN) {
+        return 0;
+      }
+      // Ctrl+A 已在 WM_KEYDOWN 处理为全选；TranslateMessage 仍会把 ^A 译为
+      // WM_CHAR(0x01) 入队，RichEdit 默认过程对不认识的控制字符只响错误音。
+      if (wparam == 0x01) {
         return 0;
       }
       break;
@@ -869,6 +952,16 @@ LRESULT CALLBACK NativeEditHost::EditWndProc(HWND hwnd, UINT message,
       if (self) {
         // 无专属 HIMC：每次按键临时取窗口当前上下文查组字态，用完即释放。
         HIMC ctx = ImmGetContext(hwnd);
+        // RichEdit 5.0 在此宿主路径下不把 Ctrl+A 当全选命令（^A 的
+        // WM_CHAR 0x01 落到默认过程只响错误提示音），显式发 EM_SETSEL。
+        if (wparam == 'A' && (GetKeyState(VK_CONTROL) & 0x8000) &&
+            !(GetKeyState(VK_MENU) & 0x8000)) {
+          if (ctx) {
+            ImmReleaseContext(hwnd, ctx);
+          }
+          SendMessageW(hwnd, EM_SETSEL, 0, static_cast<LPARAM>(-1));
+          return 0;
+        }
         if (wparam == VK_RETURN) {
           // 搜狗候选窗打开时 Enter 属于 IME（确认候选），不能当发送。
           const bool composing =
