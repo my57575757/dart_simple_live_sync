@@ -1692,9 +1692,14 @@ class LiveRoomController extends PlayerController
     super.handleKeyboardKey(event);
   }
 
+  /// 弹幕输入框是否可打开：子窗本地恒游客态（借用 cookie 不翻 logined），
+  /// 登录门交给发送链路自证——抖音自动 claim 借主窗身份、bili/huya 经
+  /// presence 代理、douyu/twitch 用借用凭据直连；不能以本地未登录拦截。
+  bool get canOpenDanmakuInput => danmakuLogined || _isSubWindow;
+
   /// 弹幕输入对话框；全屏键盘回车与控制栏按钮共用
   Future<void> showDanmakuInputDialog() async {
-    if (!danmakuLogined) {
+    if (!canOpenDanmakuInput) {
       await showDanmakuLoginDialog();
       playerFocusNode.requestFocus();
       return;

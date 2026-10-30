@@ -278,7 +278,18 @@ void main() {
     expect(claimCall.guardWebRid, '111');
   });
 
-  testWidgets('子窗输入入口不再 toast 拦截，未登录直接弹登录确认框', (tester) async {
+  test('canOpenDanmakuInput：子窗未登录放行（登录态由发送链路 claim 自证）；'
+      '主窗未登录拦截', () {
+    putCoordinator(_FakePort());
+    expect(makeController().canOpenDanmakuInput, isTrue,
+        reason: '子窗 logined 恒 false，但不能拦输入入口');
+
+    MultiWindowRole.isSubWindow = false;
+    expect(makeController().canOpenDanmakuInput, isFalse,
+        reason: '主窗未登录仍走登录确认框');
+  });
+
+  testWidgets('子窗输入入口直接打开输入框，不再弹「未登录」借用提示', (tester) async {
     putCoordinator(_FakePort());
     await tester.pumpWidget(
       GetMaterialApp(
@@ -289,27 +300,24 @@ void main() {
     );
     final c = makeController();
 
-    // showDanmakuInputDialog 内部 await showDanmakuLoginDialog → Get.dialog，
-    // testWidgets 里先 await 会挂起；持 Future、泵帧渲染后再断言/点确定。
+    // showDanmakuInputDialog：子窗本地未登录也应直接打开输入框；登录门在
+    // sendDanmaku → ensureAccountPresence claim 失败时以 toast 承接。
     final inputEntry = c.showDanmakuInputDialog();
     await tester.pump();
-    expect(find.text('请在主窗口发送弹幕'), findsNothing,
-        reason: '入口不再被 toast 拦截');
-    expect(Get.isDialogOpen, isTrue, reason: '未登录直接弹登录确认框');
+    expect(Get.isDialogOpen, isTrue);
+    expect(find.text('发个弹幕呗…'), findsOneWidget);
     expect(
       find.text('子窗口借用主窗口的登录身份，请在主窗口登录抖音并配置弹幕签名服务'),
-      findsOneWidget,
+      findsNothing,
+      reason: '借用身份提示不应再拦截输入入口',
     );
-    expect(find.byType(TextButton), findsOneWidget,
-        reason: '单确认键，无取消键、不导航账号管理');
-    expect(find.text('登录后才能发送弹幕，是否前往账号管理？'), findsNothing);
-    await tester.tap(find.text('确定'));
-    await tester.pump();
-    expect(Get.isDialogOpen, isNot(true));
+
+    Get.back();
+    await tester.pumpAndSettle();
     await inputEntry;
   });
 
-  testWidgets('子窗全屏回车不再 toast 拦截，未登录直接弹登录确认框', (tester) async {
+  testWidgets('子窗全屏回车同样直接打开输入框', (tester) async {
     putCoordinator(_FakePort());
     await tester.pumpWidget(
       GetMaterialApp(
@@ -328,18 +336,15 @@ void main() {
       timeStamp: Duration.zero,
     ));
     await tester.pump();
-    expect(find.text('请在主窗口发送弹幕'), findsNothing,
-        reason: '全屏回车入口同样不再被 toast 拦截');
-    expect(Get.isDialogOpen, isTrue, reason: '未登录直接弹登录确认框');
+    expect(Get.isDialogOpen, isTrue);
+    expect(find.text('发个弹幕呗…'), findsOneWidget);
     expect(
       find.text('子窗口借用主窗口的登录身份，请在主窗口登录抖音并配置弹幕签名服务'),
-      findsOneWidget,
+      findsNothing,
     );
 
-    // handleKeyboardKey 未 await showDanmakuInputDialog；关掉对话框让其续体收尾
-    await tester.tap(find.text('确定'));
-    await tester.pump();
-    expect(Get.isDialogOpen, isNot(true));
+    Get.back();
+    await tester.pumpAndSettle();
     await tester.pump();
   });
 

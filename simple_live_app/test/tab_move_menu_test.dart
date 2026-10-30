@@ -94,6 +94,67 @@ void main() {
     });
   });
 
+  group('isPointerOutsideBand', () {
+    // 条带 y ∈ [0,38]，指针在标签中央按下
+    const start = Offset(100, 19);
+    bool outside(Offset p) => TabMoveMenu.isPointerOutsideBand(
+          pointer: p,
+          start: start,
+          bandTop: 0,
+          bandBottom: 38,
+        );
+
+    test('未移动 / 横向移动（ListView 滚动）一律不触发', () {
+      expect(outside(start), isFalse);
+      expect(outside(const Offset(200, 19)), isFalse);
+      expect(outside(const Offset(100, 0)), isFalse);
+    });
+
+    test('越过上下边界 + margin 才触发', () {
+      expect(outside(const Offset(100, 45)), isTrue, reason: '下方 44 之外');
+      expect(outside(const Offset(100, -7)), isTrue, reason: '上方 -6 之外');
+      expect(outside(const Offset(100, 43)), isFalse, reason: 'margin 容差内');
+      expect(outside(const Offset(100, -5)), isFalse, reason: 'margin 容差内');
+    });
+
+    test('位移不足 slop（对齐 kTouchSlop=18）即使越界也不触发', () {
+      // 从条带上沿附近起手，向上 7px 已越 margin，但总位移 < 18：
+      // tap 尚未被取消，不能判拖出（否则成窗与 onTap 双触发）
+      expect(
+        TabMoveMenu.isPointerOutsideBand(
+          pointer: const Offset(100, -7),
+          start: const Offset(100, 0),
+          bandTop: 0,
+          bandBottom: 38,
+        ),
+        isFalse,
+      );
+    });
+
+    test('自定义 slop/margin 生效', () {
+      expect(
+        TabMoveMenu.isPointerOutsideBand(
+          pointer: const Offset(100, -7),
+          start: const Offset(100, 0),
+          bandTop: 0,
+          bandBottom: 38,
+          slop: 4,
+        ),
+        isTrue,
+      );
+      expect(
+        TabMoveMenu.isPointerOutsideBand(
+          pointer: const Offset(100, -1),
+          start: start,
+          bandTop: 0,
+          bandBottom: 38,
+          margin: 0,
+        ),
+        isTrue,
+      );
+    });
+  });
+
   group('decodeMoveTarget', () {
     test('新窗口/具体窗解码；无关 value 返回 null', () {
       expect(TabMoveMenu.decodeMoveTarget(TabMoveMenu.moveNew),

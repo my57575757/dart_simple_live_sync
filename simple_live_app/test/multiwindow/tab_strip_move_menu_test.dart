@@ -59,6 +59,27 @@ class _ControlPort implements SubWindowControlPort {
   }
 }
 
+/// 主窗手势测试只验证路由到 WOS.moveTabToWindow，不跑真实编排
+/// （真实编排由 window_move_orchestration_test 覆盖）。
+class _RecordingWos extends WindowOpenService {
+  _RecordingWos({required super.port, required super.store, required super.registry});
+
+  final List<(String, String)> moveCalls = [];
+
+  @override
+  Future<String?> moveTabToWindow({
+    required String tabId,
+    String? sourceWindowId,
+    required String target,
+    String? siteId,
+    String? roomId,
+    String? shareUrl,
+  }) async {
+    moveCalls.add((tabId, target));
+    return null;
+  }
+}
+
 const _home = Scaffold(
   body: Align(alignment: Alignment.topCenter, child: TabStrip()),
 );
@@ -213,6 +234,123 @@ void main() {
     expect(call.sourceWindowId, 'w1');
     expect(call.tabId, store.tabs.single.tabId);
     expect(call.target, WindowControlProtocol.targetNew);
+  });
+
+  testWidgets('子窗：纵向拖出条带松手 → mRequestMove(targetNew)',
+      (tester) async {
+    MultiWindowRole.isSubWindow = true;
+    putRoomAndTab();
+    final store = Get.find<TabStore>();
+    final control = _ControlPort()
+      ..result = WindowControlProtocol.encodeMoveResult(true);
+    Get.put<SubWindowControlService>(
+      SubWindowControlService(
+          windowId: 'w1', port: control, store: store),
+      permanent: true,
+    );
+    await tester.pumpWidget(_app());
+
+    // 纵向拖出条带 → 按住期间显示提示、不提前发起移动；松手后提示消失，
+    // 走与右键菜单完全相同的 requestMove(targetNew) 路径
+    final tabCenter = tester.getCenter(find.text('r1'));
+    final gesture = await tester.startGesture(
+      tabCenter,
+      kind: PointerDeviceKind.mouse,
+    );
+    await gesture.moveBy(const Offset(0, 30));
+    await tester.pump();
+    expect(find.text('松开鼠标，移入新窗口'), findsOneWidget);
+    expect(control.invokes, isEmpty, reason: '松手前不发起移动');
+    await gesture.up();
+    await tester.pump();
+    expect(find.text('松开鼠标，移入新窗口'), findsNothing);
+    expect(control.invokes.single.$1,
+        WindowControlProtocol.mRequestMove);
+    final call = WindowControlProtocol.decodeRequestMove(
+        control.invokes.single.$2)!;
+    expect(call.sourceWindowId, 'w1');
+    expect(call.tabId, store.tabs.single.tabId);
+    expect(call.target, WindowControlProtocol.targetNew);
+  });
+
+  testWidgets('主窗：纵向拖出 → WOS.moveTabToWindow(targetNew)',
+      (tester) async {
+    putRoomAndTab();
+    final store = Get.find<TabStore>();
+    final wos = _RecordingWos(
+      port: _IdlePort(),
+      store: store,
+      registry: WindowRegistry(mainWindowId: 'main'),
+    );
+    Get.put<WindowOpenService>(wos, permanent: true);
+    await tester.pumpWidget(_app());
+
+    final gesture = await tester.startGesture(
+      tester.getCenter(find.text('r1')),
+      kind: PointerDeviceKind.mouse,
+    );
+    await gesture.moveBy(const Offset(0, -25));
+    await tester.pump();
+    expect(find.text('松开鼠标，移入新窗口'), findsOneWidget);
+    await gesture.up();
+    await tester.pump();
+
+    expect(wos.moveCalls.single.$1, store.tabs.single.tabId);
+    expect(wos.moveCalls.single.$2, WindowControlProtocol.targetNew);
+  });
+
+  testWidgets('条带内横向滚动/小幅纵向移动、无服务拖出：均不误触发',
+      (tester) async {
+    MultiWindowRole.isSubWindow = true;
+    putRoomAndTab();
+    final store = Get.find<TabStore>();
+    final control = _ControlPort()
+      ..result = WindowControlProtocol.encodeMoveResult(
+        true,
+      );
+    Get.put<SubWindowControlService>(
+      SubWindowControlService(
+          windowId: 'w1', port: control, store: store),
+      permanent: true,
+    );
+    await tester.pumpWidget(_app());
+
+    final tabCenter = tester.getCenter(find.text('r1'));
+
+    // 横向 40px：ListView 滚动手势，不 arm
+    var g = await tester.startGesture(tabCenter,
+        kind: PointerDeviceKind.mouse);
+    await g.moveBy(const Offset(40, 0));
+    await tester.pump();
+    expect(find.text('松开鼠标，移入新窗口'), findsNothing);
+    await g.up();
+    await tester.pump();
+
+    // 纵向 10px（中央起手仍在条带 margin 内）：不 arm
+    g = await tester.startGesture(tabCenter,
+        kind: PointerDeviceKind.mouse);
+    await g.moveBy(const Offset(0, 10));
+    await tester.pump();
+    expect(find.text('松开鼠标，移入新窗口'), findsNothing);
+    await g.up();
+    await tester.pump();
+
+    expect(control.invokes, isEmpty);
+  });
+
+  testWidgets('未注册移动服务：拖出无提示无动作', (tester) async {
+    putRoomAndTab();
+    await tester.pumpWidget(_app());
+
+    final gesture = await tester.startGesture(
+      tester.getCenter(find.text('r1')),
+      kind: PointerDeviceKind.mouse,
+    );
+    await gesture.moveBy(const Offset(0, 30));
+    await tester.pump();
+    expect(find.text('松开鼠标，移入新窗口'), findsNothing);
+    await gesture.up();
+    await tester.pump();
   });
 
   testWidgets('子窗候选为空：toast 提示且不弹二级', (tester) async {

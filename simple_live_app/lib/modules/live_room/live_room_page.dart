@@ -1079,7 +1079,7 @@ class _SendDanmakuBarState extends State<SendDanmakuBar> {
 
   Future<void> submit(String v) async {
     final text = v.trim();
-    if (!roomController.danmakuLogined) {
+    if (!roomController.canOpenDanmakuInput) {
       roomController.showDanmakuLoginDialog();
       return;
     }

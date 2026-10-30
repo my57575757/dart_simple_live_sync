@@ -1,3 +1,4 @@
+import 'package:flutter/gestures.dart' show kTouchSlop;
 import 'package:flutter/material.dart';
 import 'package:simple_live_app/app/multiwindow/window/window_control_protocol.dart';
 
@@ -35,6 +36,23 @@ abstract final class TabMoveMenu {
           : MoveMenuHost.none;
     }
     return windowServiceRegistered ? MoveMenuHost.main : MoveMenuHost.none;
+  }
+
+  /// 标签拖出条带判定（拖拽成窗）：位移超过 [slop] 且指针越过当前标签
+  /// 纵向热区（上下各留 [margin] 容差）。只看纵向——横向拖动是 ListView
+  /// 滚动手势，停在条带内不触发。[slop] 与 TapGestureRecognizer 的
+  /// kTouchSlop 对齐：触发判定时 tap 已被取消，不会拖出成窗又激活标签。
+  static bool isPointerOutsideBand({
+    required Offset pointer,
+    required Offset start,
+    required double bandTop,
+    required double bandBottom,
+    double margin = 6,
+    double slop = kTouchSlop,
+  }) {
+    if ((pointer - start).distance < slop) return false;
+    return pointer.dy < bandTop - margin ||
+        pointer.dy > bandBottom + margin;
   }
 
   /// 一级菜单移动区：「移到新窗口」恒有；「移到其他窗口」仅在确有候选时。

@@ -102,9 +102,127 @@ class _HomeButton extends StatelessWidget {
   }
 }
 
-class _TabItem extends StatelessWidget {
+class _TabItem extends StatefulWidget {
   const _TabItem({required this.descriptor});
   final TabDescriptor descriptor;
+
+  @override
+  State<_TabItem> createState() => _TabItemState();
+}
+
+class _TabItemState extends State<_TabItem> {
+  TabDescriptor get descriptor => widget.descriptor;
+
+  // —— 拖出成窗手势：Listener 原始指针不与 ListView 横向滚动争手势竞技场 ——
+  int? _dragPointer;
+  Offset? _dragStart;
+  MoveMenuHost? _dragHost;
+  bool _dragArmed = false;
+  OverlayEntry? _dragHint;
+
+  MoveMenuHost _resolveHost() => TabMoveMenu.resolveMoveMenuHost(
+        isWindows: Platform.isWindows,
+        isSubWindow: MultiWindowRole.isSubWindow,
+        windowServiceRegistered: Get.isRegistered<WindowOpenService>(),
+        controlServiceRegistered:
+            Get.isRegistered<SubWindowControlService>(),
+      );
+
+  void _onPointerDown(PointerDownEvent event) {
+    // 中键关闭：Listener 比 GestureDetector 更直接
+    if (event.kind == PointerDeviceKind.mouse &&
+        event.buttons == kMiddleMouseButton) {
+      Get.find<TabStore>().close(descriptor.tabId);
+      return;
+    }
+    if (event.kind != PointerDeviceKind.mouse ||
+        event.buttons != kPrimaryMouseButton ||
+        _dragPointer != null) {
+      return;
+    }
+    final host = _resolveHost();
+    if (host == MoveMenuHost.none) return;
+    _dragPointer = event.pointer;
+    _dragStart = event.position;
+    _dragHost = host;
+    _dragArmed = false;
+  }
+
+  void _onPointerMove(PointerMoveEvent event) {
+    if (event.pointer != _dragPointer || _dragArmed) return;
+    final box = context.findRenderObject() as RenderBox?;
+    final start = _dragStart;
+    if (box == null || start == null || !box.attached) return;
+    final topLeft = box.localToGlobal(Offset.zero);
+    if (TabMoveMenu.isPointerOutsideBand(
+      pointer: event.position,
+      start: start,
+      bandTop: topLeft.dy,
+      bandBottom: topLeft.dy + box.size.height,
+    )) {
+      _dragArmed = true;
+      _showDragHint();
+    }
+  }
+
+  void _onPointerUp(PointerUpEvent event) {
+    if (event.pointer != _dragPointer) return;
+    final armed = _dragArmed;
+    final host = _dragHost;
+    _resetDrag();
+    if (armed && host != null) {
+      unawaited(_moveToNewWindow(host));
+    }
+  }
+
+  void _onPointerCancel(PointerCancelEvent event) {
+    if (event.pointer != _dragPointer) return;
+    _resetDrag();
+  }
+
+  void _resetDrag() {
+    _dragPointer = null;
+    _dragStart = null;
+    _dragHost = null;
+    _dragArmed = false;
+    _dragHint?.remove();
+    _dragHint = null;
+  }
+
+  /// 越过条带松开：复用右键菜单同一条编排路径（在途守卫/handoff/失败文案）。
+  Future<void> _moveToNewWindow(MoveMenuHost host) async {
+    if (host == MoveMenuHost.sub) {
+      await SubWindowControlService.instance.requestMove(
+        tab: descriptor,
+        target: WindowControlProtocol.targetNew,
+      );
+    } else if (host == MoveMenuHost.main) {
+      await WindowOpenService.instance.moveTabToWindow(
+        tabId: descriptor.tabId,
+        target: WindowControlProtocol.targetNew,
+      );
+    }
+  }
+
+  void _showDragHint() {
+    final box = context.findRenderObject() as RenderBox?;
+    final overlay = Overlay.maybeOf(context);
+    if (box == null || !box.attached || overlay == null) return;
+    final rect = box.localToGlobal(Offset.zero) & box.size;
+    _dragHint = OverlayEntry(
+      builder: (_) => IgnorePointer(
+        child: _DragTearOffHint(anchor: rect),
+      ),
+    );
+    overlay.insert(_dragHint!);
+  }
+
+  @override
+  void dispose() {
+    _dragHint?.remove();
+    _dragHint = null;
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -112,14 +230,11 @@ class _TabItem extends StatelessWidget {
     final registry = Get.find<RoomControllerRegistry>();
     final theme = Theme.of(context);
     final tabId = descriptor.tabId;
-    // 中键关闭：Listener 比 GestureDetector 更直接
     return Listener(
-      onPointerDown: (event) {
-        if (event.kind == PointerDeviceKind.mouse &&
-            event.buttons == kMiddleMouseButton) {
-          store.close(tabId);
-        }
-      },
+      onPointerDown: _onPointerDown,
+      onPointerMove: _onPointerMove,
+      onPointerUp: _onPointerUp,
+      onPointerCancel: _onPointerCancel,
       child: GestureDetector(
         onTap: () => store.activate(tabId),
         onSecondaryTapUp: (details) =>
@@ -320,5 +435,50 @@ class _TabItem extends StatelessWidget {
               : (r.shareUrl.isNotEmpty ? r.shareUrl : r.roomId),
         );
     }
+  }
+}
+
+/// 拖出条带后的松开提示：跟随被拖标签，标签靠近顶部时翻到下方显示。
+class _DragTearOffHint extends StatelessWidget {
+  const _DragTearOffHint({required this.anchor});
+
+  final Rect anchor;
+  static const double _width = 188;
+
+  @override
+  Widget build(BuildContext context) {
+    final screenWidth = MediaQuery.sizeOf(context).width;
+    final left = (anchor.center.dx - _width / 2)
+        .clamp(8.0, screenWidth - _width - 8.0)
+        .toDouble();
+    final top =
+        anchor.top > 48 ? anchor.top - 40 : anchor.bottom + 8;
+    // OverlayEntry 的直接子节点不处于 Stack 中，Positioned 必须自带 Stack
+    return Stack(
+      children: [
+        Positioned(
+          left: left,
+          top: top,
+          child: Material(
+            color: Colors.black87,
+            borderRadius: BorderRadius.circular(16),
+            child: const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.open_in_new, size: 14, color: Colors.white),
+                  SizedBox(width: 6),
+                  Text(
+                    '松开鼠标，移入新窗口',
+                    style: TextStyle(color: Colors.white, fontSize: 13),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
   }
 }
