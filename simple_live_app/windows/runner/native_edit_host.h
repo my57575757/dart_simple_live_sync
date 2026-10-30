@@ -11,14 +11,20 @@
 
 // 承载一个盖在 Flutter 视图上的无框单行输入框。
 //
-// 结构：WS_POPUP 顶层容器（owner 为宿主顶层窗口）+ 其中铺满的 EDIT 子窗口。
+// 结构：WS_POPUP 顶层容器（owner 为宿主顶层窗口）+ 其中铺满的 RichEdit
+// 5.0（msftedit.dll，RICHEDIT50W）子窗口。
 // 之所以不用 WS_CHILD 直接嵌进宿主窗口：Flutter 引擎视图走 DirectComposition
 // 合成，经典 Win32 兄弟窗口的 z-order 对它无效，GDI 子窗口会被引擎的下一帧
 // 盖掉（实测 EDIT 表面已正确绘制但屏幕上只闪一下）。被宿主窗口拥有的顶层
 // popup 位于所有子窗口（含 DComp 层）之上，才能稳定可见。
 //
-// EDIT 持有 ImmCreateContext 自建的专属 HIMC，与引擎窗口的 IMM32<->TSF
-// 会话隔离：引擎侧桥僵死（flutter/flutter #190042）后此窗口仍可正常组字。
+// 之所以不用 legacy EDIT：EDIT 的 TSF 编辑文档经 IMM32 桥管理，搜狗在
+// 切语言/跨窗后会概率性永久毒化（字母直通、候选窗不弹），焦点/HIMC/窗口
+// 重建均无法确定性恢复。RichEdit 自带现代 TSF edit context，从架构上绕开。
+//
+// RichEdit 另持 ImmCreateContext 自建的专属 HIMC 与引擎窗口隔离（引擎侧
+// IMM32<->TSF 桥僵死见 flutter/flutter #190042），并作为 DIRECT_KEY 指纹
+// 惰性重建兜底。
 //
 // 每个顶层窗口一个 host，按 popup 的 GWLP_USERDATA 寻址；不设进程单例。
 // owner 的移动/激活/销毁由 SetWindowSubclass 自行处理，宿主 MessageHandler
@@ -48,11 +54,18 @@ class NativeEditHost {
       const flutter::MethodCall<>& call,
       std::unique_ptr<flutter::MethodResult<>> result);
   bool EnsureCreated();
+  // 把字数上限、底色、文字颜色、字体、左右内边距应用到当前 RichEdit：
+  // 创建后与每次 Show（样式参数可能变化）时各调一次。
+  void ApplyEditStyle();
   // EDIT 获焦或输入语言切换后，detach/reattach 专属 HIMC 强制 IME 重走
   // activate/focus：跨进程切窗后 TSF 文档上下文可能半初始化（HIMC 打开态与
   // 关联句柄都正常，但搜狗字母直通、候选窗不弹）。
   // reason 仅写入常驻 IME 诊断日志，标识触发路径（setfocus/langchange）。
   void ReattachImeContext(const char* reason);
+  // EDIT 在英语布局下首次获焦后切到搜狗会导致 TSF 文档永久不可用：
+  // 销毁当前 EDIT 与专属 HIMC，原样新建一个 EDIT（保留文本/选区/位置），
+  // 使新窗口在搜狗活动期间首次获焦、TSF 重新建档。仅在 UI 线程调用。
+  void RecreateEditWindow(const char* reason);
   void Show(const flutter::EncodableMap& args);
   void Hide(bool notify_dart);
   void SetText(const std::string& utf8);
@@ -82,6 +95,16 @@ class NativeEditHost {
 
   bool shown_ = false;
   bool has_focus_ = false;
+  // 当前 EDIT 窗口的获焦次数：0=首次获焦（不 reattach，避免打断 TSF 对
+  // 可见新窗口的文档初始化）。
+  int edit_focus_seq_ = 0;
+  // 重建请求已 PostMessage、尚未执行：兼作「毒化键 WM_CHAR 吞除窗口」标志——
+  // DIRECT_KEY 的字母 WM_CHAR 在其 WM_KEYDOWN 之前已入队，靠它在 WM_CHAR
+  // 里识别并吞掉。
+  bool recreate_pending_ = false;
+  // EDIT 重建（直通惰性自愈）期间 popup 临时持有键盘焦点，其 WM_SETFOCUS
+  // 暂不把焦点抢回即将销毁的旧 EDIT。
+  bool healing_bounce_ = false;
   // popup 目标矩形（主窗口客户区物理像素坐标），供 OnOwnerMoved 重定位。
   int rect_x_ = 0;
   int rect_y_ = 0;

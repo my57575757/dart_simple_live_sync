@@ -38,6 +38,8 @@ import 'package:simple_live_app/services/follow_service.dart';
 import 'package:simple_live_app/services/guard_server_service.dart';
 import 'package:simple_live_app/services/bilibili_account_service.dart';
 import 'package:simple_live_app/services/background_audio_service.dart';
+import 'package:simple_live_app/services/bili_watch_service.dart';
+import 'package:simple_live_app/services/bili_watch_session.dart';
 import 'package:simple_live_app/services/douyu_account_service.dart';
 import 'package:simple_live_app/services/huya_account_service.dart';
 import 'package:simple_live_app/services/douyin_account_service.dart';
@@ -162,11 +164,6 @@ class LiveRoomController extends PlayerController
   Timer? _liveDurationTimer;
   // guard 心跳：观看期间每 20s 续租，服务端租约超时才退房
   Timer? _guardHeartbeatTimer;
-
-  // b 站观看心跳：进房后按服务端 next_interval 续拍，累计直播任务中心时长
-  Timer? _biliHeartbeatTimer;
-  int _biliHeartbeatInterval = 60;
-  bool _biliHeartbeatStopped = true;
 
   /// 抖音房间在场状态；bili/huya 保持原自动进入行为，不使用此状态
   final presence = RoomPresence.guest.obs;
@@ -838,54 +835,102 @@ class LiveRoomController extends PlayerController
     _guardHeartbeatTimer = null;
   }
 
-  /// 房间详情加载成功后启动 b 站观看心跳；仅 b 站登录房间生效。
-  /// 只要播放器在播放就续拍（含后台标签），暂停/未起播则跳过本拍延后重试。
-  void _startBiliHeartbeat() {
-    if (site.id != Constant.kBiliBili ||
-        !BiliBiliAccountService.instance.logined.value) {
-      return;
-    }
-    final roomId = detail.value?.roomId;
-    if (roomId == null || roomId.isEmpty) {
-      return;
-    }
-    _stopBiliHeartbeat();
-    _biliHeartbeatStopped = false;
-    _biliHeartbeatInterval = 60;
+  /// b 站观看会话（live-trace E/X 协议）：仅前台激活标签计时。
+  BiliWatchSession? _biliWatchSession;
+  StreamSubscription<bool>? _biliPlayingSub;
+  final List<Worker> _biliWatchWorkers = [];
 
-    Future<void> beat() async {
-      if (_biliHeartbeatStopped) return;
-      if (!player.state.playing) {
-        _biliHeartbeatTimer =
-            Timer(Duration(seconds: _biliHeartbeatInterval), beat);
-        return;
+  /// 房间详情加载成功后接线：b 站房间始终登记登录态监听；登录后建立
+  /// 观看会话。是否真正计时由四重 gate（已登录、直播中、播放器播放中、
+  /// 本标签为激活标签）驱动，状态翻转经 [BiliWatchSession] 幂等下发。
+  void _setupBiliWatch() {
+    if (site.id != Constant.kBiliBili) return;
+    // loadData 刷新/重入会再次到达本入口：先清旧监听。同房 start 会命中
+    // tracker 的 stop 防抖，会话延续而不是重发 E。
+    _disposeBiliWatch();
+    final account = BiliBiliAccountService.instance;
+    _biliWatchWorkers.add(ever(account.logined, (loggedIn) {
+      if (loggedIn && _biliWatchSession == null) {
+        _initBiliWatchSession();
       }
-      try {
-        final next = await (site.liveSite as BiliBiliSite).reportHeartbeat(
-          roomId: roomId,
-          lastInterval: _biliHeartbeatInterval,
-        );
-        if (next > 0) {
-          _biliHeartbeatInterval = next;
-        }
-      } catch (e) {
-        Log.logPrint("b站观看心跳失败: $e");
-      }
-      if (!_biliHeartbeatStopped) {
-        _biliHeartbeatTimer =
-            Timer(Duration(seconds: _biliHeartbeatInterval), beat);
-      }
+    }));
+    if (account.logined.value) {
+      _initBiliWatchSession();
     }
-
-    // 首拍延后 3s，等自动起播完成以通过 playing 判定
-    _biliHeartbeatTimer = Timer(const Duration(seconds: 3), beat);
   }
 
-  void _stopBiliHeartbeat() {
-    _biliHeartbeatStopped = true;
-    _biliHeartbeatTimer?.cancel();
-    _biliHeartbeatTimer = null;
+  void _initBiliWatchSession() {
+    final roomIdInt = int.tryParse(detail.value?.roomId ?? '');
+    if (roomIdInt == null || _biliWatchSession != null) return;
+
+    final service = BiliWatchService.instance;
+    final session = BiliWatchSession(
+      roomId: roomIdInt,
+      onStart: (id) => unawaited(service.start(id)),
+      onStop: service.stop,
+    );
+    _biliWatchSession = session;
+    _biliPlayingSub =
+        (biliWatchPlayingStreamOverride ?? player.stream.playing).listen((_) {
+      _refreshBiliWatch();
+    });
+    _biliWatchWorkers
+      ..add(ever(liveStatus, (_) => _refreshBiliWatch()))
+      ..add(ever(BiliBiliAccountService.instance.logined,
+          (_) => _refreshBiliWatch()));
+    if (tabId != null && Get.isRegistered<TabStore>()) {
+      _biliWatchWorkers
+          .add(ever(Get.find<TabStore>().activeTabId, (_) => _refreshBiliWatch()));
+    }
+    _refreshBiliWatch();
   }
+
+  /// 本标签是否应计时：多标签模式下只有激活标签计数；Android/路由模式
+  /// （tabId==null）或无 TabStore（测试）恒为前台。
+  bool get _biliWatchTabActive =>
+      tabId == null ||
+      !Get.isRegistered<TabStore>() ||
+      Get.find<TabStore>().activeTabId.value == tabId;
+
+  void _refreshBiliWatch() {
+    final session = _biliWatchSession;
+    if (session == null) return;
+    final playing = biliWatchPlayingOverride ?? player.state.playing;
+    session.evaluate(
+      BiliBiliAccountService.instance.logined.value &&
+          liveStatus.value &&
+          playing &&
+          _biliWatchTabActive,
+    );
+  }
+
+  void _disposeBiliWatch() {
+    _biliPlayingSub?.cancel();
+    _biliPlayingSub = null;
+    for (final worker in _biliWatchWorkers) {
+      worker.dispose();
+    }
+    _biliWatchWorkers.clear();
+    _biliWatchSession?.dispose();
+    _biliWatchSession = null;
+  }
+
+  @visibleForTesting
+  bool? biliWatchPlayingOverride;
+
+  /// 测试注入播放态流，避免触发 media_kit 原生 Player 构造
+  @visibleForTesting
+  Stream<bool>? biliWatchPlayingStreamOverride;
+
+  @visibleForTesting
+  bool get biliWatchRunningForTesting =>
+      _biliWatchSession?.isRunning ?? false;
+
+  @visibleForTesting
+  void initBiliWatchForTesting() => _setupBiliWatch();
+
+  @visibleForTesting
+  void refreshBiliWatchForTesting() => _refreshBiliWatch();
 
   /// 退出直播间时让服务端页面回到首页；best-effort，失败只记日志
   Future<void> _exitGuardRoom() async {
@@ -2004,7 +2049,7 @@ class LiveRoomController extends PlayerController
         addSysMsg("当前主播未开播，不连接弹幕服务器");
       }
       startLiveDurationTimer(); // 启动开播时长定时器
-      _startBiliHeartbeat(); // b 站登录房间启动观看心跳（任务中心时长）
+      _setupBiliWatch(); // b 站登录房间观看心跳（任务中心时长，仅前台标签）
     } on DouyinGuestVerifyRequired catch (e) {
       Log.logPrint(e);
       if (guestVerifyReplays >= 1) {
@@ -2963,7 +3008,7 @@ ${error is Error ? (error as Error).stackTrace : ""}''');
         .setStopRequestedHandler(tabId ?? 'android', null);
     danmakuController = null;
     _liveDurationTimer?.cancel();
-    _stopBiliHeartbeat();
+    _disposeBiliWatch();
     super.onClose();
   }
 

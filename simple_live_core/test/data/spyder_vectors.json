@@ -1,0 +1,50 @@
+[
+  {
+    "name": "x_seq1_room5050",
+    "reportJson": "{\"id\":\"[6,236,1,5050]\",\"device\":\"[\\\"AUTO3317901687841255\\\",\\\"bfcdd5fb-649f-4057-bc46-4e32bc0dfee4\\\"]\",\"ruid\":433351,\"ets\":1793287209,\"benchmark\":\"seacasdgyijfhofiuxoannn\",\"time\":60,\"ts\":1793287269733,\"ua\":\"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36\",\"trackid\":\"-99998\"}",
+    "ruleJson": "[2,5,1,4]",
+    "rule": [
+      2,
+      5,
+      1,
+      4
+    ],
+    "s": "250bc74ce2e86db94609adeccc835ac8853a4412340c7f371822351041edf1e37ee43ca1a54e1e4abff8df79f78c05795da563fcee1e7e85bbc32cb083c33c5e"
+  },
+  {
+    "name": "x_time30",
+    "reportJson": "{\"id\":\"[6,236,1,5050]\",\"device\":\"[\\\"AUTO3317901687841255\\\",\\\"bfcdd5fb-649f-4057-bc46-4e32bc0dfee4\\\"]\",\"ruid\":433351,\"ets\":1793287209,\"benchmark\":\"seacasdgyijfhofiuxoannn\",\"time\":30,\"ts\":1793287269733,\"ua\":\"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36\",\"trackid\":\"-99998\"}",
+    "ruleJson": "[2,5,1,4]",
+    "rule": [
+      2,
+      5,
+      1,
+      4
+    ],
+    "s": "3cb6b9875735f4c79f27da6d47f907ac58c30a9786217e2ca9f5fd8153b51b8d30a32f5cf68e339c42c5cfe127bc7787edd7ae5a9ab39fc74079e6bb5ff49405"
+  },
+  {
+    "name": "x_utf8_ua",
+    "reportJson": "{\"id\":\"[6,236,1,5050]\",\"device\":\"[\\\"AUTO3317901687841255\\\",\\\"bfcdd5fb-649f-4057-bc46-4e32bc0dfee4\\\"]\",\"ruid\":433351,\"ets\":1793287209,\"benchmark\":\"seacasdgyijfhofiuxoannn\",\"time\":60,\"ts\":1793287269734,\"ua\":\"Mozilla/5.0 中文测试 Chrome/156\",\"trackid\":\"-99998\"}",
+    "ruleJson": "[2,5,1,4]",
+    "rule": [
+      2,
+      5,
+      1,
+      4
+    ],
+    "s": "55f7440636de5e64e44911c85b96a5573f97ececfd5507ac47d995d373a6b35d6b84031b87457a95f9b7d4651b25b6f845edb3ae393677c96a617a4d6bbeabee"
+  },
+  {
+    "name": "x_room1747",
+    "reportJson": "{\"id\":\"[2,654,43,1747542515]\",\"device\":\"[\\\"AUTO3317901687841255\\\",\\\"bfcdd5fb-649f-4057-bc46-4e32bc0dfee4\\\"]\",\"ruid\":27598077,\"ets\":1793287209,\"benchmark\":\"seacasdgyijfhofiuxoannn\",\"time\":60,\"ts\":1793287269733,\"ua\":\"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36\",\"trackid\":\"-99998\"}",
+    "ruleJson": "[2,5,1,4]",
+    "rule": [
+      2,
+      5,
+      1,
+      4
+    ],
+    "s": "5076161437414cbc17322c70c4d473f0f08d848381f76738ec221d49a40934fcf9f237369e8145f9bccd00e1aec2c81fb8a2e1acf2fa3a71bc8d068932f601b7"
+  }
+]

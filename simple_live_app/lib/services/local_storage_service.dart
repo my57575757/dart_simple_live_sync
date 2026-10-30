@@ -125,6 +125,12 @@ class LocalStorageService extends GetxService {
   /// 哔哩哔哩cookie
   static const String kBilibiliCookie = "BilibiliCookie";
 
+  /// b 站观看心跳（E/X 协议）设备标识 LIVE_BUVID，本地生成后持久化
+  static const String kBiliWatchBuvid = "BiliWatchBuvid";
+
+  /// b 站观看心跳设备 uuid，持久化以模拟同一设备
+  static const String kBiliWatchDeviceId = "BiliWatchDeviceId";
+
   /// 抖音cookie
   static const String kDouyinCookie = "DouyinCookie";
 

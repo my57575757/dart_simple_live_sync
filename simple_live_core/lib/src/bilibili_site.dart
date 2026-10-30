@@ -1,6 +1,9 @@
 import 'dart:convert';
+import 'dart:math';
 
 import 'package:crypto/crypto.dart';
+import 'package:simple_live_core/src/common/bili_wbi.dart';
+import 'package:simple_live_core/src/common/bili_watch_tracker.dart';
 import 'package:simple_live_core/src/common/convert_helper.dart';
 import 'package:simple_live_core/src/common/http_client.dart';
 import 'package:simple_live_core/src/danmaku/bilibili_danmaku.dart';
@@ -16,7 +19,7 @@ import 'package:simple_live_core/src/model/live_room_detail.dart';
 import 'package:simple_live_core/src/model/live_play_quality.dart';
 import 'package:simple_live_core/src/model/live_category_result.dart';
 
-class BiliBiliSite implements LiveSite {
+class BiliBiliSite implements LiveSite, BiliWatchHttp {
   @override
   String id = "bilibili";
 
@@ -397,23 +400,85 @@ class BiliBiliSite implements LiveSite {
     return (asT<int?>(result["data"]["live_status"]) ?? 0) == 1;
   }
 
-  /// web 观看心跳：返回服务端下发的下次心跳间隔（秒）。带登录 cookie 时
-  /// 才会计入直播任务中心的观看时长。
-  Future<int> reportHeartbeat(
-      {required String roomId, int lastInterval = 60}) async {
-    // web 端观看心跳：hb 为 base64("上次next_interval|真实房间号|1|0")，pf=web；
-    // 带登录 cookie 时才会计入直播任务中心的观看时长。
-    final hb = base64Encode(utf8.encode("$lastInterval|$roomId|1|0"));
+  /// 登录 cookie 中的 bili_jct（web 端 csrf）；未登录为空串。
+  String get biliJct =>
+      RegExp(r"bili_jct=([^;]+)").firstMatch(cookie)?.group(1) ?? "";
+
+  /// 登录 cookie 中的 LIVE_BUVID（直播设备标识）；通常不存在，
+  /// 该值由直播页 JS 在本地按 AUTO 算法生成后自报给服务端。
+  String get liveBuvid =>
+      RegExp(r"LIVE_BUVID=([^;]+)").firstMatch(cookie)?.group(1) ?? "";
+
+  /// 生成 LIVE_BUVID：AUTO + 0..99 + 13 位毫秒时间戳 + 0..9。
+  /// 官方直播页 JS 的本地生成算法，服务端接受客户端自报并落库关联；
+  /// 生成方应持久化复用，模拟同一设备。
+  static String generateLiveBuvid({DateTime? now, Random? random}) {
+    final rnd = random ?? Random();
+    final timestamp =
+        (now ?? DateTime.now()).millisecondsSinceEpoch.toString();
+    return "AUTO${rnd.nextInt(100)}$timestamp${rnd.nextInt(10)}";
+  }
+
+  @override
+  Future<BiliRoomInfo> getRoomBaseInfo(int roomId) async {
     final result = await HttpClient.instance.getJson(
-      "https://live-trace.bilibili.com/xlive/rdata-interface/v1/heartbeat/webHeartBeat",
+      "https://api.live.bilibili.com/xlive/web-room/v1/index/getRoomBaseInfo",
       queryParameters: {
-        "hb": hb,
-        "pf": "web",
+        "room_ids": roomId.toString(),
+        "req_biz": "web_heartbeat",
       },
       header: await getHeader(),
     );
-    return asT<num?>(result["data"]?["next_interval"])?.toInt() ??
-        lastInterval;
+    final byRoom = (result["data"]?["by_room_ids"] as Map?) ?? const {};
+    if (asT<int?>(result["code"]) != 0 || byRoom.isEmpty) {
+      throw StateError("房间信息请求失败");
+    }
+    final item = byRoom.values.first as Map;
+    return BiliRoomInfo(
+      roomId: asT<num?>(item["room_id"])!.toInt(),
+      parentAreaId: asT<num?>(item["parent_area_id"])!.toInt(),
+      areaId: asT<num?>(item["area_id"])!.toInt(),
+      ruid: asT<num?>(item["uid"])!.toInt(),
+    );
+  }
+
+  @override
+  Future<BiliWatchResponse> postEnterRoom(Map<String, dynamic> params) =>
+      _postWatchTrace(
+        "https://live-trace.bilibili.com/xlive/data-interface/v1/x25Kn/E",
+        params,
+      );
+
+  @override
+  Future<BiliWatchResponse> postHeartBeat(Map<String, dynamic> params) =>
+      _postWatchTrace(
+        "https://live-trace.bilibili.com/xlive/data-interface/v1/x25Kn/X",
+        params,
+      );
+
+  Future<BiliWatchResponse> _postWatchTrace(
+    String url,
+    Map<String, dynamic> params,
+  ) async {
+    // 官方 axios 拦截器顺序：业务 params -> web_location -> csrf -> wbi(w_rid,wts)
+    final query = <String, dynamic>{
+      ...params,
+      "web_location": "444.8",
+      "csrf": biliJct,
+    };
+    final (imgKey, subKey) = await getWbiKeys();
+    final signed = BiliWbi.sign(query, imgKey: imgKey, subKey: subKey);
+    query["w_rid"] = signed.wRid;
+    query["wts"] = signed.wts;
+
+    final result = await HttpClient.instance.postJson(
+      url,
+      queryParameters: query,
+      // 官方 E/X 为参数全在 query、body 空（content-length: 0）
+      data: "",
+      header: await getHeader(),
+    );
+    return BiliWatchResponse.fromJson(result as Map<String, dynamic>);
   }
 
   @override
@@ -484,72 +549,7 @@ class BiliBiliSite implements LiveSite {
 
   static String kImgKey = '';
   static String kSubKey = '';
-  static const List<int> mixinKeyEncTab = [
-    46,
-    47,
-    18,
-    2,
-    53,
-    8,
-    23,
-    32,
-    15,
-    50,
-    10,
-    31,
-    58,
-    3,
-    45,
-    35,
-    27,
-    43,
-    5,
-    49,
-    33,
-    9,
-    42,
-    19,
-    29,
-    28,
-    14,
-    39,
-    12,
-    38,
-    41,
-    13,
-    37,
-    48,
-    7,
-    16,
-    24,
-    55,
-    40,
-    61,
-    26,
-    17,
-    0,
-    1,
-    60,
-    51,
-    30,
-    4,
-    22,
-    25,
-    54,
-    21,
-    56,
-    59,
-    6,
-    63,
-    57,
-    62,
-    11,
-    36,
-    20,
-    34,
-    44,
-    52
-  ];
+
   Future<(String, String)> getWbiKeys() async {
     if (kImgKey.isNotEmpty && kSubKey.isNotEmpty) {
       return (kImgKey, kSubKey);
@@ -573,7 +573,7 @@ class BiliBiliSite implements LiveSite {
 
   String getMixinKey(String origin) {
     // 对 imgKey 和 subKey 进行字符顺序打乱编码
-    return mixinKeyEncTab.fold("", (s, i) => s + origin[i]).substring(0, 32);
+    return BiliWbi.mixinKeyEncTab.fold("", (s, i) => s + origin[i]).substring(0, 32);
   }
 
   Future<Map<String, String>> getWbiSign(String url) async {

@@ -1,5 +1,5 @@
 name: simple_live_app
-version: 1.12.76+11276
+version: 1.12.77+11277
 publish_to: none
 description: "Simple Live APP"
 environment:
@@ -29,6 +29,7 @@ dependencies:
   webdav_client: ^1.2.2 # WebDAV
   archive: ^4.0.7 #文件压缩
   crypto: ^3.0.7
+  wasm_run_flutter: ^0.2.0+1 # B 站 spyder.wasm 内嵌执行（E/X 心跳签名）
 
   #Widget
   flutter_staggered_grid_view: ^0.7.0 #瀑布流/GridView
@@ -95,6 +96,14 @@ dev_dependencies:
   flutter_inappwebview_windows: ^0.6.0
   flutter_inappwebview_platform_interface: ^1.3.0
 
+# wasm_run 0.2.x 的预编译动态库按 flutter_rust_bridge 2.12.0 构建，
+# FRB 强制 codegen/runtime 版本精确一致，需钉死小版本。
+dependency_overrides:
+  # 0.1.0 将 Flutter AOT 的 linkingEnabled 误判为 static，release 会请求未发布的 static 预编译库。
+  build_rust_binaries:
+    path: third_party/build_rust_binaries
+  flutter_rust_bridge: 2.12.0
+
 flutter_launcher_icons:
   android: true
   ios: true
@@ -110,3 +119,4 @@ flutter:
     - assets/images/
     - assets/icons/
     - assets/lotties/
+    - assets/wasm/
