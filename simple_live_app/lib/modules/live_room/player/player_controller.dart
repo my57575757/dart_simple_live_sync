@@ -986,27 +986,50 @@ class PlayerController extends BaseController
     );
   }
 
+  /// player 释放的共享 Future。GetX 删除控制器时 [onClose] 是 fire-and-forget
+  /// 的 async，框架不 await；多窗口关闭时子引擎随 DestroyWindow 同步销毁，若
+  /// media_kit 的 player.dispose（其 render context 释放通道 + 5 秒后
+  /// mpv_terminate_destroy）仍在后台跑，libmpv 内部渲染线程会在旧 handle 释放
+  /// 后回调，命中野指针并带走整个进程。关闭链在删控制器/关窗前显式
+  /// await [ensurePlayerReleased]，[onClose] 复用同一 Future，保证只释放一次。
+  Future<void>? _playerReleaseFuture;
+
+  /// 在窗口/引擎销毁前有序释放播放器（停流→系统状态→player.dispose）。
+  /// 幂等：重复调用返回同一 Future。
+  Future<void> ensurePlayerReleased() {
+    return _playerReleaseFuture ??= _releasePlayer();
+  }
+
+  Future<void> _releasePlayer() async {
+    try {
+      if (smallWindowState.value) {
+        exitSmallWindow();
+      } else if (!Platform.isAndroid &&
+          !Platform.isIOS &&
+          inWindowFullScreenState.value) {
+        // 沉浸态中标签被关闭，恢复 OS 标题栏，避免无标题栏残留
+        exitInWindowFullScreen();
+      } else if (!Platform.isAndroid &&
+          !Platform.isIOS &&
+          fullScreenState.value) {
+        // 全屏中标签被关闭（×/中键/右键/侧键/定时关闭）后控制器直接消失，
+        // 无人恢复 OS 窗口状态，这里复用 exitFull 成套恢复，避免无标题栏/最大化残留
+        exitFull();
+      }
+      disposeStream();
+      disposeDanmakuController();
+      await resetSystem();
+      await player.dispose();
+    } catch (e) {
+      // 关停在强制关窗路径上被 await：任何异常都不能中断窗口销毁
+      Log.w('播放器释放异常（忽略，继续关闭）: $e');
+    }
+  }
+
   @override
   void onClose() async {
     Log.w("播放器关闭");
-    if (smallWindowState.value) {
-      exitSmallWindow();
-    } else if (!Platform.isAndroid &&
-        !Platform.isIOS &&
-        inWindowFullScreenState.value) {
-      // 沉浸态中标签被关闭，恢复 OS 标题栏，避免无标题栏残留
-      exitInWindowFullScreen();
-    } else if (!Platform.isAndroid &&
-        !Platform.isIOS &&
-        fullScreenState.value) {
-      // 全屏中标签被关闭（×/中键/右键/侧键/定时关闭）后控制器直接消失，
-      // 无人恢复 OS 窗口状态，这里复用 exitFull 成套恢复，避免无标题栏/最大化残留
-      exitFull();
-    }
-    disposeStream();
-    disposeDanmakuController();
-    await resetSystem();
-    await player.dispose();
+    await ensurePlayerReleased();
     super.onClose();
   }
 }

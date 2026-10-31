@@ -236,7 +236,7 @@ void main() {
     expect(call.target, WindowControlProtocol.targetNew);
   });
 
-  testWidgets('子窗：纵向拖出条带松手 → mRequestMove(targetNew)',
+  testWidgets('子窗：纵向拖出 → 落点浮层（主窗口/新窗口），浮层外松手取消',
       (tester) async {
     MultiWindowRole.isSubWindow = true;
     putRoomAndTab();
@@ -250,8 +250,7 @@ void main() {
     );
     await tester.pumpWidget(_app());
 
-    // 纵向拖出条带 → 按住期间显示提示、不提前发起移动；松手后提示消失，
-    // 走与右键菜单完全相同的 requestMove(targetNew) 路径
+    // 拖出后不再走黑底"直接新窗"提示，而是弹落点浮层；松手前不发起移动
     final tabCenter = tester.getCenter(find.text('r1'));
     final gesture = await tester.startGesture(
       tabCenter,
@@ -259,11 +258,79 @@ void main() {
     );
     await gesture.moveBy(const Offset(0, 30));
     await tester.pump();
-    expect(find.text('松开鼠标，移入新窗口'), findsOneWidget);
+    expect(find.text('主窗口'), findsOneWidget);
+    expect(find.text('新窗口'), findsOneWidget);
+    expect(find.text('松开鼠标，移入新窗口'), findsNothing,
+        reason: '子窗改弹落点浮层，不再使用黑底直接新窗提示');
     expect(control.invokes, isEmpty, reason: '松手前不发起移动');
+
     await gesture.up();
     await tester.pump();
-    expect(find.text('松开鼠标，移入新窗口'), findsNothing);
+    expect(find.text('主窗口'), findsNothing, reason: '松手后浮层移除');
+    expect(control.invokes, isEmpty, reason: '未压中任何落点即松手：取消迁移');
+  });
+
+  testWidgets('子窗：拖出后压中「主窗口」松手 → mRequestMove(targetMain)',
+      (tester) async {
+    MultiWindowRole.isSubWindow = true;
+    putRoomAndTab();
+    final store = Get.find<TabStore>();
+    final control = _ControlPort()
+      ..result = WindowControlProtocol.encodeMoveResult(true);
+    Get.put<SubWindowControlService>(
+      SubWindowControlService(
+          windowId: 'w1', port: control, store: store),
+      permanent: true,
+    );
+    await tester.pumpWidget(_app());
+
+    final tabCenter = tester.getCenter(find.text('r1'));
+    final gesture = await tester.startGesture(
+      tabCenter,
+      kind: PointerDeviceKind.mouse,
+    );
+    await gesture.moveBy(const Offset(0, 30));
+    await tester.pump();
+    await gesture.moveTo(tester.getCenter(find.text('主窗口')));
+    await tester.pump();
+    await gesture.up();
+    await tester.pump();
+
+    expect(control.invokes.single.$1,
+        WindowControlProtocol.mRequestMove);
+    final call = WindowControlProtocol.decodeRequestMove(
+        control.invokes.single.$2)!;
+    expect(call.sourceWindowId, 'w1');
+    expect(call.tabId, store.tabs.single.tabId);
+    expect(call.target, WindowControlProtocol.targetMain);
+  });
+
+  testWidgets('子窗：拖出后压中「新窗口」松手 → mRequestMove(targetNew)',
+      (tester) async {
+    MultiWindowRole.isSubWindow = true;
+    putRoomAndTab();
+    final store = Get.find<TabStore>();
+    final control = _ControlPort()
+      ..result = WindowControlProtocol.encodeMoveResult(true);
+    Get.put<SubWindowControlService>(
+      SubWindowControlService(
+          windowId: 'w1', port: control, store: store),
+      permanent: true,
+    );
+    await tester.pumpWidget(_app());
+
+    final tabCenter = tester.getCenter(find.text('r1'));
+    final gesture = await tester.startGesture(
+      tabCenter,
+      kind: PointerDeviceKind.mouse,
+    );
+    await gesture.moveBy(const Offset(0, 30));
+    await tester.pump();
+    await gesture.moveTo(tester.getCenter(find.text('新窗口')));
+    await tester.pump();
+    await gesture.up();
+    await tester.pump();
+
     expect(control.invokes.single.$1,
         WindowControlProtocol.mRequestMove);
     final call = WindowControlProtocol.decodeRequestMove(

@@ -262,6 +262,28 @@ class LiveRoomController extends PlayerController
     return true;
   }
 
+  /// 子窗非抖音标签（bili/huya/douyu/twitch）首次进房：向主端登记死亡
+  /// 对账索引（onInit 仅一次）。主端对非抖音 register 只建索引并回推一次
+  /// 借用凭据——douyu/bili/huya 得 cookie、twitch 得三键 creds；douyu/
+  /// twitch 经 onCredentialsApplied 重启 liveDanmaku，bili/huya 则凭该索引
+  /// 通过 pr_guard_send 归属门走主窗 Guard 代理。只登记索引、不挂 client。
+  /// 抖音的 register 已内置于 [bindSubWindowPresence]，此处站点门排除以防
+  /// 同标签双重登记；切房重建走 refreshRemoteTab，不经本方法。
+  void registerSubWindowBorrowedTab() {
+    if (!_isSubWindow ||
+        tabId == null ||
+        site.id == Constant.kDouyin ||
+        !Get.isRegistered<IpcPresenceCoordinator>()) {
+      return;
+    }
+    unawaited(Get.find<IpcPresenceCoordinator>().registerRemoteTab(
+      tabId: tabId!,
+      siteId: site.id,
+      roomId: roomId,
+      shareUrl: shareUrl,
+    ));
+  }
+
   /// 子窗 bili/huya 写动作（弹幕/点赞）走主窗 GuardServerService 代理：
   /// 无仲裁语义，只 send 不 claim/release。douyu/twitch 走 liveDanmaku
   /// （凭据借用后重启连接），不挂 write client。
@@ -376,8 +398,10 @@ class LiveRoomController extends PlayerController
       await player.pause();
     });
 
-    // 子引擎抖音标签绑 IPC presence 通道；bili/huya 子窗绑 write 代理；
-    // 主窗/Android 维持本地网关直连
+    // 非抖音子窗标签先登记死亡对账索引（主端回推借用凭据 + 放行 guard 归属
+    // 门）；抖音标签的登记内置于 bindSubWindowPresence。随后按站点挂通道：
+    // 抖音 presence claim、bili/huya write 代理，主窗/Android 本地网关直连
+    registerSubWindowBorrowedTab();
     if (!bindSubWindowPresence()) {
       if (!bindSubWindowWriteClient()) {
         final gateway = _resolveGateway();

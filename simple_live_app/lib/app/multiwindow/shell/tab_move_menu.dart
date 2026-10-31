@@ -55,6 +55,64 @@ abstract final class TabMoveMenu {
         pointer.dy > bandBottom + margin;
   }
 
+  // ---- 拖出落点浮层（子窗：拖回主窗口 / 去新窗口）----
+  // 命中全程在本窗 overlay 内完成：跨引擎收不到窗口外的指针事件，
+  // desktop_multi_window 也无窗口命中 API，落点必须画在窗内。
+  static const double dropMenuWidth = 208;
+  static const double dropItemHeight = 40;
+  static const double dropMenuPadding = 6;
+  static const double dropGap = 8;
+  static const double dropScreenMargin = 8;
+
+  /// 子窗落点顺序：主窗口第一块（拖回是主诉求，离标签最近）。
+  static const List<String> subDropTargets = [
+    WindowControlProtocol.targetMain,
+    WindowControlProtocol.targetNew,
+  ];
+
+  /// 计算落点浮层的外框与各落点命中矩形（窗口内逻辑坐标）。
+  /// 默认落在标签正下方，下方放不下翻上方；水平 clamp 不越窗。
+  static DropOverlayGeometry layoutDropOverlay({
+    required Rect anchor,
+    required Size viewSize,
+    List<String>? targets,
+  }) {
+    final list = targets ?? subDropTargets;
+    final height = dropMenuPadding * 2 + list.length * dropItemHeight;
+    final maxLeft = viewSize.width - dropMenuWidth - dropScreenMargin;
+    final left = maxLeft < dropScreenMargin
+        ? dropScreenMargin
+        : anchor.left.clamp(dropScreenMargin, maxLeft).toDouble();
+    double top;
+    final belowTop = anchor.bottom + dropGap;
+    if (belowTop + height <= viewSize.height - dropScreenMargin) {
+      top = belowTop;
+    } else {
+      top = anchor.top - dropGap - height;
+    }
+    final maxTop = viewSize.height - height - dropScreenMargin;
+    if (maxTop < dropScreenMargin) {
+      top = dropScreenMargin;
+    } else {
+      top = top.clamp(dropScreenMargin, maxTop).toDouble();
+    }
+    return DropOverlayGeometry(
+      outer: Rect.fromLTWH(left, top, dropMenuWidth, height),
+      targets: [
+        for (var i = 0; i < list.length; i++)
+          DropTargetGeometry(
+            target: list[i],
+            rect: Rect.fromLTWH(
+              left + dropMenuPadding,
+              top + dropMenuPadding + i * dropItemHeight,
+              dropMenuWidth - dropMenuPadding * 2,
+              dropItemHeight,
+            ),
+          ),
+      ],
+    );
+  }
+
   /// 一级菜单移动区：「移到新窗口」恒有；「移到其他窗口」仅在确有候选时。
   /// 子窗候选需异步拉取，调用方恒传 true（点击后空列表改 toast）。
   static List<PopupMenuEntry<String>> buildMoveEntries({
@@ -87,4 +145,28 @@ abstract final class TabMoveMenu {
             child: Text(entry.label),
           ),
       ];
+}
+
+/// 拖出落点浮层布局结果：外框（绘制用）与各目标命中矩形。
+class DropOverlayGeometry {
+  const DropOverlayGeometry({required this.outer, required this.targets});
+
+  final Rect outer;
+  final List<DropTargetGeometry> targets;
+
+  /// 压中哪块返回其 target 线值；间隙/浮层外返回 null（松手即取消）。
+  String? hitTest(Offset pointer) {
+    for (final t in targets) {
+      if (t.rect.contains(pointer)) return t.target;
+    }
+    return null;
+  }
+}
+
+class DropTargetGeometry {
+  const DropTargetGeometry({required this.target, required this.rect});
+
+  /// WindowControlProtocol target 线值（稳定标识，呈现文案由 widget 派生）。
+  final String target;
+  final Rect rect;
 }

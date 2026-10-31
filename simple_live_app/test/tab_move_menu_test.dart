@@ -155,6 +155,79 @@ void main() {
     });
   });
 
+  group('layoutDropOverlay（子窗拖出落点浮层）', () {
+    // 子窗最小 360x400；浮层宽 208、两块各 40 高、上下内边距 6 → 总高 92
+    const view = Size(1200, 720);
+    // 标签锚：(100,100)-(280,138)
+    const anchor = Rect.fromLTWH(100, 100, 180, 38);
+
+    test('默认落在标签正下方；主窗口在第一块、新窗口第二块，互不重叠且在浮层内',
+        () {
+      final g = TabMoveMenu.layoutDropOverlay(
+        anchor: anchor,
+        viewSize: view,
+      );
+      expect(g.outer.left, 100, reason: '左缘对齐标签');
+      expect(g.outer.top, 146, reason: '标签底 138 + 间距 8');
+      expect(g.targets.map((t) => t.target), [
+        WindowControlProtocol.targetMain,
+        WindowControlProtocol.targetNew,
+      ]);
+      final main = g.targets[0].rect;
+      final fresh = g.targets[1].rect;
+      expect(main.top, 146 + 6, reason: '浮层内边距 6');
+      expect(fresh.top, main.bottom, reason: '两块紧贴排布');
+      expect(main.bottom, 146 + 46);
+      expect(fresh.bottom, 146 + 86, reason: '总高 92 = 12+80');
+      expect(main.left, fresh.left);
+      expect(main.width, 208 - 12);
+      expect(main.overlaps(fresh), isFalse);
+      expect(main.left >= g.outer.left && fresh.right <= g.outer.right, isTrue);
+    });
+
+    test('贴右缘时左缘 clamp 进窗口，浮层整体不越界', () {
+      final g = TabMoveMenu.layoutDropOverlay(
+        anchor: const Rect.fromLTWH(1100, 100, 180, 38),
+        viewSize: view,
+      );
+      expect(g.outer.left, 1200 - 208 - 8);
+      expect(g.outer.right, 1200 - 8);
+    });
+
+    test('下方空间不足时翻到标签上方', () {
+      // view 高 200：下方 146+92=238 > 192 → 上方 anchor.top-8-92=0，
+      // 再被屏边 clamp 到 8（底边 100 贴住标签上沿）
+      final g = TabMoveMenu.layoutDropOverlay(
+        anchor: anchor,
+        viewSize: const Size(1200, 200),
+      );
+      expect(g.outer.top, 8);
+      expect(g.outer.bottom, 100);
+    });
+
+    test('hitTest：压中哪块返回其稳定 target；间隙/浮层外返回 null', () {
+      final g = TabMoveMenu.layoutDropOverlay(anchor: anchor, viewSize: view);
+      final mainCenter = g.targets[0].rect.center;
+      final newCenter = g.targets[1].rect.center;
+      expect(g.hitTest(mainCenter), WindowControlProtocol.targetMain);
+      expect(g.hitTest(newCenter), WindowControlProtocol.targetNew);
+      // 两块之间没有间隙（紧贴），改用浮层左内边距空白与浮层外侧
+      expect(g.hitTest(Offset(g.outer.left + 2, g.outer.top + 2)), isNull,
+          reason: '浮层 padding 区不是落点');
+      expect(g.hitTest(const Offset(10, 10)), isNull);
+    });
+
+    test('比浮层还矮的极端小窗不抛异常（实际最小 360x400 不会到这）', () {
+      expect(
+        () => TabMoveMenu.layoutDropOverlay(
+          anchor: anchor,
+          viewSize: const Size(200, 100),
+        ),
+        returnsNormally,
+      );
+    });
+  });
+
   group('decodeMoveTarget', () {
     test('新窗口/具体窗解码；无关 value 返回 null', () {
       expect(TabMoveMenu.decodeMoveTarget(TabMoveMenu.moveNew),

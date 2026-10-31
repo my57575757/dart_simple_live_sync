@@ -42,6 +42,20 @@ class TabStore extends GetxController {
   final RxList<TabDescriptor> tabs = <TabDescriptor>[].obs;
   final RxnString activeTabId = RxnString();
 
+  /// 已启动但尚未完成的播放器释放。子窗关掉最后一个标签时，页面移除会同步
+  /// 触发空窗监听→关窗；关窗的 _closeAll 必须等这批在途释放完成，否则
+  /// player.dispose 会与 DestroyWindow 的子引擎同步销毁赛跑（libmpv 野回调）。
+  final Set<Future<void>> _pendingReleases = <Future<void>>{};
+
+  /// 页面已摘出树后、Get.delete 前启动播放器的有序释放（幂等，onClose 复用）。
+  void _beginPlayerRelease(String tabId) {
+    final controller = registry.controllerForTabId(tabId);
+    if (controller == null) return;
+    final future = controller.ensurePlayerReleased();
+    _pendingReleases.add(future);
+    future.whenComplete(() => _pendingReleases.remove(future));
+  }
+
   bool get isHomeActive => activeTabId.value == null;
 
   TabDescriptor? get activeTab {
@@ -113,6 +127,9 @@ class TabStore extends GetxController {
       throw ArgumentError('tab not found: $tabId');
     }
     final removed = tabs.removeAt(index);
+    // 先摘页面、启动有序释放，再 Get.delete：onClose 复用同一释放 Future，
+    // 释放期间已无仍挂载的 Video 组件会读到已 dispose 的播放器。
+    _beginPlayerRelease(tabId);
     registry.unregister(tabId);
     if (activeTabId.value == tabId) {
       activeTabId.value =
@@ -184,10 +201,22 @@ class TabStore extends GetxController {
     await presenceGateway?.batchRelease(
       all.map((t) => t.tabId).toSet(),
     );
+    // 汇总本批控制器的有序释放，并带上此前单标签 close() 在途的释放（子窗
+    // 最后一个标签 × 会先经 close() 启动释放、tabs 变空后同步触发关窗）。
+    final releases = <Future<void>>[..._pendingReleases];
+    for (final t in all) {
+      final controller = registry.controllerForTabId(t.tabId);
+      if (controller != null) {
+        releases.add(controller.ensurePlayerReleased());
+      }
+    }
+    // 摘出页面后再等释放完成：释放期间不再有挂载中的 Video 组件读到已销毁的
+    // 播放器；随后的 Get.delete 触发 onClose 时释放早已完成（复用同一 Future）。
+    tabs.clear();
+    activeTabId.value = null;
+    await Future.wait(releases);
     for (final t in all) {
       registry.unregister(t.tabId);
     }
-    tabs.clear();
-    activeTabId.value = null;
   }
 }

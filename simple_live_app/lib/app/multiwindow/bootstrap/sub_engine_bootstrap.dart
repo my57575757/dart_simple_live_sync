@@ -143,9 +143,12 @@ Future<void> runSubEngine(WindowController self) async {
 
   // 子端 presence 协调者：必须先于 TabStore（批量关闭经它整批释放）、
   // 先于 store.open（控制器 onInit 即发 pr_register，T11）就位
+  // 显式非空泛型：本赋值目标类型可空 + 条件表达式，上下文类型会把 put 的
+  // 类型实参下推推断成 IpcPresenceCoordinator?，注册 key 退化为带 "?" 的
+  // 类型名，导致各处按非空类型 isRegistered/find 全部落空。
   final IpcPresenceCoordinator? presenceCoordinator = presencePort == null
       ? null
-      : Get.put(
+      : Get.put<IpcPresenceCoordinator>(
           IpcPresenceCoordinator(
             windowId: self.windowId,
             port: presencePort,
@@ -177,9 +180,10 @@ Future<void> runSubEngine(WindowController self) async {
     permanent: true,
   );
 
+  // 同上：显式非空泛型，避免可空上下文把注册 key 推断成带 "?" 的类型名。
   final SubWindowControlService? controlService = controlPort == null
       ? null
-      : Get.put(
+      : Get.put<SubWindowControlService>(
           SubWindowControlService(
             windowId: self.windowId,
             port: controlPort,

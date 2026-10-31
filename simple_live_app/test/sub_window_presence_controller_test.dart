@@ -387,6 +387,72 @@ void main() {
     expect(accounts.loginCookie, '', reason: '刷新路径立即清借用凭据');
   });
 
+  group('非抖音子窗标签首次登记（凭据借用 + guard 归属门）', () {
+    for (final siteId in const [
+      Constant.kBiliBili,
+      Constant.kHuya,
+      Constant.kDouyu,
+      Constant.kTwitch,
+    ]) {
+      test('$siteId 首次绑定发一条 pr_register，站点字段正确', () async {
+        final port = _FakePort();
+        putCoordinator(port);
+        final c = makeSiteController(
+          siteId: siteId,
+          liveSite: _FakeGenericSite(siteId),
+        );
+
+        c.registerSubWindowBorrowedTab();
+        // register 为 unawaited best-effort，排空一轮微任务
+        await Future<void>.delayed(Duration.zero);
+
+        final registers = port.calls
+            .where((x) => x.$1 == PresenceProtocol.mRegister)
+            .toList();
+        expect(registers, hasLength(1),
+            reason: '非抖音子窗标签首次必须登记一次：主端据此回推借用凭据、'
+                '放行 pr_guard_send 归属门');
+        final call = PresenceProtocol.decodeRegister(registers.single.$2)!;
+        expect(call.windowId, 'w1');
+        expect(call.tabId, 't1');
+        expect(call.siteId, siteId);
+        expect(call.roomId, '222');
+        expect(call.shareUrl, 'https://example.com/$siteId/222');
+      });
+    }
+
+    test('抖音标签不由此入口登记（登记只走 bindSubWindowPresence，防重复）',
+        () async {
+      final port = _FakePort();
+      putCoordinator(port);
+      final c = makeController();
+
+      c.registerSubWindowBorrowedTab();
+      await Future<void>.delayed(Duration.zero);
+
+      expect(
+        port.calls.any((x) => x.$1 == PresenceProtocol.mRegister),
+        isFalse,
+        reason: '抖音首次 register 由 bindSubWindowPresence 发出，此处不得重复',
+      );
+    });
+
+    test('主窗（非子窗）不登记', () async {
+      final port = _FakePort();
+      putCoordinator(port);
+      MultiWindowRole.isSubWindow = false;
+      final c = makeSiteController(
+        siteId: Constant.kBiliBili,
+        liveSite: _FakeGenericSite(Constant.kBiliBili),
+      );
+
+      c.registerSubWindowBorrowedTab();
+      await Future<void>.delayed(Duration.zero);
+
+      expect(port.calls, isEmpty);
+    });
+  });
+
   testWidgets('closeForMove 语义：markMovedAway 后 onClose 不发 pr_release；'
       '普通 onClose 仍发', (tester) async {
     // 提供真实 binding（最简 Scaffold，无 UI 交互不需要 SmartDialog）。

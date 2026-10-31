@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
@@ -120,6 +121,11 @@ class _TabItemState extends State<_TabItem> {
   bool _dragArmed = false;
   OverlayEntry? _dragHint;
 
+  // 子窗拖出落点浮层（主窗拖出仍走 _dragHint 直接开新窗）
+  OverlayEntry? _dropOverlay;
+  DropOverlayGeometry? _dropGeometry;
+  final ValueNotifier<String?> _dropHover = ValueNotifier<String?>(null);
+
   MoveMenuHost _resolveHost() => TabMoveMenu.resolveMoveMenuHost(
         isWindows: Platform.isWindows,
         isSubWindow: MultiWindowRole.isSubWindow,
@@ -136,9 +142,13 @@ class _TabItemState extends State<_TabItem> {
       return;
     }
     if (event.kind != PointerDeviceKind.mouse ||
-        event.buttons != kPrimaryMouseButton ||
-        _dragPointer != null) {
+        event.buttons != kPrimaryMouseButton) {
       return;
+    }
+    if (_dragPointer != null) {
+      // 上一次拖拽在窗口外松手、引擎收不到 up：先清滞留状态，否则本标签
+      // 拖出手势会被永久卡死
+      _resetDrag();
     }
     final host = _resolveHost();
     if (host == MoveMenuHost.none) return;
@@ -149,7 +159,12 @@ class _TabItemState extends State<_TabItem> {
   }
 
   void _onPointerMove(PointerMoveEvent event) {
-    if (event.pointer != _dragPointer || _dragArmed) return;
+    if (event.pointer != _dragPointer) return;
+    if (_dragArmed) {
+      final next = _dropGeometry?.hitTest(event.position);
+      if (next != _dropHover.value) _dropHover.value = next;
+      return;
+    }
     final box = context.findRenderObject() as RenderBox?;
     final start = _dragStart;
     if (box == null || start == null || !box.attached) return;
@@ -161,7 +176,12 @@ class _TabItemState extends State<_TabItem> {
       bandBottom: topLeft.dy + box.size.height,
     )) {
       _dragArmed = true;
-      _showDragHint();
+      // 子窗：落点浮层（拖回主窗口 / 去新窗口）；主窗：维持直接开新窗
+      if (_dragHost == MoveMenuHost.sub) {
+        _showDropOverlay();
+      } else {
+        _showDragHint();
+      }
     }
   }
 
@@ -169,10 +189,22 @@ class _TabItemState extends State<_TabItem> {
     if (event.pointer != _dragPointer) return;
     final armed = _dragArmed;
     final host = _dragHost;
+    // 子窗落点模式：只有压中目标才迁移，压在浮层外松手即取消
+    final dropTarget = _dropGeometry?.hitTest(event.position);
     _resetDrag();
-    if (armed && host != null) {
-      unawaited(_moveToNewWindow(host));
+    if (!armed || host == null) return;
+    if (host == MoveMenuHost.sub) {
+      if (dropTarget != null) {
+        unawaited(
+          SubWindowControlService.instance.requestMove(
+            tab: descriptor,
+            target: dropTarget,
+          ),
+        );
+      }
+      return;
     }
+    unawaited(_moveToNewWindow(host));
   }
 
   void _onPointerCancel(PointerCancelEvent event) {
@@ -187,6 +219,10 @@ class _TabItemState extends State<_TabItem> {
     _dragArmed = false;
     _dragHint?.remove();
     _dragHint = null;
+    _dropOverlay?.remove();
+    _dropOverlay = null;
+    _dropGeometry = null;
+    _dropHover.value = null;
   }
 
   /// 越过条带松开：复用右键菜单同一条编排路径（在途守卫/handoff/失败文案）。
@@ -217,10 +253,33 @@ class _TabItemState extends State<_TabItem> {
     overlay.insert(_dragHint!);
   }
 
+  /// 子窗拖出落点浮层：几何为纯函数（tab_move_menu），命中矩形即视觉块，
+  /// 全程不出本窗（跨引擎收不到窗口外指针事件）。
+  void _showDropOverlay() {
+    final box = context.findRenderObject() as RenderBox?;
+    final overlay = Overlay.maybeOf(context);
+    if (box == null || !box.attached || overlay == null) return;
+    final anchor = box.localToGlobal(Offset.zero) & box.size;
+    final geometry = TabMoveMenu.layoutDropOverlay(
+      anchor: anchor,
+      viewSize: MediaQuery.sizeOf(context),
+    );
+    _dropGeometry = geometry;
+    _dropOverlay = OverlayEntry(
+      builder: (_) => IgnorePointer(
+        child: _TabDropOverlay(geometry: geometry, hover: _dropHover),
+      ),
+    );
+    overlay.insert(_dropOverlay!);
+  }
+
   @override
   void dispose() {
     _dragHint?.remove();
     _dragHint = null;
+    _dropOverlay?.remove();
+    _dropOverlay = null;
+    _dropHover.dispose();
     super.dispose();
   }
 
@@ -479,6 +538,79 @@ class _DragTearOffHint extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+/// 子窗拖出落点浮层：压中目标块高亮，松开发起对应跨窗移动；块尺寸严格等于
+/// [DropTargetGeometry.rect] 的命中矩形，避免「看着压中却不触发」。
+class _TabDropOverlay extends StatelessWidget {
+  const _TabDropOverlay({required this.geometry, required this.hover});
+
+  final DropOverlayGeometry geometry;
+  final ValueListenable<String?> hover;
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      children: [
+        Positioned.fromRect(
+          rect: geometry.outer,
+          child: Material(
+            color: Theme.of(context).colorScheme.surface,
+            elevation: 8,
+            borderRadius: BorderRadius.circular(10),
+            child: Padding(
+              padding: const EdgeInsets.all(TabMoveMenu.dropMenuPadding),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  for (final t in geometry.targets)
+                    ValueListenableBuilder<String?>(
+                      valueListenable: hover,
+                      builder: (_, hovered, __) => _DropTile(
+                        target: t.target,
+                        highlighted: hovered == t.target,
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _DropTile extends StatelessWidget {
+  const _DropTile({required this.target, required this.highlighted});
+
+  /// WindowControlProtocol target 线值；呈现文案/图标由此稳定标识派生。
+  final String target;
+  final bool highlighted;
+
+  @override
+  Widget build(BuildContext context) {
+    final isMain = target == WindowControlProtocol.targetMain;
+    final theme = Theme.of(context);
+    return Container(
+      width: TabMoveMenu.dropMenuWidth - TabMoveMenu.dropMenuPadding * 2,
+      height: TabMoveMenu.dropItemHeight,
+      padding: const EdgeInsets.symmetric(horizontal: 10),
+      decoration: BoxDecoration(
+        color: highlighted
+            ? theme.colorScheme.primary.withAlpha(30)
+            : Colors.transparent,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        children: [
+          Icon(isMain ? Icons.home : Icons.open_in_new, size: 16),
+          const SizedBox(width: 8),
+          Text(isMain ? '主窗口' : '新窗口'),
+        ],
+      ),
     );
   }
 }
