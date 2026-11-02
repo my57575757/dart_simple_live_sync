@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:simple_live_app/app/multiwindow/shell/chat_history_port.dart';
 import 'package:simple_live_app/app/multiwindow/shell/room_controller_registry.dart';
 import 'package:simple_live_app/app/multiwindow/shell/tab_descriptor.dart';
 import 'package:simple_live_app/app/multiwindow/shell/tab_open_request.dart';
@@ -31,6 +32,15 @@ class _ThrowingRegistry extends _FakeRegistry {
   @override
   void register(String tabId, TabOpenRequest request) =>
       throw ArgumentError('unknown site: ${request.siteId}');
+}
+
+class _FakeHistoryPort implements ChatHistoryPort {
+  final imported = <List<Object?>>[];
+  List<Object?> exportResult = const [];
+  @override
+  List<Object?> exportChatHistory() => exportResult;
+  @override
+  void importChatHistory(List<Object?> raw) => imported.add(raw);
 }
 
 class _FakeControlPort implements SubWindowControlPort {
@@ -245,6 +255,69 @@ void main() {
 
     test('未知方法返回 null（单 handler 槽位继续向 default 回落）', () async {
       expect(await buildService().handleCall('something_else', null), isNull);
+    });
+
+    test('mw_open_tab：chatHistory 随标签导入目标控制器（只回填列表）',
+        () async {
+      const history = <Object?>[
+        {'u': '甲', 'm': '你好', 'c': [1, 2, 3], 's': false},
+      ];
+      final historyPort = _FakeHistoryPort();
+      final historyStore = TabStore(
+        registry: _FakeRegistry(),
+        hasHome: false,
+        chatHistoryResolver: (_) => historyPort,
+      );
+      final result = await buildService(givenStore: historyStore).handleCall(
+        WindowControlProtocol.mOpenTab,
+        WindowControlProtocol.encodeOpenTab(
+          const OpenTabCall(
+            tabId: 'fixed-id',
+            siteId: 'douyin',
+            roomId: 'r9',
+            shareUrl: '',
+            activate: true,
+            chatHistory: history,
+          ),
+        ),
+      );
+      expect(result, isTrue);
+      expect(historyPort.imported.single, history);
+    });
+
+    test('mw_drain_chat：导出指定标签历史；未知 tab 得空、坏载荷 false',
+        () async {
+      const history = <Object?>[
+        {'u': '甲', 'm': '晚上好', 'c': [10, 20, 30], 's': false},
+      ];
+      final historyPort = _FakeHistoryPort()..exportResult = history;
+      final historyStore = TabStore(
+        registry: _FakeRegistry(),
+        hasHome: false,
+        chatHistoryResolver: (tabId) => tabId == 't1' ? historyPort : null,
+      );
+      historyStore.open(
+        TabOpenRequest(siteId: 'douyin', roomId: '1', shareUrl: ''),
+        tabId: 't1',
+      );
+      final svc = buildService(givenStore: historyStore);
+
+      final drained = await svc.handleCall(
+        WindowControlProtocol.mDrainChat,
+        WindowControlProtocol.encodeDrainChat('t1'),
+      );
+      expect(drained, history);
+
+      final drainedUnknown = await svc.handleCall(
+        WindowControlProtocol.mDrainChat,
+        WindowControlProtocol.encodeDrainChat('gone'),
+      );
+      expect(drainedUnknown, isEmpty);
+
+      expect(
+        await svc.handleCall(WindowControlProtocol.mDrainChat, null),
+        isFalse,
+      );
     });
   });
 }

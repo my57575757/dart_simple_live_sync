@@ -176,6 +176,8 @@ Future<void> runSubEngine(WindowController self) async {
       registry: Get.find<RoomControllerRegistry>(),
       hasHome: false,
       presenceGateway: presenceCoordinator,
+      chatHistoryResolver: (tabId) => Get.find<RoomControllerRegistry>()
+          .controllerForTabId(tabId),
     ),
     permanent: true,
   );
@@ -218,6 +220,7 @@ Future<void> runSubEngine(WindowController self) async {
             call.method, call.arguments);
       case WindowControlProtocol.mOpenTab:
       case WindowControlProtocol.mCloseTab:
+      case WindowControlProtocol.mDrainChat:
         // controlService 为 null（无主窗的独立子窗）时返回 null
         return await controlService?.handleCall(call.method, call.arguments);
       case 'focus_tab':
@@ -247,6 +250,7 @@ Future<void> runSubEngine(WindowController self) async {
           shareUrl: tab.shareUrl,
         ),
         tabId: tab.tabId,
+        initialChatHistory: tab.chatHistory,
       );
     } catch (e, st) {
       Log.logPrint('子窗打开标签失败：${tab.siteId}/${tab.roomId}');

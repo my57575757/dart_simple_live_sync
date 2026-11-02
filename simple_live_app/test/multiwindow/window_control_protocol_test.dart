@@ -130,6 +130,59 @@ void main() {
               const CloseTabCall(tabId: 'x')))!;
       expect(d.tabId, 'x');
     });
+
+    test('open_tab chatHistory：非空往返；null/空不携键', () {
+      const history = <Object?>[
+        {'u': '甲', 'm': '你好', 'c': [1, 2, 3], 's': true},
+      ];
+      const c = OpenTabCall(
+        tabId: 't9',
+        siteId: 'bilibili',
+        roomId: '9',
+        shareUrl: 'u',
+        activate: true,
+        chatHistory: history,
+      );
+      final wire = WindowControlProtocol.encodeOpenTab(c);
+      expect(wire.containsKey('chatHistory'), isTrue);
+      expect(WindowControlProtocol.decodeOpenTab(wire)!.chatHistory, history);
+
+      const bare = OpenTabCall(
+        tabId: 't9',
+        siteId: 'bilibili',
+        roomId: '9',
+        shareUrl: 'u',
+        activate: true,
+      );
+      final bareWire = WindowControlProtocol.encodeOpenTab(bare);
+      expect(bareWire.containsKey('chatHistory'), isFalse);
+      expect(
+          WindowControlProtocol.decodeOpenTab(bareWire)!.chatHistory, isNull);
+    });
+
+    test('open_tab chatHistory 非 List → 坏载荷 null', () {
+      expect(
+          WindowControlProtocol.decodeOpenTab({
+            'tabId': 't',
+            'siteId': 'douyin',
+            'roomId': 'r',
+            'shareUrl': '',
+            'activate': true,
+            'chatHistory': 'not-a-list',
+          }),
+          isNull);
+    });
+  });
+
+  group('drain_chat', () {
+    test('tabId 往返；空/非 Map/空串 → null', () {
+      final d = WindowControlProtocol.decodeDrainChat(
+          WindowControlProtocol.encodeDrainChat('t1'))!;
+      expect(d, 't1');
+      expect(WindowControlProtocol.decodeDrainChat(null), isNull);
+      expect(WindowControlProtocol.decodeDrainChat('x'), isNull);
+      expect(WindowControlProtocol.decodeDrainChat({'tabId': ''}), isNull);
+    });
   });
 
   group('window list / move result', () {

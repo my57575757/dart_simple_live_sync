@@ -93,6 +93,8 @@ class AppPages {
           TabStore(
             registry: Get.find<RoomControllerRegistry>(),
             presenceGateway: Get.find<DouyinPresenceGateway>(),
+            chatHistoryResolver: (tabId) => Get.find<RoomControllerRegistry>()
+                .controllerForTabId(tabId),
           ),
         );
         // 仅主引擎 Windows 壳需要开窗协调者与数据面服务（main() 已挂主窗 controller）

@@ -4,6 +4,7 @@ import 'package:get/get.dart';
 import 'package:uuid/uuid.dart';
 
 import '../presence/presence_batch_releaser.dart';
+import 'chat_history_port.dart';
 import 'room_controller_registry.dart';
 import 'tab_descriptor.dart';
 import 'tab_open_request.dart';
@@ -13,7 +14,8 @@ class TabStore extends GetxController {
     required this.registry,
     this.hasHome = true,
     this.presenceGateway,
-  });
+    ChatHistoryPort? Function(String tabId)? chatHistoryResolver,
+  }) : _chatHistoryResolver = chatHistoryResolver;
 
   final RoomControllerRegistry registry;
   final bool hasHome;
@@ -21,6 +23,10 @@ class TabStore extends GetxController {
   /// Windows 标签壳注入；null（单元测试 / 未来其他宿主）时行为与 M2 完全一致。
   /// 主引擎传 DouyinPresenceGateway，子引擎传 IpcPresenceCoordinator。
   final PresenceBatchReleaser? presenceGateway;
+
+  /// tabId → 聊天历史端口（生产解析到 LiveRoomController）。壳层测试注入
+  /// 轻量假实现，避免构造真实控制器；缺省（null）时历史搬迁静默不生效。
+  final ChatHistoryPort? Function(String tabId)? _chatHistoryResolver;
 
   final _uuid = const Uuid();
 
@@ -67,7 +73,9 @@ class TabStore extends GetxController {
   /// 打开（或激活已存在的）直播间标签
   /// [activate]=false 时为后台打开：去重命中不激活、新建也不切换激活标签
   TabDescriptor open(TabOpenRequest request,
-      {bool activate = true, String? tabId}) {
+      {bool activate = true,
+      String? tabId,
+      List<Object?>? initialChatHistory}) {
     final existing =
         tabs.firstWhereOrNull((t) => t.request.key == request.key);
     if (existing != null) {
@@ -94,10 +102,20 @@ class TabStore extends GetxController {
       activeTabId.value = previousActive;
       rethrow;
     }
+    // 跨窗迁移：register 已同步建出目标控制器，把随迁聊天历史回填进它的
+    // 聊天列表（仅列表，不触发飘屏）。端口缺失/历史为空均安全跳过。
+    if (initialChatHistory != null && initialChatHistory.isNotEmpty) {
+      _chatHistoryResolver?.call(id)?.importChatHistory(initialChatHistory);
+    }
     final descriptor = TabDescriptor(tabId: id, request: request);
     tabs.add(descriptor);
     return descriptor;
   }
+
+  /// 跨窗迁移前置：导出源标签控制器的聊天历史（mw_ 线格式）。
+  /// 无解析器/控制器已销毁时返回空列表，绝不阻断迁移。
+  List<Object?> exportChatHistory(String tabId) =>
+      _chatHistoryResolver?.call(tabId)?.exportChatHistory() ?? const [];
 
   void activate(String tabId) {
     if (tabs.any((t) => t.tabId == tabId)) {

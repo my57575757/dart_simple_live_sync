@@ -107,4 +107,25 @@ void main() {
     final decoded = RoomWindowArgs.fromJson(json);
     expect(decoded.snapshot.followUserNames, isEmpty);
   });
+
+  test('RoomTabArg.chatHistory 随窗迁移载荷往返；缺省为 null', () {
+    const history = <Object?>[
+      {'u': '甲', 'm': '你好', 'c': [1, 2, 3], 's': true},
+      {'u': 'LiveSysMessage', 'm': '欢迎', 'c': [255, 255, 255], 's': false},
+    ];
+    final decoded = RoomWindowArgs.decode(
+      const RoomWindowArgs(tabs: [
+        RoomTabArg(siteId: 'bilibili', roomId: '1', chatHistory: history),
+        RoomTabArg(siteId: 'douyin', roomId: '2'),
+      ]).encode(),
+    );
+    expect(decoded.tabs[0].chatHistory, history);
+    expect(decoded.tabs[1].chatHistory, isNull);
+
+    // 旧 JSON 缺字段：解析为 null，不崩
+    final legacy = RoomTabArg.fromJson(
+        jsonDecode('{"siteId":"douyin","roomId":"9","shareUrl":""}')
+            as Map<String, dynamic>);
+    expect(legacy.chatHistory, isNull);
+  });
 }

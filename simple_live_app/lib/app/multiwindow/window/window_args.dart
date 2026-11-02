@@ -7,6 +7,7 @@ class RoomTabArg {
     required this.roomId,
     this.shareUrl = '',
     this.tabId,
+    this.chatHistory,
   });
 
   final String siteId;
@@ -16,11 +17,17 @@ class RoomTabArg {
   /// 跨窗迁移预定的标签 id；null=新开窗由 TabStore 生成 uuid
   final String? tabId;
 
+  /// 随标签搬迁的弹幕聊天历史（mw_ 线格式，见 ChatHistoryCodec）；
+  /// null=无历史（普通开窗 / 旧载荷）。仅用于新窗聊天列表回填，不含凭据。
+  final List<Object?>? chatHistory;
+
   Map<String, dynamic> toJson() => {
         'siteId': siteId,
         'roomId': roomId,
         'shareUrl': shareUrl,
         if (tabId != null) 'tabId': tabId,
+        if (chatHistory != null && chatHistory!.isNotEmpty)
+          'chatHistory': chatHistory,
       };
 
   factory RoomTabArg.fromJson(Map<String, dynamic> json) => RoomTabArg(
@@ -28,6 +35,7 @@ class RoomTabArg {
         roomId: json['roomId'] as String,
         shareUrl: (json['shareUrl'] as String?) ?? '',
         tabId: json['tabId'] as String?,
+        chatHistory: (json['chatHistory'] as List?)?.cast<Object?>(),
       );
 }
 

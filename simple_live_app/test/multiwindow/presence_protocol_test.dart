@@ -231,6 +231,135 @@ void main() {
     expectNoCredentialKeys(bare);
   });
 
+  test('guard_query：daily_tasks 往返、空串省略、坏载荷拒绝；回执 data/失败分流', () {
+    final full = PresenceProtocol.encodeGuardQuery(
+      const PresenceGuardQueryCall(
+        windowId: 'w1',
+        tabId: 't1',
+        query: PresenceProtocol.kDailyTasks,
+        siteId: 'bilibili',
+        roomId: '9',
+        webRid: 'wr9',
+      ),
+    );
+    expect(full.keys.toSet(),
+        {'windowId', 'tabId', 'query', 'siteId', 'roomId', 'webRid'});
+    final d = PresenceProtocol.decodeGuardQuery(full)!;
+    expect(d.query, PresenceProtocol.kDailyTasks);
+    expect(d.siteId, 'bilibili');
+    expect(d.roomId, '9');
+    expect(d.webRid, 'wr9');
+    expect(PresenceProtocol.encodeGuardQuery(d), full);
+
+    // 空 roomId/webRid encode 省略，decode 为 null
+    final bare = PresenceProtocol.encodeGuardQuery(
+      const PresenceGuardQueryCall(
+        windowId: 'w1',
+        tabId: 't1',
+        query: PresenceProtocol.kDailyTasks,
+        siteId: 'douyin',
+        roomId: '',
+      ),
+    );
+    expect(bare.keys.toSet(), {'windowId', 'tabId', 'query', 'siteId'});
+    final dBare = PresenceProtocol.decodeGuardQuery(bare)!;
+    expect(dBare.siteId, 'douyin');
+    expect(dBare.roomId, isNull);
+    expect(dBare.webRid, isNull);
+
+    // 查询必须是白名单 kind，且 siteId 必填（查询必须知道账号站点）
+    expect(
+      PresenceProtocol.decodeGuardQuery({
+        'windowId': 'w',
+        'tabId': 't',
+        'query': 'poke',
+        'siteId': 'bilibili',
+      }),
+      isNull,
+    );
+    expect(
+      PresenceProtocol.decodeGuardQuery({
+        'windowId': 'w',
+        'tabId': 't',
+        'query': PresenceProtocol.kDailyTasks,
+      }),
+      isNull,
+    );
+    expect(PresenceProtocol.decodeGuardQuery(null), isNull);
+    expect(
+      PresenceProtocol.decodeGuardQuery({
+        'windowId': 'w',
+        'tabId': 't',
+        'query': PresenceProtocol.kDailyTasks,
+        'siteId': 'bilibili',
+        'roomId': 9,
+      }),
+      isNull,
+    );
+
+    // 成功回执携带 JSON data；失败回执 code/message；无凭据字段
+    final ok = PresenceProtocol.decodeQueryResult(
+      PresenceProtocol.encodeQueryResult(
+        const PresenceQueryResult.ok(<String, Object?>{
+          'level': 3,
+          'tasks': <Object?>[],
+        }),
+      ),
+    )!;
+    expect(ok.ok, isTrue);
+    expect(ok.data?['level'], 3);
+    expect(ok.code, isNull);
+
+    final fail = PresenceProtocol.decodeQueryResult(
+      PresenceProtocol.encodeQueryResult(
+        const PresenceQueryResult.failure(
+          code: kPresenceCodeNotLogin,
+          message: 'x',
+        ),
+      ),
+    )!;
+    expect(fail.ok, isFalse);
+    expect(fail.code, kPresenceCodeNotLogin);
+    expect(fail.data, isNull);
+
+    expect(PresenceProtocol.decodeQueryResult(null), isNull);
+    expect(PresenceProtocol.decodeQueryResult({'ok': 'x'}), isNull);
+    expect(
+      PresenceProtocol.decodeQueryResult({
+        'ok': true,
+        'data': 'no',
+      }),
+      isNull,
+    );
+    expect(
+      PresenceProtocol.decodeQueryResult({
+        'ok': false,
+        'code': 1,
+      }),
+      isNull,
+    );
+
+    // 协议载荷绝无凭据键
+    void expectNoCredentialKeys(Object? node) {
+      if (node is Map) {
+        for (final e in node.entries) {
+          final k = e.key.toString().toLowerCase();
+          expect(k.contains('cookie'), isFalse, reason: '键: ${e.key}');
+          expect(k.contains('token'), isFalse, reason: '键: ${e.key}');
+          expect(k.contains('oauth'), isFalse, reason: '键: ${e.key}');
+          expectNoCredentialKeys(e.value);
+        }
+      } else if (node is List) {
+        for (final v in node) {
+          expectNoCredentialKeys(v);
+        }
+      }
+    }
+
+    expectNoCredentialKeys(full);
+    expectNoCredentialKeys(bare);
+  });
+
   test('主→子 apply 与 claim/send 响应编解码、reason 四值映射', () {
     final enter = PresenceProtocol.encodeApplyEnter(
       const PresenceApplyEnterCall(

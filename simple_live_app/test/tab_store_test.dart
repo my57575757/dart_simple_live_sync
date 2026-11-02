@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:simple_live_app/app/multiwindow/shell/chat_history_port.dart';
 import 'package:simple_live_app/app/multiwindow/presence/presence_batch_releaser.dart';
 import 'package:simple_live_app/app/multiwindow/shell/room_controller_registry.dart';
 import 'package:simple_live_app/app/multiwindow/shell/tab_open_request.dart';
@@ -25,6 +26,19 @@ class FakeRegistry implements RoomControllerRegistry {
 
   @override
   LiveRoomController? controllerForTabId(String tabId) => null;
+}
+
+class FakeHistoryPort implements ChatHistoryPort {
+  final List<Object?> imported = [];
+  int importCalls = 0;
+  List<Object?> exportResult = const [];
+  @override
+  List<Object?> exportChatHistory() => exportResult;
+  @override
+  void importChatHistory(List<Object?> raw) {
+    importCalls++;
+    imported.addAll(raw);
+  }
 }
 
 /// register 同步抛错（模拟未知 site），用于验证 open 的激活态回滚
@@ -276,5 +290,43 @@ void main() {
     expect(store.tabs.single.tabId, 'b');
     expect(store.activeTabId.value, 'b');
     expect(registry.registered.containsKey('a'), isFalse);
+  });
+
+  group('跨窗聊天历史', () {
+    const history = <Object?>[
+      {'u': '甲', 'm': '你好', 'c': [1, 2, 3], 's': false},
+    ];
+
+    test('open 带 initialChatHistory：register 后经 resolver 导入该 tab 端口',
+        () {
+      final port = FakeHistoryPort();
+      final s = TabStore(registry: registry, chatHistoryResolver: (_) => port);
+      s.open(req('douyin', 'r1'), tabId: 't1', initialChatHistory: history);
+      expect(port.importCalls, 1);
+      expect(port.imported, history);
+    });
+
+    test('无历史（null/空）不触发导入', () {
+      final port = FakeHistoryPort();
+      final s = TabStore(registry: registry, chatHistoryResolver: (_) => port);
+      s.open(req('douyin', 'r1'), tabId: 't1');
+      s.open(req('douyin', 'r2'),
+          tabId: 't2', initialChatHistory: const []);
+      expect(port.importCalls, 0);
+    });
+
+    test('exportChatHistory 经 resolver 转发；无 resolver/未命中得空不报错', () {
+      final port = FakeHistoryPort()..exportResult = history;
+      final s = TabStore(
+        registry: registry,
+        chatHistoryResolver: (id) => id == 't1' ? port : null,
+      );
+      s.open(req('douyin', 'r1'), tabId: 't1');
+      expect(s.exportChatHistory('t1'), history);
+      expect(s.exportChatHistory('nope'), isEmpty);
+
+      final bare = TabStore(registry: registry);
+      expect(bare.exportChatHistory('t1'), isEmpty, reason: '无 resolver 安全降级');
+    });
   });
 }

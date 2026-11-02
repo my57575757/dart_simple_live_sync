@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:get/get.dart';
 import 'package:simple_live_app/app/multiwindow/bootstrap/in_memory_services.dart';
 import 'package:simple_live_app/app/multiwindow/presence/handoff_controller.dart';
+import 'package:simple_live_app/app/multiwindow/shell/chat_history_port.dart';
 import 'package:simple_live_app/app/multiwindow/shell/room_controller_registry.dart';
 import 'package:simple_live_app/app/multiwindow/shell/tab_open_request.dart';
 import 'package:simple_live_app/app/multiwindow/shell/tab_store.dart';
@@ -31,6 +32,15 @@ class _Registry implements RoomControllerRegistry {
   LiveRoomController? controllerForRoomKey(String roomKey) => null;
   @override
   LiveRoomController? controllerForTabId(String tabId) => null;
+}
+
+class _HistoryPort implements ChatHistoryPort {
+  final imported = <List<Object?>>[];
+  List<Object?> drainReplies = const [];
+  @override
+  List<Object?> exportChatHistory() => drainReplies;
+  @override
+  void importChatHistory(List<Object?> raw) => imported.add(raw);
 }
 
 class _FakePort implements SubWindowPort {
@@ -139,6 +149,26 @@ void main() {
 
   List<(String, String, Object?)> calls(String windowId, String method) =>
       port.invocations.where((i) => i.$1 == windowId && i.$2 == method).toList();
+
+  const chatHistory = <Object?>[
+    {'u': '甲', 'm': '你好', 'c': [1, 2, 3], 's': false},
+    {'u': '乙', 'm': '晚上好', 'c': [4, 5, 6], 's': false},
+  ];
+
+  /// 用带聊天历史 resolver 的主窗 store 另建服务（tearDown 的全局 service 不动）
+  WindowOpenService serviceWithHistoryStore(TabStore historyStore) {
+    final svc = WindowOpenService(
+      port: port,
+      store: historyStore,
+      registry: registry,
+      presenceService: handoff,
+      showToast: toasts.add,
+      showAndFocusMain: () async => focusMainCount++,
+    );
+    svc.onInit();
+    addTearDown(svc.onClose);
+    return svc;
+  }
 
   test('主→新窗：预定 tabId 建窗、登记 registry、关主窗源标签；不发 focus/close',
       () async {
@@ -266,6 +296,120 @@ void main() {
     expect(calls(newId, 'focus_tab'), isEmpty);
     expect(focusMainCount, 0);
     expect(calls('w1', WindowControlProtocol.mCloseTab), hasLength(1));
+  });
+
+  test('聊天历史 主→新窗：RoomTabArg 携带主窗导出的历史（关源前导出）',
+      () async {
+    handoff.mode = 'none';
+    final historyPort = _HistoryPort()..drainReplies = chatHistory;
+    final s = TabStore(
+        registry: _Registry(), chatHistoryResolver: (_) => historyPort);
+    final tab = s.open(req('douyin', 'a'));
+    final svc = serviceWithHistoryStore(s);
+
+    final message = await svc.moveTabToWindow(
+      tabId: tab.tabId,
+      target: WindowControlProtocol.targetNew,
+    );
+    expect(message, isNull);
+
+    final args = RoomWindowArgs.decode(port.created.values.single);
+    expect(args.tabs.single.chatHistory, chatHistory);
+    expect(s.tabs, isEmpty, reason: '源标签照关闭');
+  });
+
+  test('聊天历史 主→已存在子窗：mw_open_tab 携带历史', () async {
+    handoff.mode = 'none';
+    port.onInvoke = (w, m, a) => m == WindowControlProtocol.mOpenTab;
+    registry.registerChild('w1', {'douyin_b'});
+    final historyPort = _HistoryPort()..drainReplies = chatHistory;
+    final s = TabStore(
+        registry: _Registry(), chatHistoryResolver: (_) => historyPort);
+    final tab = s.open(req('douyin', 'a'));
+    final svc = serviceWithHistoryStore(s);
+
+    final message =
+        await svc.moveTabToWindow(tabId: tab.tabId, target: 'w1');
+    expect(message, isNull);
+
+    final open = WindowControlProtocol.decodeOpenTab(
+        calls('w1', WindowControlProtocol.mOpenTab).single.$3)!;
+    expect(open.chatHistory, chatHistory);
+  });
+
+  test('聊天历史 子→主窗：先 drain 子窗（先于关源）再回填主窗控制器', () async {
+    registry.registerChild('w1', {'douyin_a'});
+    port.onInvoke = (w, m, a) =>
+        m == WindowControlProtocol.mDrainChat ? chatHistory : null;
+    final historyPort = _HistoryPort();
+    final s = TabStore(
+        registry: _Registry(), chatHistoryResolver: (_) => historyPort);
+    final svc = serviceWithHistoryStore(s);
+
+    final message = await svc.moveTabToWindow(
+      tabId: 'ta',
+      sourceWindowId: 'w1',
+      target: WindowControlProtocol.targetMain,
+      siteId: 'douyin',
+      roomId: 'a',
+    );
+    expect(message, isNull);
+
+    final drain = calls('w1', WindowControlProtocol.mDrainChat).single;
+    expect(WindowControlProtocol.decodeDrainChat(drain.$3), 'ta');
+    expect(historyPort.imported.single, chatHistory, reason: '回填主窗控制器列表');
+
+    final drainIdx =
+        port.invocations.indexWhere((i) => i.$2 == WindowControlProtocol.mDrainChat);
+    final closeIdx =
+        port.invocations.indexWhere((i) => i.$2 == WindowControlProtocol.mCloseTab);
+    expect(closeIdx, greaterThanOrEqualTo(0));
+    expect(drainIdx, lessThan(closeIdx), reason: '必须在源控制器销毁前抽干历史');
+  });
+
+  test('聊天历史 子→已存在子窗：drain 源后 mw_open_tab 携历史落目标', () async {
+    handoff.mode = 'none';
+    registry.registerChild('w1', {'douyin_a'});
+    registry.registerChild('w2', {'douyin_b'});
+    port.onInvoke = (w, m, a) {
+      if (m == WindowControlProtocol.mDrainChat) return chatHistory;
+      if (m == WindowControlProtocol.mOpenTab) return true;
+      return null;
+    };
+
+    final message = await service.moveTabToWindow(
+      tabId: 'ta',
+      sourceWindowId: 'w1',
+      target: 'w2',
+      siteId: 'douyin',
+      roomId: 'a',
+    );
+    expect(message, isNull);
+
+    expect(calls('w1', WindowControlProtocol.mDrainChat), hasLength(1));
+    final open = WindowControlProtocol.decodeOpenTab(
+        calls('w2', WindowControlProtocol.mOpenTab).single.$3)!;
+    expect(open.chatHistory, chatHistory);
+  });
+
+  test('聊天历史 子→新窗：drain 源后 RoomTabArg 携历史建新窗', () async {
+    handoff.mode = 'none';
+    registry.registerChild('w1', {'douyin_a'});
+    port.onInvoke = (w, m, a) =>
+        m == WindowControlProtocol.mDrainChat ? chatHistory : null;
+
+    final message = await service.moveTabToWindow(
+      tabId: 'ta',
+      sourceWindowId: 'w1',
+      target: WindowControlProtocol.targetNew,
+      siteId: 'douyin',
+      roomId: 'a',
+    );
+    expect(message, isNull);
+
+    expect(calls('w1', WindowControlProtocol.mDrainChat), hasLength(1));
+    final args = RoomWindowArgs.decode(port.created.values.single);
+    expect(args.tabs.single.chatHistory, chatHistory);
   });
 
   test('失败：主源 descriptor 不存在', () async {

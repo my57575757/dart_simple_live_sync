@@ -4,6 +4,7 @@ import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:get/get.dart';
 import 'package:simple_live_app/app/constant.dart';
+import 'package:simple_live_app/app/multiwindow/data/chat_history_codec.dart';
 import 'package:simple_live_app/app/multiwindow/presence/ipc/ipc_presence_coordinator.dart';
 import 'package:simple_live_app/app/multiwindow/presence/ipc/presence_protocol.dart';
 import 'package:simple_live_app/app/multiwindow/presence/ipc/sub_presence_port.dart';
@@ -102,11 +103,15 @@ class _LoggedInAccount extends DouyinAccountService {
 class _FakePort implements SubPresencePort {
   final List<(String, Object?)> calls = [];
   Object? claimResult;
+  Object? queryResult;
   @override
   Future<Object?> invokeMain(String method, [Object? arguments]) async {
     calls.add((method, arguments));
     if (method == PresenceProtocol.mClaim) {
       return claimResult ?? PresenceProtocol.encodeClaimOk();
+    }
+    if (method == PresenceProtocol.mGuardQuery) {
+      return queryResult;
     }
     return null;
   }
@@ -566,6 +571,85 @@ void main() {
       expect(client.actions, ['like']);
     });
 
+    testWidgets('子窗 bili 每日任务走 pr_guard_query 代理：主窗回数据则弹任务窗',
+        (tester) async {
+      final port = _FakePort()
+        ..queryResult = PresenceProtocol.encodeQueryResult(
+          const PresenceQueryResult.ok(<String, Object?>{
+            'level': 7,
+            'intimacy': 10,
+            'nextIntimacy': 20,
+            'medalName': '蓝牌',
+            'tasks': <Map<String, Object?>>[
+              {'done': true, 'title': '每日观看', 'progress': '1/1', 'reward': '10'},
+            ],
+          }),
+        );
+      putCoordinator(port);
+      final c = makeSiteController(
+          siteId: Constant.kBiliBili,
+          liveSite: _FakeGenericSite(Constant.kBiliBili));
+
+      await tester.pumpWidget(GetMaterialApp(
+        navigatorObservers: [FlutterSmartDialog.observer],
+        builder: FlutterSmartDialog.init(),
+        home: const Scaffold(body: SizedBox()),
+      ));
+
+      // 子窗 GuardServerService configured=false：必须经主窗代理才能拿到数据
+      final future = c.showDailyTasks();
+      await tester.pumpAndSettle();
+
+      final queryCall = port.calls
+          .firstWhere((x) => x.$1 == PresenceProtocol.mGuardQuery);
+      final decoded = PresenceProtocol.decodeGuardQuery(queryCall.$2)!;
+      expect(decoded.tabId, 't1');
+      expect(decoded.siteId, Constant.kBiliBili);
+      expect(decoded.query, PresenceProtocol.kDailyTasks);
+      expect(decoded.roomId, '222', reason: 'guardRoomId 兜底详情房间号');
+      expect(find.text('每日任务'), findsOneWidget);
+      expect(find.text('Lv.7 · 蓝牌'), findsOneWidget);
+      expect(find.text('每日观看'), findsOneWidget);
+
+      await tester.tap(find.text('关闭'));
+      await tester.pumpAndSettle();
+      await expectLater(future, completes);
+    });
+
+    testWidgets('子窗 bili 每日任务主窗回失败：不弹任务窗、固定文案 toast',
+        (tester) async {
+      final port = _FakePort()
+        ..queryResult = PresenceProtocol.encodeQueryResult(
+          const PresenceQueryResult.failure(code: kPresenceCodeNotLogin),
+        );
+      putCoordinator(port);
+      final c = makeSiteController(
+          siteId: Constant.kBiliBili,
+          liveSite: _FakeGenericSite(Constant.kBiliBili));
+
+      await tester.pumpWidget(GetMaterialApp(
+        navigatorObservers: [FlutterSmartDialog.observer],
+        builder: FlutterSmartDialog.init(),
+        home: const Scaffold(body: SizedBox()),
+      ));
+
+      await c.showDailyTasks();
+      await tester.pump();
+      expect(find.text('每日任务'), findsNothing, reason: '无数据不弹任务窗');
+      expect(
+        find.text('每日任务查询失败，请确认已登录并加入该主播粉丝团'),
+        findsOneWidget,
+      );
+
+      // 排空 SmartDialog toast 残留 Timer（同 tab_strip 测试清理时序）
+      final dismiss = SmartDialog.dismiss(status: SmartStatus.toast);
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 3));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 200));
+      await dismiss;
+    });
+
     test('切房非抖音→抖音：rebind 后 _presenceClient 重建', () {
       final port = _FakePort();
       putCoordinator(port);
@@ -736,5 +820,36 @@ void main() {
       expect(args.oauthToken, 'token123');
       expect(args.userLogin, 'user1');
     });
+  });
+
+  test('ChatHistoryPort：export 出线格式；import 前插历史、只回填列表不飘屏', () {
+    LiveMessage chat(String user, String text) => LiveMessage(
+          type: LiveMessageType.chat,
+          userName: user,
+          message: text,
+          color: LiveMessageColor.white,
+        );
+
+    final src = makeSiteController(
+        siteId: Constant.kBiliBili,
+        liveSite: _FakeGenericSite(Constant.kBiliBili));
+    src.messages.add(chat('旧', 'old'));
+
+    final wire = src.exportChatHistory();
+    expect(decodeChatHistory(wire).single.message, 'old');
+
+    final dest = makeSiteController(
+        siteId: Constant.kBiliBili,
+        liveSite: _FakeGenericSite(Constant.kBiliBili));
+    dest.messages.add(chat('新', 'new')); // 模拟搬迁途中 WS 已先到一条
+    dest.importChatHistory(wire);
+    expect(dest.messages.map((m) => m.message), ['old', 'new'],
+        reason: '历史更早，前插；新到的排其后');
+    expect(dest.messages.first.userName, '旧');
+
+    // 脏载荷/空载荷：不抛、不污染列表（不触发飘屏，否则无平台绑定会抛错）
+    dest.importChatHistory(['bad', {'u': 1}]);
+    dest.importChatHistory(const []);
+    expect(dest.messages.map((m) => m.message), ['old', 'new']);
   });
 }

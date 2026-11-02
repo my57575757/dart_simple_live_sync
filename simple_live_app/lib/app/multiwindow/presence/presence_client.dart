@@ -48,6 +48,24 @@ class PresenceSendResult {
   );
 }
 
+/// pr_guard_query 只读查询回执：成功携带 JSON data，失败携带 code/message。
+/// 与 [PresenceSendResult] 分开：查询无 holder/重claim 语义，且要回传数据体。
+class PresenceQueryResult {
+  const PresenceQueryResult.ok(this.data)
+      : ok = true,
+        code = null,
+        message = null;
+
+  const PresenceQueryResult.failure({this.code, this.message})
+      : ok = false,
+        data = null;
+
+  final bool ok;
+  final Map<String, Object?>? data;
+  final String? code;
+  final String? message;
+}
+
 abstract class PresenceClient {
   Future<PresenceClaimResult> claim();
   Future<void> release();

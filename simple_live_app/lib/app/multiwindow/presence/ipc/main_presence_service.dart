@@ -124,6 +124,8 @@ class MainPresenceService extends GetxService
         return _batchRelease(arguments);
       case PresenceProtocol.mGuardSend:
         return _guardSend(arguments);
+      case PresenceProtocol.mGuardQuery:
+        return _guardQuery(arguments);
       default:
         return null;
     }
@@ -414,6 +416,56 @@ class MainPresenceService extends GetxService
       return PresenceProtocol.encodeSendResult(
         const PresenceSendResult(
           success: false,
+          code: 'guard_error',
+          message: '网络请求失败',
+        ),
+      );
+    }
+  }
+
+  /// 子窗只读查询（粉丝团每日任务）：只读无副作用，不经网关仲裁，
+  /// 所有站点统一用主窗账号态直连 GuardServerService。
+  Future<Object?> _guardQuery(Object? arguments) async {
+    final call = PresenceProtocol.decodeGuardQuery(arguments);
+    if (call == null) return false;
+    if (_tabWindow[call.tabId] != call.windowId) {
+      return PresenceProtocol.encodeQueryResult(
+        const PresenceQueryResult.failure(code: kPresenceCodeNotHolder),
+      );
+    }
+    final guard = GuardServerService.instance;
+    if (!guard.configured) {
+      return PresenceProtocol.encodeQueryResult(
+        const PresenceQueryResult.failure(
+          code: 'not_configured',
+          message: '未配置弹幕签名服务',
+        ),
+      );
+    }
+    final accountId = await guard.ensureAccount(call.siteId);
+    if (accountId == null) {
+      return PresenceProtocol.encodeQueryResult(
+        const PresenceQueryResult.failure(code: kPresenceCodeNotLogin),
+      );
+    }
+    try {
+      final data = await guard.getDailyTasks(
+        accountId: accountId,
+        roomId: call.roomId ?? '',
+        webRid: call.webRid ?? '',
+      );
+      return PresenceProtocol.encodeQueryResult(PresenceQueryResult.ok(data));
+    } on DioException catch (e) {
+      final mapped = GuardServerService.mapHttpError(e);
+      return PresenceProtocol.encodeQueryResult(
+        PresenceQueryResult.failure(
+          code: mapped.errorCode,
+          message: mapped.errorMessage,
+        ),
+      );
+    } catch (_) {
+      return PresenceProtocol.encodeQueryResult(
+        const PresenceQueryResult.failure(
           code: 'guard_error',
           message: '网络请求失败',
         ),

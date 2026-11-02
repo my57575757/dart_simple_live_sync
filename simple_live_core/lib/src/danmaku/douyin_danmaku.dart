@@ -92,6 +92,9 @@ class DouyinDanmaku extends LiveDanmaku {
 
   @override
   Future start(dynamic args) async {
+    // 连接替换（进入直播间/前后台恢复/跨窗复刻）必须先关掉旧连接：
+    // 仅覆盖字段会让握手中的旧 socket 无法回收，僵尸复活后与新连接双收。
+    webScoketUtils?.close();
     danmakuArgs = args as DouyinDanmakuArgs;
     if (danmakuArgs.cookie.contains("sessionid")) {
       unawaited(_resolveSelfUid());

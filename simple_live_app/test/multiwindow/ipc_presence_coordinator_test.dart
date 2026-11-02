@@ -16,6 +16,7 @@ class _FakePort implements SubPresencePort {
   final List<(String, Object?)> calls = [];
   Object? claimResult;
   Object? sendResult;
+  Object? queryResult;
   final Set<String> throwing = <String>{};
 
   @override
@@ -29,6 +30,12 @@ class _FakePort implements SubPresencePort {
       return sendResult ??
           PresenceProtocol.encodeSendResult(
               const PresenceSendResult(success: true));
+    }
+    if (method == PresenceProtocol.mGuardQuery) {
+      return queryResult ??
+          PresenceProtocol.encodeQueryResult(
+            const PresenceQueryResult.ok(<String, Object?>{'level': 1}),
+          );
     }
     return null;
   }
@@ -721,5 +728,62 @@ void main() {
     expect(accounts.loginCookie, '', reason: '注册失败不影响凭据清理');
     expect(site.loginCookie, '');
     port.throwing.clear();
+  });
+
+  test('queryDailyTasks：发 pr_guard_query(daily_tasks)，解码主窗 data', () async {
+    port.queryResult = PresenceProtocol.encodeQueryResult(
+      const PresenceQueryResult.ok(<String, Object?>{
+        'level': 4,
+        'tasks': <Object?>[],
+      }),
+    );
+    final c = coord(<String, PresenceApplyTarget>{});
+
+    final r = await c.queryDailyTasks(
+      tabId: 't1',
+      siteId: 'bilibili',
+      roomId: '9',
+      webRid: 'wr9',
+    );
+
+    expect(r.ok, isTrue);
+    expect(r.data?['level'], 4);
+    final call = port.calls
+        .singleWhere((x) => x.$1 == PresenceProtocol.mGuardQuery);
+    final decoded = PresenceProtocol.decodeGuardQuery(call.$2)!;
+    expect(decoded.windowId, 'w1');
+    expect(decoded.tabId, 't1');
+    expect(decoded.query, PresenceProtocol.kDailyTasks);
+    expect(decoded.siteId, 'bilibili');
+    expect(decoded.roomId, '9');
+    expect(decoded.webRid, 'wr9');
+  });
+
+  test('queryDailyTasks：主窗回失败/不可解析/通道抛错 → 子端固定回执', () async {
+    final c = coord(<String, PresenceApplyTarget>{});
+
+    port.queryResult = PresenceProtocol.encodeQueryResult(
+      const PresenceQueryResult.failure(code: kPresenceCodeNotLogin),
+    );
+    var r = await c.queryDailyTasks(
+      tabId: 't1', siteId: 'bilibili', roomId: '9', webRid: 'wr9',
+    );
+    expect(r.ok, isFalse);
+    expect(r.code, kPresenceCodeNotLogin);
+
+    port.queryResult = 'garbage';
+    r = await c.queryDailyTasks(
+      tabId: 't1', siteId: 'bilibili', roomId: '9', webRid: 'wr9',
+    );
+    expect(r.ok, isFalse);
+    expect(r.code, kPresenceCodeIpcFailed, reason: '回执不可解析');
+
+    port.throwing.add(PresenceProtocol.mGuardQuery);
+    r = await c.queryDailyTasks(
+      tabId: 't1', siteId: 'bilibili', roomId: '9', webRid: 'wr9',
+    );
+    expect(r.ok, isFalse);
+    expect(r.code, kPresenceCodeIpcFailed, reason: 'invoke 抛错不外逸');
+    expect(r.message, '主窗口服务无响应，请重试');
   });
 }

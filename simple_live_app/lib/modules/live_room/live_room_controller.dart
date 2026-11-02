@@ -16,12 +16,14 @@ import 'package:simple_live_app/app/constant.dart';
 import 'package:simple_live_app/app/controller/app_settings_controller.dart';
 import 'package:simple_live_app/app/event_bus.dart';
 import 'package:simple_live_app/app/log.dart';
+import 'package:simple_live_app/app/multiwindow/data/chat_history_codec.dart';
 import 'package:simple_live_app/app/multiwindow/presence/douyin_presence_gateway.dart';
 import 'package:simple_live_app/app/multiwindow/presence/ipc/ipc_presence_coordinator.dart';
 import 'package:simple_live_app/app/multiwindow/presence/ipc/presence_apply_target.dart';
 import 'package:simple_live_app/app/multiwindow/presence/local_presence_client.dart';
 import 'package:simple_live_app/app/multiwindow/presence/presence_claimant.dart';
 import 'package:simple_live_app/app/multiwindow/presence/presence_client.dart';
+import 'package:simple_live_app/app/multiwindow/shell/chat_history_port.dart';
 import 'package:simple_live_app/app/multiwindow/shell/tab_store.dart';
 import 'package:simple_live_app/app/multiwindow/window/window_role.dart';
 import 'package:simple_live_app/app/sites.dart';
@@ -57,7 +59,7 @@ enum RoomPresence { guest, entering, account }
 
 class LiveRoomController extends PlayerController
     with WidgetsBindingObserver
-    implements PresenceApplyTarget {
+    implements PresenceApplyTarget, ChatHistoryPort {
   final syncController = LocalSyncController("localhost");
 
   final Site pSite;
@@ -1480,7 +1482,34 @@ class LiveRoomController extends PlayerController
   }
 
   /// 查询粉丝团每日任务；任何失败返回 null，由调用方降级为普通确认弹窗
+  /// 子窗每日任务查询：经主窗代理，失败与本地路径一致收口为 null，
+  /// 由 showDailyTasks 弹固定文案。
+  Future<Map<String, dynamic>?> _queryDailyTasksViaPresence() async {
+    SmartDialog.showLoading(msg: "查询每日任务...");
+    try {
+      final r = await Get.find<IpcPresenceCoordinator>().queryDailyTasks(
+        tabId: tabId!,
+        siteId: site.id,
+        roomId: _guardRoomId,
+        webRid: _guardWebRid,
+      );
+      if (r.ok && r.data != null) {
+        return Map<String, dynamic>.from(r.data!);
+      }
+      return null;
+    } finally {
+      SmartDialog.dismiss(status: SmartStatus.loading);
+    }
+  }
+
   Future<Map<String, dynamic>?> _queryDailyTasks() async {
+    // 子窗只读查询：本引擎 GuardServerService 未配置，经 presence 通道
+    // 由主窗以其登录账号代查（写动作同理走 pr_guard_send 代理）。
+    if (_isSubWindow &&
+        tabId != null &&
+        Get.isRegistered<IpcPresenceCoordinator>()) {
+      return _queryDailyTasksViaPresence();
+    }
     final guard = GuardServerService.instance;
     var accountId = await guard.ensureAccount(site.id);
     if (accountId == null) return null;
@@ -1954,6 +1983,19 @@ class LiveRoomController extends PlayerController
         color: LiveMessageColor.white,
       ),
     );
+  }
+
+  @override
+  List<Object?> exportChatHistory() =>
+      encodeChatHistory(messages).cast<Object?>();
+
+  @override
+  void importChatHistory(List<Object?> raw) {
+    final decoded = decodeChatHistory(raw);
+    if (decoded.isEmpty) return;
+    // 历史早于本窗后续新到的弹幕：整体前插保持时间顺序；仅回填聊天列表，
+    // 绝不调 addDanmaku（迁移瞬间不重放飘屏）。
+    messages.insertAll(0, decoded);
   }
 
   /// 接收到WebSocket关闭信息

@@ -63,11 +63,13 @@ class _FakeGuard extends GuardServerService {
   final ensureAccounts = <String>[];
   final sendDanmakus = <Map<String, Object?>>[];
   final sendActions = <Map<String, Object?>>[];
+  final dailyTaskQueries = <Map<String, Object?>>[];
 
   /// 测试可改：模拟未配置 / 未登录 / 发送抛错
   bool configuredValue = true;
   String? ensureAccountResult = 'acct1';
   bool throwOnSend = false;
+  bool throwOnQuery = false;
 
   @override
   // ignore: must_call_super
@@ -154,6 +156,27 @@ class _FakeGuard extends GuardServerService {
       'action': action,
     });
     return {'success': true};
+  }
+
+  @override
+  Future<Map<String, dynamic>> getDailyTasks({
+    required String accountId,
+    required String roomId,
+    String webRid = '',
+  }) async {
+    if (throwOnQuery) throw StateError('net');
+    dailyTaskQueries.add({
+      'accountId': accountId,
+      'roomId': roomId,
+      'webRid': webRid,
+    });
+    return <String, dynamic>{
+      'level': 3,
+      'intimacy': 100,
+      'nextIntimacy': 200,
+      'medalName': '牌',
+      'tasks': <Map<String, dynamic>>[],
+    };
   }
 }
 
@@ -809,5 +832,113 @@ void main() {
     final displaced = await guardSend('w1', 't1', content: 'z');
     expect(displaced.code, kPresenceCodeNotHolder);
     expect(guard.sendDanmakus, isEmpty);
+  });
+
+  Future<PresenceQueryResult> guardQuery(
+    String windowId,
+    String tabId, {
+    String siteId = 'bilibili',
+    String roomId = '9',
+    String webRid = 'wr9',
+  }) async {
+    final raw = await svc.handleCall(
+      PresenceProtocol.mGuardQuery,
+      PresenceProtocol.encodeGuardQuery(
+        PresenceGuardQueryCall(
+          windowId: windowId,
+          tabId: tabId,
+          query: PresenceProtocol.kDailyTasks,
+          siteId: siteId,
+          roomId: roomId,
+          webRid: webRid,
+        ),
+      ),
+    );
+    return PresenceProtocol.decodeQueryResult(raw)!;
+  }
+
+  test('guard_query daily_tasks：只读查询直连主窗 Guard，回传 data', () async {
+    // bili 子窗标签：register 建索引
+    expect(
+      await register('w1', 'tb', siteId: 'bilibili', roomId: '9'),
+      isTrue,
+    );
+    guard.ensureAccounts.clear();
+
+    final r = await guardQuery('w1', 'tb');
+    expect(r.ok, isTrue);
+    expect(r.data?['level'], 3);
+    expect(guard.ensureAccounts, ['bilibili']);
+    expect(guard.dailyTaskQueries.single, {
+      'accountId': 'acct1',
+      'roomId': '9',
+      'webRid': 'wr9',
+    });
+    expect(guard.sendActions, isEmpty, reason: '只读查询不触发任何写动作');
+    expect(guard.sendDanmakus, isEmpty);
+  });
+
+  test('guard_query 不经网关仲裁：douyin 查询同样直连 Guard', () async {
+    expect(await register('w1', 'td', siteId: 'douyin', roomId: '1'), isTrue);
+    guard.ensureAccounts.clear();
+
+    final r = await guardQuery('w1', 'td',
+        siteId: 'douyin', roomId: 'room_1', webRid: '1');
+    expect(r.ok, isTrue);
+    expect(guard.ensureAccounts, ['douyin']);
+    expect(guard.dailyTaskQueries.single['roomId'], 'room_1');
+  });
+
+  test('guard_query 失败分流：未配置 / 未登录 / 抛错固定文案', () async {
+    expect(
+      await register('w1', 'tb', siteId: 'bilibili', roomId: '9'),
+      isTrue,
+    );
+
+    guard.configuredValue = false;
+    var r = await guardQuery('w1', 'tb');
+    expect(r.ok, isFalse);
+    expect(r.code, 'not_configured');
+    expect(r.message, '未配置弹幕签名服务');
+    expect(guard.dailyTaskQueries, isEmpty);
+
+    guard.configuredValue = true;
+    guard.ensureAccountResult = null;
+    r = await guardQuery('w1', 'tb');
+    expect(r.ok, isFalse);
+    expect(r.code, kPresenceCodeNotLogin);
+    expect(guard.dailyTaskQueries, isEmpty, reason: '未登录不发 HTTP');
+
+    guard.ensureAccountResult = 'acct1';
+    guard.throwOnQuery = true;
+    r = await guardQuery('w1', 'tb');
+    expect(r.ok, isFalse);
+    expect(r.code, 'guard_error');
+    expect(r.message, '网络请求失败', reason: '不回显异常原文');
+  });
+
+  test('guard_query 死亡对账索引门：归属不符拒绝且零 HTTP；坏载荷拒绝', () async {
+    expect(
+      await register('w1', 'tb', siteId: 'bilibili', roomId: '9'),
+      isTrue,
+    );
+    expect(
+      await register('w2', 'tb', siteId: 'bilibili', roomId: '9'),
+      isTrue,
+    );
+
+    final displaced = await guardQuery('w1', 'tb');
+    expect(displaced.ok, isFalse);
+    expect(displaced.code, kPresenceCodeNotHolder);
+    expect(guard.dailyTaskQueries, isEmpty, reason: '归属门拒绝后零 HTTP');
+
+    final ok = await guardQuery('w2', 'tb');
+    expect(ok.ok, isTrue);
+    expect(guard.dailyTaskQueries, hasLength(1));
+
+    expect(
+      await svc.handleCall(PresenceProtocol.mGuardQuery, null),
+      isFalse,
+    );
   });
 }

@@ -18,6 +18,7 @@ class PresenceProtocol {
   static const String mDetach = 'pr_detach';
   static const String mBatchRelease = 'pr_batch_release';
   static const String mGuardSend = 'pr_guard_send';
+  static const String mGuardQuery = 'pr_guard_query';
 
   // ---- 方法名：主 → 子 ----
   static const String mApplyEnter = 'pr_apply_enter';
@@ -27,6 +28,9 @@ class PresenceProtocol {
   // ---- pr_guard_send 的 kind ----
   static const String kDanmaku = 'danmaku';
   static const String kAction = 'action';
+
+  // ---- pr_guard_query 的 query 白名单 ----
+  static const String kDailyTasks = 'daily_tasks';
 
   // ---- claim failure reason 线值 ----
   static const String rNotLoggedIn = 'not_logged_in';
@@ -239,6 +243,84 @@ class PresenceProtocol {
     );
   }
 
+  // ---- guard query（只读，如粉丝团每日任务）----
+
+  static Map<String, Object?> encodeGuardQuery(PresenceGuardQueryCall call) => {
+        'windowId': call.windowId,
+        'tabId': call.tabId,
+        'query': call.query,
+        'siteId': call.siteId,
+        if (call.roomId != null && call.roomId!.isNotEmpty)
+          'roomId': call.roomId,
+        if (call.webRid != null && call.webRid!.isNotEmpty)
+          'webRid': call.webRid,
+      };
+
+  static PresenceGuardQueryCall? decodeGuardQuery(Object? args) {
+    if (args is! Map) return null;
+    final windowId = _nonEmptyStr(args, 'windowId');
+    final tabId = _nonEmptyStr(args, 'tabId');
+    final query = args['query'];
+    // 查询必须知道账号站点（不像 guard send 缺省走抖音网关）
+    final siteId = _nonEmptyStr(args, 'siteId');
+    if (windowId == null ||
+        tabId == null ||
+        siteId == null ||
+        query != kDailyTasks) {
+      return null;
+    }
+    final roomId = args['roomId'];
+    final webRid = args['webRid'];
+    if ((roomId != null && roomId is! String) ||
+        (webRid != null && webRid is! String)) {
+      return null;
+    }
+    return PresenceGuardQueryCall(
+      windowId: windowId,
+      tabId: tabId,
+      query: query as String,
+      siteId: siteId,
+      roomId: roomId as String?,
+      webRid: webRid as String?,
+    );
+  }
+
+  static Map<String, Object?> encodeQueryResult(PresenceQueryResult result) {
+    final map = <String, Object?>{'ok': result.ok};
+    if (result.ok) {
+      if (result.data != null) map['data'] = result.data;
+    } else {
+      if (result.code != null) map['code'] = result.code;
+      if (result.message != null) map['message'] = result.message;
+    }
+    return map;
+  }
+
+  static PresenceQueryResult? decodeQueryResult(Object? raw) {
+    if (raw is! Map || raw['ok'] is! bool) return null;
+    final ok = raw['ok'] as bool;
+    if (ok) {
+      final data = raw['data'];
+      if (data != null &&
+          (data is! Map || !data.keys.every((k) => k is String))) {
+        return null;
+      }
+      return PresenceQueryResult.ok(
+        data is Map ? Map<String, Object?>.from(data) : const {},
+      );
+    }
+    final code = raw['code'];
+    final message = raw['message'];
+    if ((code != null && code is! String) ||
+        (message != null && message is! String)) {
+      return null;
+    }
+    return PresenceQueryResult.failure(
+      code: code as String?,
+      message: message as String?,
+    );
+  }
+
   // ---- 主 → 子 apply ----
 
   static Map<String, Object?> encodeApplyEnter(PresenceApplyEnterCall call) => {
@@ -447,6 +529,28 @@ class PresenceGuardSendCall {
 
   /// 仅 JSON 兼容公开房间参数，严禁放 cookie/token 等凭据
   final Map<String, Object?>? extra;
+}
+
+class PresenceGuardQueryCall {
+  const PresenceGuardQueryCall({
+    required this.windowId,
+    required this.tabId,
+    required this.query,
+    required this.siteId,
+    this.roomId,
+    this.webRid,
+  });
+
+  final String windowId;
+  final String tabId;
+
+  /// 查询白名单值（PresenceProtocol.kDailyTasks …）
+  final String query;
+
+  /// 必填：查询必须知道账号站点（不像 guard send 缺省=抖音网关）
+  final String siteId;
+  final String? roomId;
+  final String? webRid;
 }
 
 class PresenceApplyEnterCall {

@@ -151,6 +151,41 @@ class IpcPresenceCoordinator extends GetxService
         port: _port,
       );
 
+  /// 子窗只读查询（粉丝团每日任务）：主窗以其账号态直连签名服务回传数据。
+  /// 无仲裁语义，失败只回固定回执，不回显异常/载荷。
+  Future<PresenceQueryResult> queryDailyTasks({
+    required String tabId,
+    required String siteId,
+    required String roomId,
+    required String webRid,
+  }) async {
+    try {
+      final raw = await _port.invokeMain(
+        PresenceProtocol.mGuardQuery,
+        PresenceProtocol.encodeGuardQuery(
+          PresenceGuardQueryCall(
+            windowId: windowId,
+            tabId: tabId,
+            query: PresenceProtocol.kDailyTasks,
+            siteId: siteId,
+            roomId: roomId,
+            webRid: webRid,
+          ),
+        ),
+      );
+      return PresenceProtocol.decodeQueryResult(raw) ??
+          const PresenceQueryResult.failure(
+            code: kPresenceCodeIpcFailed,
+            message: '主窗口服务无响应，请重试',
+          );
+    } catch (_) {
+      return const PresenceQueryResult.failure(
+        code: kPresenceCodeIpcFailed,
+        message: '主窗口服务无响应，请重试',
+      );
+    }
+  }
+
   @override
   Future<void> batchRelease(Set<String> tabIds) async {
     if (tabIds.isEmpty) return;

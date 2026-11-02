@@ -75,11 +75,16 @@ class SubWindowControlService extends GetxService {
             ),
             activate: call.activate,
             tabId: call.tabId,
+            initialChatHistory: call.chatHistory,
           );
           return true;
         } catch (_) {
           return false;
         }
+      case WindowControlProtocol.mDrainChat:
+        final tabId = WindowControlProtocol.decodeDrainChat(arguments);
+        if (tabId == null) return false;
+        return store.exportChatHistory(tabId);
       case WindowControlProtocol.mCloseTab:
         final call = WindowControlProtocol.decodeCloseTab(arguments);
         if (call == null) return false;

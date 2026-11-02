@@ -60,8 +60,14 @@ class WebScoketUtils {
 
   StreamSubscription<dynamic>? streamSubscription;
 
+  /// 连接代际：每次 close()/connect() 自增。握手中的 connect 续体醒来后
+  /// 若代际已变，说明连接在 await ready 期间被关闭或取代，必须放弃，
+  /// 不得 ready()/重试——否则旧连接会僵尸复活，与新连接双收消息。
+  int _generation = 0;
+
   void connect({bool retry = false}) async {
     close();
+    final generation = _generation;
     try {
       var wsurl = url;
       if (backupUrl != null && backupUrl!.isNotEmpty && retry) {
@@ -74,8 +80,15 @@ class WebScoketUtils {
       );
 
       await webSocket?.ready;
+      if (generation != _generation) {
+        // 握手挂起期间已被 close() 或新 connect() 取代：关掉刚建立的
+        // socket 后退出，不监听、不起心跳、不回调 onReady。
+        webSocket?.sink.close();
+        return;
+      }
       ready();
     } catch (e) {
+      if (generation != _generation) return;
       if (!retry) {
         connect(retry: true);
         return;
@@ -133,6 +146,7 @@ class WebScoketUtils {
   }
 
   void close() {
+    _generation++;
     status = SocketStatus.closed;
 
     streamSubscription?.cancel();

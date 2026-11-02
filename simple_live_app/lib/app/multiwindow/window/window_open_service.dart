@@ -257,6 +257,23 @@ class WindowOpenService extends GetxService {
         return fail('未找到要移动的标签');
       }
 
+      // 跨窗聊天历史随迁（mw_ 面，纯聊天四元组，不含凭据）：子源此刻经
+      // IPC 抽干（源控制器在步骤 5 才销毁）；主源在各落地通道同步导出。
+      // 抽干失败/空历史一律静默降级，绝不阻断标签迁移。
+      List<Object?>? chatHistory;
+      if (!fromMain) {
+        try {
+          final raw = await port.invoke(
+            sourceWindowId,
+            WindowControlProtocol.mDrainChat,
+            WindowControlProtocol.encodeDrainChat(tabId),
+          );
+          chatHistory = raw is List ? List<Object?>.from(raw) : null;
+        } catch (_) {
+          chatHistory = null;
+        }
+      }
+
       // 2. 解析目标；__new__ 此刻创建进程（早于 prepareHandoff：创建失败
       //    时根本没有 handoff 需要取消，spec §8）
       var destIsNew = false;
@@ -277,6 +294,8 @@ class WindowOpenService extends GetxService {
                   roomId: req0.roomId,
                   shareUrl: req0.shareUrl,
                   tabId: tabId,
+                  chatHistory:
+                      fromMain ? store.exportChatHistory(tabId) : chatHistory,
                 ),
               ],
               snapshot: WindowSnapshotBuilder.buildDataSnapshot(),
@@ -306,7 +325,7 @@ class WindowOpenService extends GetxService {
       // 4. 目标落标签
       if (destIsMain) {
         // 主窗控制器在 store.open 同步头内 onInit→bindTab，先于 rehomeLocal
-        store.open(req0, tabId: tabId);
+        store.open(req0, tabId: tabId, initialChatHistory: chatHistory);
         try {
           await presenceService?.rehomeLocal(tabId);
         } catch (_) {
@@ -326,6 +345,8 @@ class WindowOpenService extends GetxService {
                   roomId: req0.roomId,
                   shareUrl: req0.shareUrl,
                   activate: true,
+                  chatHistory:
+                      fromMain ? store.exportChatHistory(tabId) : chatHistory,
                 ),
               ),
             );

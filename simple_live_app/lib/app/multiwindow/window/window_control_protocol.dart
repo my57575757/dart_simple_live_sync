@@ -12,6 +12,9 @@ class WindowControlProtocol {
   static const String mOpenTab = 'mw_open_tab';
   static const String mCloseTab = 'mw_close_tab';
 
+  /// 主端在跨窗搬迁前向源子窗拉取该标签的弹幕聊天历史（只读快照）。
+  static const String mDrainChat = 'mw_drain_chat';
+
   // ---- target 线值 ----
   static const String targetNew = '__new__';
   static const String targetMain = '__main__';
@@ -77,6 +80,9 @@ class WindowControlProtocol {
         'roomId': call.roomId,
         'shareUrl': call.shareUrl,
         'activate': call.activate,
+        // 弹幕聊天历史（mw_ 线格式）；null/空不携键。逐条合法性由 codec 负责。
+        if (call.chatHistory != null && call.chatHistory!.isNotEmpty)
+          'chatHistory': call.chatHistory,
       };
 
   static OpenTabCall? decodeOpenTab(Object? args) {
@@ -86,11 +92,13 @@ class WindowControlProtocol {
     final roomId = _nonEmptyStr(args, 'roomId');
     final shareUrl = args['shareUrl'];
     final activate = args['activate'];
+    final chatHistory = args['chatHistory'];
     if (tabId == null ||
         siteId == null ||
         roomId == null ||
         shareUrl is! String ||
-        activate is! bool) {
+        activate is! bool ||
+        (chatHistory != null && chatHistory is! List)) {
       return null;
     }
     return OpenTabCall(
@@ -99,7 +107,18 @@ class WindowControlProtocol {
       roomId: roomId,
       shareUrl: shareUrl,
       activate: activate,
+      chatHistory:
+          chatHistory is List ? List<Object?>.from(chatHistory) : null,
     );
+  }
+
+  // ---- drain_chat（主 → 源子窗拉取聊天历史；载荷仅 tabId）----
+
+  static Map<String, Object?> encodeDrainChat(String tabId) => {'tabId': tabId};
+
+  static String? decodeDrainChat(Object? args) {
+    if (args is! Map) return null;
+    return _nonEmptyStr(args, 'tabId');
   }
 
   // ---- close_tab ----
@@ -174,6 +193,7 @@ class OpenTabCall {
     required this.roomId,
     required this.shareUrl,
     required this.activate,
+    this.chatHistory,
   });
 
   final String tabId;
@@ -181,6 +201,9 @@ class OpenTabCall {
   final String roomId;
   final String shareUrl;
   final bool activate;
+
+  /// 随标签搬迁的弹幕聊天历史（mw_ 线格式）；null=不回填。
+  final List<Object?>? chatHistory;
 }
 
 class CloseTabCall {
