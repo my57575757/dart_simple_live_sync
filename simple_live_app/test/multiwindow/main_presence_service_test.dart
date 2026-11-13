@@ -386,7 +386,7 @@ void main() {
         roomId: '1', guardRoomId: 'room_1', guardWebRid: '1');
     expect(
       PresenceProtocol.decodeClaimResult(resp),
-      (ok: true, reason: null),
+      (ok: true, reason: null, message: null),
     );
     expect(guard.ensureAccounts, ['douyin']);
     expect(guard.enters, ['acct1@room_1']);
@@ -623,7 +623,7 @@ void main() {
         await claim('w1', 't1',
             roomId: '1', guardRoomId: 'room_1', guardWebRid: '1'),
       ),
-      (ok: true, reason: null),
+      (ok: true, reason: null, message: null),
     );
 
     // 子窗刷新：leave 发 release（摘死亡索引 + 仲裁标签）
@@ -652,7 +652,7 @@ void main() {
         await claim('w1', 't1',
             roomId: '1', guardRoomId: 'room_1', guardWebRid: '1'),
       ),
-      (ok: true, reason: null),
+      (ok: true, reason: null, message: null),
     );
 
     // 索引重建后 guard_send 恢复 holder 执行（不再 not_holder）

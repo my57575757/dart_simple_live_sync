@@ -14,15 +14,21 @@ enum PresenceFailureReason {
 
 /// claim 结果：granted=true 时 reason 为 null；失败必带 reason。
 class PresenceClaimResult {
-  const PresenceClaimResult._(this.granted, this.reason);
+  const PresenceClaimResult._(this.granted, this.reason, this.message);
 
-  const PresenceClaimResult.granted() : this._(true, null);
+  const PresenceClaimResult.granted() : this._(true, null, null);
 
-  const PresenceClaimResult.failure({required PresenceFailureReason reason})
-      : this._(false, reason);
+  const PresenceClaimResult.failure({
+    required PresenceFailureReason reason,
+    String? message,
+  }) : this._(false, reason, message);
 
   final bool granted;
   final PresenceFailureReason? reason;
+
+  /// 服务端给出的拒绝原因原文（如「会话数已达上限」）；UI 直接展示，
+  /// 免得挂机/进房失败只剩一句无信息量的兜底文案
+  final String? message;
 }
 
 /// pr_guard_send / 网关写动作回执码。

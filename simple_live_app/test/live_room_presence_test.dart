@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:get/get.dart' hide Response;
+import 'package:simple_live_app/app/multiwindow/presence/presence_client.dart';
 import 'package:simple_live_app/app/sites.dart';
 import 'package:simple_live_app/modules/live_room/live_room_controller.dart';
 import 'package:simple_live_app/services/douyin_account_service.dart';
@@ -186,6 +187,38 @@ class FakeDouyinAccount extends DouyinAccountService {
   @override
   // ignore: must_call_super
   void onInit() {}
+}
+
+/// 假 PresenceClient：claim 固定失败（带服务端原因），验证挂机失败提示
+class _FailingClaimClient implements PresenceClient {
+  _FailingClaimClient(this.message);
+
+  final String message;
+
+  @override
+  bool get isClaimed => false;
+
+  @override
+  Future<PresenceClaimResult> claim({bool holdOnly = false}) async {
+    return (PresenceClaimResult.failure as dynamic)(
+      reason: PresenceFailureReason.enterFailed,
+      message: message,
+    ) as PresenceClaimResult;
+  }
+
+  @override
+  Future<void> release() async {}
+
+  @override
+  Future<void> detach() async {}
+
+  @override
+  Future<PresenceSendResult> sendDanmaku(String content) async =>
+      const PresenceSendResult(success: true);
+
+  @override
+  Future<PresenceSendResult> sendAction(String action) async =>
+      const PresenceSendResult(success: true);
 }
 
 late FakeDouyinSite fakeSite;
@@ -531,6 +564,24 @@ void main() {
       expect(controller.guardHolding.value, isFalse);
       expect(fakeSite.asAccountCalls, equals([true]), reason: '升级时读账号详情');
       expect(fakeSite.danmaku.starts, 1);
+    });
+
+    testWidgets('挂机失败：提示挂机失败并带出服务端原因，不说「进入直播间失败」',
+        (tester) async {
+      await bootstrap(tester);
+      controller.debugBindPresenceClient(_FailingClaimClient('会话数已达上限'));
+
+      final ok = await runAction<bool>(tester, controller.startGuardHold);
+
+      expect(ok, isFalse);
+      expect(find.textContaining('进入直播间失败'), findsNothing,
+          reason: '挂机失败不是进直播间失败，文案须区分');
+      expect(find.textContaining('挂机失败'), findsOneWidget);
+      expect(find.textContaining('会话数已达上限'), findsOneWidget,
+          reason: '服务端原因须透出，失败才可排查');
+      // toast 自动消失是定时器链（展示 2s + 退场 200ms）：断言（须在 toast
+      // 还在树上时做）后再把退场定时器走完，否则用例结束时仍 pending
+      await tester.pumpAndSettle();
     });
 
     testWidgets('stopGuardHold：发 exit 停心跳，presence 保持 guest', (

@@ -668,14 +668,21 @@ class LiveRoomController extends PlayerController
       return true;
     }
     presence.value = RoomPresence.guest;
-    SmartDialog.showToast(presenceFailureText(result.reason));
+    SmartDialog.showToast(
+        presenceFailureText(result.reason, message: result.message));
     return false;
   }
 
   /// claim/IPC 失败原因 → toast 文案（spec §5.1 逐字）。
   /// detailFailed 已不再产生（详情降级不否决），枚举/文案保留兼容 IPC 上线值；
   /// 主窗本地只会见到 enterFailed；其余为子窗 IPC 路径。
-  String presenceFailureText(PresenceFailureReason? reason) {
+  /// [message]=服务端拒绝原因原文（如「会话数已达上限」），有则附在末尾；
+  /// [fallback]=本次动作自己的兜底文案（挂机/账号进房），与「进入直播间」区分。
+  String presenceFailureText(
+    PresenceFailureReason? reason, {
+    String? message,
+    String? fallback,
+  }) {
     switch (reason) {
       case PresenceFailureReason.notLoggedIn:
         return '主窗口未登录抖音，请先在主窗口登录';
@@ -684,12 +691,26 @@ class LiveRoomController extends PlayerController
       case PresenceFailureReason.detailFailed:
         return '无法以账号身份读取该房间（可能被主播限制）';
       case PresenceFailureReason.enterFailed:
-        return '进入直播间失败，已保持游客观看';
+        return _withServerReason(
+            fallback ?? '进入直播间失败，已保持游客观看', message);
       case PresenceFailureReason.ipcFailed:
         return '主窗口服务无响应，请重试';
       case null:
-        return '进入直播间失败，已保持游客观看';
+        return _withServerReason(
+            fallback ?? '进入直播间失败，已保持游客观看', message);
     }
+  }
+
+  String _withServerReason(String base, String? message) =>
+      (message == null || message.isEmpty) ? base : '$base：$message';
+
+  /// 服务端拒绝原因原文（如「会话数已达上限」）：取自错误体 message 字段
+  String? _serverMessageOf(Object e) {
+    if (e is! DioException) return null;
+    final data = e.response?.data;
+    if (data is! Map) return null;
+    final message = data['message'];
+    return message is String && message.isNotEmpty ? message : null;
   }
 
   /// 抖音写动作（发弹幕/点赞/灯牌/入团）前确保账号在房：
@@ -711,7 +732,7 @@ class LiveRoomController extends PlayerController
   /// [force]=true 用于服务端 holder 已被抢走的场景（not_holder）：必须重 claim。
   Future<bool> _ensureAccountInRoom({
     bool force = false,
-    String failText = "账号进房失败，请稍后重试",
+    String failText = "账号进房失败",
   }) async {
     if (!force && accountInRoom.value) return true;
     if (!danmakuLogined && !_isSubWindowDouyin) {
@@ -724,7 +745,9 @@ class LiveRoomController extends PlayerController
       if (force) accountInRoom.value = false;
       final r = await client.claim(holdOnly: true);
       if (!r.granted) {
-        SmartDialog.showToast(presenceFailureText(r.reason));
+        // 挂机失败不是「进入直播间失败」：用本次动作自己的文案 + 服务端原因
+        SmartDialog.showToast(
+            presenceFailureText(r.reason, message: r.message, fallback: failText));
         return false;
       }
       accountInRoom.value = true;
@@ -733,14 +756,15 @@ class LiveRoomController extends PlayerController
     try {
       final entered = await _requestGuardEnter();
       if (entered == null) {
-        SmartDialog.showToast(failText);
+        SmartDialog.showToast('$failText，请稍后重试');
         return false;
       }
       accountInRoom.value = true;
       _startGuardHeartbeat(entered.accountId);
       return true;
     } catch (e) {
-      SmartDialog.showToast(failText);
+      SmartDialog.showToast(_withServerReason('$failText，请稍后重试',
+          _serverMessageOf(e)));
       return false;
     }
   }
@@ -762,7 +786,7 @@ class LiveRoomController extends PlayerController
       await showDanmakuLoginDialog();
       return false;
     }
-    final ok = await _ensureAccountInRoom(failText: "挂机失败，请稍后重试");
+    final ok = await _ensureAccountInRoom(failText: "挂机失败");
     if (!ok) return false;
     guardHolding.value = true;
     return true;
@@ -801,7 +825,10 @@ class LiveRoomController extends PlayerController
     try {
       entered = await _requestGuardEnter();
     } catch (e) {
-      SmartDialog.showToast("进入直播间失败，已保持游客观看");
+      SmartDialog.showToast(presenceFailureText(
+        PresenceFailureReason.enterFailed,
+        message: _serverMessageOf(e),
+      ));
       presence.value = RoomPresence.guest;
       return false;
     }

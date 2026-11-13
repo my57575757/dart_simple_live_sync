@@ -349,7 +349,8 @@ class _IpcPresenceClient implements PresenceClient {
       _claimed = r.ok;
       if (r.ok) return const PresenceClaimResult.granted();
       return PresenceClaimResult.failure(
-          reason: r.reason ?? PresenceFailureReason.ipcFailed);
+          reason: r.reason ?? PresenceFailureReason.ipcFailed,
+          message: r.message);
     } catch (_) {
       // T7：不回显异常/载荷，回执只含固定 reason
       _claimed = false;

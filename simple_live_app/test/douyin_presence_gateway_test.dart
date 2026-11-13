@@ -39,6 +39,9 @@ class FakeGuard extends GuardServerService {
   bool reregisterReturnNull = false;
   bool enterAlways500 = false;
 
+  /// 非 null 时 enterRoom 抛它（模拟服务端拒绝，如会话数已达上限）
+  DioException? enterError;
+
   final sentDanmaku = <String>[];
   final sentActions = <String>[];
   bool sendDanmakuThrow404Once = false;
@@ -99,6 +102,10 @@ class FakeGuard extends GuardServerService {
           statusCode: 500,
         ),
       );
+    }
+    final error = enterError;
+    if (error != null) {
+      throw error;
     }
     enters.add('$accountId@$roomId');
     events.add('enter:$roomId');
@@ -289,6 +296,28 @@ void main() {
       expect(guard.enters, ['acct1@room_111']);
       expect(gw.holderTabId, 'A');
       expect(gw.hasPendingApplyReplay('A'), isTrue, reason: '视角待补放');
+      gw.stopHeartbeatForTesting();
+    });
+
+    test('holdOnly claim 失败：带出服务端原因（会话数已达上限）', () async {
+      final guard = FakeGuard();
+      guard.enterError = DioException(
+        requestOptions: RequestOptions(path: '/api/room/enter'),
+        response: Response<dynamic>(
+          requestOptions: RequestOptions(path: '/api/room/enter'),
+          statusCode: 409,
+          data: {'code': 409, 'message': '会话数已达上限'},
+        ),
+      );
+      final gw = DouyinPresenceGateway(guard);
+      final a = FakeTab('A', '111');
+
+      final r = await gw.claim(a, holdOnly: true);
+
+      expect(r.granted, isFalse);
+      expect(r.reason, PresenceFailureReason.enterFailed);
+      expect((r as dynamic).message, '会话数已达上限',
+          reason: '服务端拒绝原因须透出，UI 才能给出可排查的提示');
       gw.stopHeartbeatForTesting();
     });
 

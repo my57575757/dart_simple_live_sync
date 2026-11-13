@@ -179,6 +179,7 @@ class DouyinPresenceGateway extends GetxService
       }
       return PresenceClaimResult.failure(
         reason: result.reason ?? PresenceFailureReason.enterFailed,
+        message: result.message,
       );
     }
 
@@ -629,7 +630,7 @@ class DouyinPresenceGateway extends GetxService
   /// （发送弹幕/送礼/挂时长只需账号在房）；失败 outcome 为 null，reason
   /// 给细分原因（未登录/未配置/guard 进场失败）。holdOnly（挂机）不读
   /// 账号详情，账号视角待后续完整 claim 补放。
-  Future<({_EnterOutcome? outcome, PresenceFailureReason? reason})>
+  Future<({_EnterOutcome? outcome, PresenceFailureReason? reason, String? message})>
       _performEnter(DouyinPresenceTab tab, {bool holdOnly = false}) async {
     LiveRoomDetail? detail;
     if (holdOnly) {
@@ -645,15 +646,27 @@ class DouyinPresenceGateway extends GetxService
     // 登录态门在配置门之前：未登录时不计"未配置"，文案指向主窗登录
     final loggedIn = _isAccountLoggedIn?.call() ?? true;
     if (!loggedIn) {
-      return (outcome: null, reason: PresenceFailureReason.notLoggedIn);
+      return (
+        outcome: null,
+        reason: PresenceFailureReason.notLoggedIn,
+        message: null,
+      );
     }
     if (!_guard.configured) {
-      return (outcome: null, reason: PresenceFailureReason.notConfigured);
+      return (
+        outcome: null,
+        reason: PresenceFailureReason.notConfigured,
+        message: null,
+      );
     }
     try {
       var accountId = await _guard.ensureAccount(Constant.kDouyin);
       if (accountId == null) {
-        return (outcome: null, reason: PresenceFailureReason.enterFailed);
+        return (
+          outcome: null,
+          reason: PresenceFailureReason.enterFailed,
+          message: null,
+        );
       }
       Map<String, dynamic> status;
       try {
@@ -670,7 +683,11 @@ class DouyinPresenceGateway extends GetxService
         // 服务端会话丢失：重新注册后再进一次
         final newId = await _guard.reregister(Constant.kDouyin);
         if (newId == null) {
-          return (outcome: null, reason: PresenceFailureReason.enterFailed);
+          return (
+            outcome: null,
+            reason: PresenceFailureReason.enterFailed,
+            message: null,
+          );
         }
         accountId = newId;
         status = await _guard.enterRoom(
@@ -687,10 +704,15 @@ class DouyinPresenceGateway extends GetxService
           detail: detail,
         ),
         reason: null,
+        message: null,
       );
     } catch (e) {
       Log.logPrint('presence: guard 进场失败: $e');
-      return (outcome: null, reason: PresenceFailureReason.enterFailed);
+      return (
+        outcome: null,
+        reason: PresenceFailureReason.enterFailed,
+        message: _serverMessageOf(e),
+      );
     }
   }
 
@@ -800,4 +822,14 @@ class _EnterOutcome {
   /// 账号详情尽力获取：为 null 表示读详情失败，账号在房/发送/挂时长照常，
   /// 仅账号视角（详情/账号弹幕）不可用
   final LiveRoomDetail? detail;
+}
+
+/// 服务端拒绝原因原文（如「会话数已达上限」）：取自错误体的 message 字段。
+/// 非 Dio 异常或无正文时为 null，调用方据此回退到兜底文案。
+String? _serverMessageOf(Object e) {
+  if (e is! DioException) return null;
+  final data = e.response?.data;
+  if (data is! Map) return null;
+  final message = data['message'];
+  return message is String && message.isNotEmpty ? message : null;
 }

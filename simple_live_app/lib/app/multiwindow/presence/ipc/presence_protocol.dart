@@ -383,25 +383,34 @@ class PresenceProtocol {
   static Map<String, Object?> encodeClaimOk() => {'ok': true};
 
   static Map<String, Object?> encodeClaimFailure(
-      PresenceFailureReason reason) {
+    PresenceFailureReason reason, {
+    String? message,
+  }) {
     final wire = reasonToWire(reason);
     if (wire == null) {
       // ipcFailed 是 invoke 抛错时子端本地构造的结果，永不来自主端
       throw ArgumentError('不可上线的 claim reason: $reason');
     }
-    return {'ok': false, 'reason': wire};
+    return {
+      'ok': false,
+      'reason': wire,
+      // 服务端拒绝原因原文（如「会话数已达上限」）：子窗据此给可排查的提示
+      if (message != null) 'message': message,
+    };
   }
 
-  static ({bool ok, PresenceFailureReason? reason})? decodeClaimResult(
-      Object? raw) {
+  static ({bool ok, PresenceFailureReason? reason, String? message})?
+      decodeClaimResult(Object? raw) {
     if (raw is! Map || raw['ok'] is! bool) return null;
     final ok = raw['ok'] as bool;
-    if (ok) return (ok: true, reason: null);
+    if (ok) return (ok: true, reason: null, message: null);
     final wireReason = raw['reason'];
     final reason =
         wireReason is String ? reasonFromWire(wireReason) : null;
     if (reason == null) return null;
-    return (ok: false, reason: reason);
+    final message = raw['message'];
+    if (message != null && message is! String) return null;
+    return (ok: false, reason: reason, message: message as String?);
   }
 
   static Map<String, Object?> encodeSendResult(PresenceSendResult result) => {

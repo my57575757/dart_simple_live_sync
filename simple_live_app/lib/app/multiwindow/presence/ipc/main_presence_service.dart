@@ -289,6 +289,7 @@ class MainPresenceService extends GetxService
     }
     return PresenceProtocol.encodeClaimFailure(
       result.reason ?? PresenceFailureReason.enterFailed,
+      message: result.message,
     );
   }
 

@@ -403,7 +403,7 @@ void main() {
 
     expect(
       PresenceProtocol.decodeClaimResult(PresenceProtocol.encodeClaimOk()),
-      (ok: true, reason: null),
+      (ok: true, reason: null, message: null),
     );
     for (final reason in PresenceFailureReason.values
         .where((r) => r != PresenceFailureReason.ipcFailed)) {
@@ -436,6 +436,20 @@ void main() {
     expect(sent.success, isTrue);
     expect(sent.code, isNull);
     expect(sent.message, '已发送');
+  });
+
+  test('claim 失败回执携带服务端原因（会话数已达上限）并可还原', () {
+    final encoded = (PresenceProtocol.encodeClaimFailure as dynamic)(
+      PresenceFailureReason.enterFailed,
+      message: '会话数已达上限',
+    ) as Map<String, Object?>;
+    expect(encoded['message'], '会话数已达上限');
+
+    final decoded = PresenceProtocol.decodeClaimResult(encoded);
+    expect(decoded, isNotNull);
+    expect(decoded!.ok, isFalse);
+    expect(decoded.reason, PresenceFailureReason.enterFailed);
+    expect((decoded as dynamic).message, '会话数已达上限');
   });
 
   test('坏载荷：全部 decode 为 null（不入仲裁栈、不发 HTTP）', () {
