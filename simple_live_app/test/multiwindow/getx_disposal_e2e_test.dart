@@ -275,7 +275,7 @@ void main() {
 
       await gw.claim(registry.tabs['A']!);
       await gw.claim(registry.tabs['B']!);
-      expect(gw.holderTabId, 'B');
+      expect(gw.holderTabIdFor('B'), 'B');
       expect(gw.isTrackedTab('A'), isTrue);
       expect(gw.isTrackedTab('B'), isTrue);
 
@@ -297,7 +297,7 @@ void main() {
       await _drain(registry);
       expect(gw.isTrackedTab('B'), isFalse);
       expect(gw.holderTabId, isNull);
-      expect(guard.exits, 1);
+      expect(guard.exits, 2, reason: '两个房间各自退一次（账号×房间独立会话）');
     });
 
     test('批量关：batchRelease 先于控制器销毁，_tabs 一次清空', () async {
@@ -321,7 +321,7 @@ void main() {
       await gw.claim(registry.tabs['A']!);
       await gw.claim(registry.tabs['B']!);
       await gw.claim(registry.tabs['C']!);
-      expect(gw.holderTabId, 'C');
+      expect(gw.holderTabIdFor('C'), 'C');
 
       await store.closeAll();
       await _drain(registry);
@@ -330,7 +330,7 @@ void main() {
       expect(gw.isTrackedTab('B'), isFalse);
       expect(gw.isTrackedTab('C'), isFalse);
       expect(gw.holderTabId, isNull);
-      expect(guard.exits, 1, reason: 'batchRelease 至多一次 exit');
+      expect(guard.exits, 3, reason: '每个房间组各退一次（账号×房间独立会话）');
 
       final batchIdx = events.indexWhere((e) => e.startsWith('batchRelease:'));
       expect(batchIdx, greaterThanOrEqualTo(0));
@@ -366,7 +366,7 @@ void main() {
       store.close('A');
       await _drain(registry);
       expect(gw.holderTabId, isNull);
-      expect(gw.arbiter.holder, isNull);
+      expect(gw.groups.values.every((a) => a.holder == null), isTrue);
     });
 
     test('batchRelease 后迟到 onClose 的 release 幂等，不再 exit', () async {
@@ -392,8 +392,8 @@ void main() {
       await store.closeAll();
       await _drain(registry);
 
-      // batchRelease 已 exit 一次；onClose 再 release 为未知 tab，幂等
-      expect(guard.exits, 1);
+      // batchRelease 已按房间组各 exit 一次；onClose 再 release 为未知 tab，幂等
+      expect(guard.exits, 2, reason: '两个房间组各 exit 一次，迟到 onClose 不再 exit');
       expect(gw.holderTabId, isNull);
     });
   });

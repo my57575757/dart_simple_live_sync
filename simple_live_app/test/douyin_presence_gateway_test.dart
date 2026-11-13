@@ -314,7 +314,7 @@ void main() {
       final guard = FakeGuard();
       final gw = DouyinPresenceGateway(guard);
       final a = FakeTab('A', '111');
-      final b = FakeTab('B', '222');
+      final b = FakeTab('B', '111');
       await gw.claim(a, holdOnly: true);
       await gw.claim(b);
 
@@ -363,14 +363,14 @@ void main() {
       final guard = FakeGuard();
       final gw = DouyinPresenceGateway(guard);
       final a = FakeTab('A', '111');
-      final b = FakeTab('B', '222');
+      final b = FakeTab('B', '111');
       await gw.claim(a);
       final r = await gw.claim(b);
       await Future<void>.value();
 
       expect(r.granted, isTrue);
       expect(gw.holderTabId, 'B');
-      expect(guard.enters, ['acct1@room_111', 'acct1@room_222']);
+      expect(guard.enters, ['acct1@room_111', 'acct1@room_111']);
       expect(guard.exits, isEmpty);
       expect(b.reenteredCalls, [false]);
       expect(a.yields, 1);
@@ -382,13 +382,13 @@ void main() {
       final guard = FakeGuard();
       final gw = DouyinPresenceGateway(guard);
       final a = FakeTab('A', '111');
-      final b = FakeTab('B', '222')..detailThrows = true;
+      final b = FakeTab('B', '111')..detailThrows = true;
       await gw.claim(a);
       final r = await gw.claim(b);
 
       expect(r.granted, isTrue);
       expect(gw.holderTabId, 'B');
-      expect(guard.enters, ['acct1@room_111', 'acct1@room_222']);
+      expect(guard.enters, ['acct1@room_111', 'acct1@room_111']);
       // 无账号详情：不 applyAccountEnter，游客弹幕保持
       expect(b.reenteredCalls, isEmpty);
       expect(a.yields, 1);
@@ -464,7 +464,7 @@ void main() {
           heartbeatInterval: const Duration(milliseconds: 100),
         );
         final a = FakeTab('A', '111');
-        final b = FakeTab('B', '222');
+        final b = FakeTab('B', '111');
 
         gw.claim(a);
         async.flushMicrotasks();
@@ -480,8 +480,8 @@ void main() {
           [
             'acct1@room_111',
             'acct1@room_111',
-            'acct1@room_222',
-            'acct1@room_222',
+            'acct1@room_111',
+            'acct1@room_111',
           ],
         );
         gw.stopHeartbeatForTesting();
@@ -496,7 +496,7 @@ void main() {
           heartbeatInterval: const Duration(milliseconds: 100),
         );
         final a = FakeTab('A', '111');
-        final b = FakeTab('B', '222');
+        final b = FakeTab('B', '111');
 
         gw.claim(a);
         async.flushMicrotasks();
@@ -573,7 +573,7 @@ void main() {
           guard,
           heartbeatInterval: const Duration(milliseconds: 100),
         );
-        final b = FakeTab('B', '222');
+        final b = FakeTab('B', '111');
         final gate = Completer<void>();
         guard.enterGate = gate;
 
@@ -594,7 +594,7 @@ void main() {
         expect(releaseDone, isTrue);
         expect(gw.holderTabId, isNull);
         expect(gw.hasClaim('B'), isFalse);
-        expect(guard.exits, ['acct1@room_222']);
+        expect(guard.exits, ['acct1@room_111']);
 
         async.elapse(const Duration(milliseconds: 300));
         expect(guard.beats, isEmpty, reason: '已关闭标签不得留下心跳');
@@ -610,7 +610,7 @@ void main() {
           guard,
           heartbeatInterval: const Duration(milliseconds: 100),
         );
-        final b = FakeTab('B', '222');
+        final b = FakeTab('B', '111');
         final gate = Completer<void>();
         guard.enterGate = gate;
 
@@ -633,7 +633,7 @@ void main() {
             reason: '已销毁标签不得 apply（不拉起弹幕连接）');
         expect(gw.holderTabId, isNull);
         expect(gw.hasClaim('B'), isFalse);
-        expect(guard.exits, ['acct1@room_222'],
+        expect(guard.exits, ['acct1@room_111'],
             reason: '服务端进场由排队的 release 发 exit 收口');
 
         async.elapse(const Duration(milliseconds: 300));
@@ -650,8 +650,8 @@ void main() {
           heartbeatInterval: const Duration(milliseconds: 100),
         );
         final a = FakeTab('A', '111');
-        final b = FakeTab('B', '222');
-        final c = FakeTab('C', '333');
+        final b = FakeTab('B', '111');
+        final c = FakeTab('C', '111');
 
         gw.claim(a);
         async.flushMicrotasks();
@@ -673,18 +673,23 @@ void main() {
 
         expect(
           guard.enters,
-          ['acct1@room_111', 'acct1@room_222', 'acct1@room_333'],
+          ['acct1@room_111', 'acct1@room_111', 'acct1@room_111'],
         );
         expect(gw.holderTabId, 'C');
         expect(b.yields, 1, reason: 'B 被 C 让位');
 
         async.elapse(const Duration(milliseconds: 250));
         expect(
-          guard.beats.where((s) => s.contains('room_222')),
-          isEmpty,
-          reason: '中间 claimant B 不得有任何心跳',
+          gw.holderTabIdFor('B'),
+          'C',
+          reason: '中间 claimant B 已让位，不再持有心跳',
         );
-        expect(guard.beats.last, 'acct1@room_333');
+        expect(
+          async.periodicTimerCount,
+          1,
+          reason: '同一房间组只保留一个心跳 Timer',
+        );
+        expect(guard.beats.last, 'acct1@room_111');
         gw.stopHeartbeatForTesting();
       });
     });
@@ -765,7 +770,7 @@ void main() {
           heartbeatInterval: const Duration(milliseconds: 100),
         );
         final a = FakeTab('A', '111');
-        final b = FakeTab('B', '222');
+        final b = FakeTab('B', '111');
         final gate = Completer<String?>();
         guard.reregisterEnterGate = gate;
 
@@ -788,7 +793,7 @@ void main() {
         async.elapse(const Duration(milliseconds: 100));
         expect(guard.beats.length, greaterThan(beatsAfterGate),
             reason: 'B 的续租必须继续，heartbeat 记录应增长');
-        expect(guard.beats.last, 'acct1@room_222', reason: '续租打在 B 的房间');
+        expect(guard.beats.last, 'acct1@room_111', reason: '续租打在 B 的房间');
         expect(async.periodicTimerCount, 1, reason: '仅 B 的一个心跳 Timer');
         guard.reregisterEnterGate = null;
         gw.stopHeartbeatForTesting();
@@ -804,7 +809,7 @@ void main() {
           heartbeatInterval: const Duration(milliseconds: 100),
         );
         final a = FakeTab('A', '111');
-        final b = FakeTab('B', '222');
+        final b = FakeTab('B', '111');
         gw.claim(a);
         async.flushMicrotasks();
 
@@ -835,7 +840,7 @@ void main() {
       final guard = FakeGuard();
       final gw = DouyinPresenceGateway(guard);
       final a = FakeTab('A', '111');
-      final b = FakeTab('B', '222');
+      final b = FakeTab('B', '111');
       await gw.claim(a);
       await gw.claim(b);
       await Future<void>.value();
@@ -846,10 +851,10 @@ void main() {
 
       expect(
         guard.events,
-        ['enter:room_111', 'enter:room_222', 'exit:room_222', 'enter:room_111'],
+        ['enter:room_111', 'enter:room_111', 'exit:room_111', 'enter:room_111'],
         reason: '必须先 exit B 再 fallback enter A',
       );
-      expect(guard.exits, ['acct1@room_222']);
+      expect(guard.exits, ['acct1@room_111']);
       expect(guard.enters, ['acct1@room_111']);
       expect(gw.holderTabId, 'A');
       expect(a.reenteredCalls.last, isTrue);
@@ -861,7 +866,7 @@ void main() {
       final guard = FakeGuard();
       final gw = DouyinPresenceGateway(guard);
       final a = FakeTab('A', '111');
-      final b = FakeTab('B', '222');
+      final b = FakeTab('B', '111');
       await gw.claim(a);
       await gw.claim(b);
       guard.exits.clear();
@@ -888,7 +893,7 @@ void main() {
       final guard = FakeGuard();
       final gw = DouyinPresenceGateway(guard);
       final a = FakeTab('A', '111');
-      final b = FakeTab('B', '222');
+      final b = FakeTab('B', '111');
       await gw.claim(a); // A 首次进场成功
       await gw.claim(b); // B 成为 holder，A 让位
       await Future<void>.value();
@@ -905,7 +910,7 @@ void main() {
       final guard = FakeGuard();
       final gw = DouyinPresenceGateway(guard);
       final a = FakeTab('A', '111');
-      final b = FakeTab('B', '222');
+      final b = FakeTab('B', '111');
       await gw.claim(a);
       await gw.claim(b);
       guard.exits.clear();
@@ -939,7 +944,7 @@ void main() {
         heartbeatInterval: const Duration(milliseconds: 100),
       );
       final a = FakeTab('A', '111');
-      final b = FakeTab('B', '222');
+      final b = FakeTab('B', '111');
       await gw.claim(a);
       await gw.claim(b);
       await Future<void>.value();
@@ -1005,7 +1010,7 @@ void main() {
       final guard = FakeGuard();
       final gw = DouyinPresenceGateway(guard);
       final a = FakeTab('A', '111');
-      final b = FakeTab('B', '222');
+      final b = FakeTab('B', '111');
       await gw.claim(a);
       await gw.claim(b);
       await Future<void>.value();
@@ -1014,7 +1019,7 @@ void main() {
 
       await gw.batchRelease({'A', 'B'});
 
-      expect(guard.exits, ['acct1@room_222'], reason: '只退 holder B');
+      expect(guard.exits, ['acct1@room_111'], reason: '只退 holder B');
       expect(guard.enters, isEmpty, reason: '无幸存者，不回退');
       expect(gw.holderTabId, isNull);
 
@@ -1030,8 +1035,8 @@ void main() {
       final guard = FakeGuard();
       final gw = DouyinPresenceGateway(guard);
       final a = FakeTab('A', '111');
-      final b = FakeTab('B', '222');
-      final c = FakeTab('C', '333');
+      final b = FakeTab('B', '111');
+      final c = FakeTab('C', '111');
       await gw.claim(a);
       await gw.claim(b);
       await gw.claim(c);
@@ -1041,7 +1046,7 @@ void main() {
 
       await gw.batchRelease({'B', 'C'});
 
-      expect(guard.exits, ['acct1@room_333']);
+      expect(guard.exits, ['acct1@room_111']);
       expect(guard.enters, ['acct1@room_111']);
       expect(gw.holderTabId, 'A');
       expect(a.reenteredCalls.last, isTrue);
@@ -1058,7 +1063,7 @@ void main() {
       final guard = FakeGuard();
       final gw = DouyinPresenceGateway(guard);
       final a = FakeTab('A', '111');
-      final b = FakeTab('B', '222');
+      final b = FakeTab('B', '111');
       await gw.claim(a);
       await gw.claim(b);
       guard.exits.clear();
@@ -1116,7 +1121,7 @@ void main() {
       final guard = FakeGuard();
       final gw = DouyinPresenceGateway(guard);
       final a = FakeTab('A', '111');
-      final b = FakeTab('B', '222');
+      final b = FakeTab('B', '111');
       await gw.claim(a);
       await gw.claim(b); // B 持有，A 让位
       await Future<void>.value();
@@ -1170,6 +1175,86 @@ void main() {
     });
   });
 
+  group('多房间并存（互斥粒度 = 账号 × 房间）', () {
+    test('不同房间的两个标签各自持有 presence：互不抢占、互不让位', () async {
+      final guard = FakeGuard();
+      final gw = DouyinPresenceGateway(guard);
+      final a = FakeTab('A', '111');
+      final b = FakeTab('B', '222');
+
+      await gw.claim(a);
+      await gw.claim(b);
+      await Future<void>.value();
+
+      expect(a.yields, 0, reason: '异房不得把对方降级为游客');
+      expect(guard.exits, isEmpty, reason: '异房不得互相退房');
+      expect(gw.hasClaim('A'), isTrue, reason: 'A 仍在自己房间的意图栈中');
+      expect(gw.hasClaim('B'), isTrue);
+      gw.stopHeartbeatForTesting();
+    });
+
+    test('异房各自心跳独立：两个房间都被持续续租', () {
+      FakeAsync().run((async) {
+        final guard = FakeGuard();
+        final gw = DouyinPresenceGateway(
+          guard,
+          heartbeatInterval: const Duration(milliseconds: 100),
+        );
+        final a = FakeTab('A', '111');
+        final b = FakeTab('B', '222');
+
+        gw.claim(a);
+        async.flushMicrotasks();
+        gw.claim(b);
+        async.flushMicrotasks();
+        async.elapse(const Duration(milliseconds: 250));
+
+        expect(
+          guard.beats.where((s) => s.contains('room_111')).length,
+          greaterThan(1),
+          reason: 'B 进场后 A 房间仍在续租',
+        );
+        expect(
+          guard.beats.where((s) => s.contains('room_222')).length,
+          greaterThan(1),
+          reason: 'B 房间持续续租',
+        );
+        gw.stopHeartbeatForTesting();
+      });
+    });
+
+    test('异房标签都能发弹幕：各自是本房间的 holder', () async {
+      final guard = FakeGuard();
+      final gw = DouyinPresenceGateway(guard);
+      final a = FakeTab('A', '111');
+      final b = FakeTab('B', '222');
+      await gw.claim(a);
+      await gw.claim(b);
+
+      final ra = await gw.sendDanmakuAsHolder(tabId: 'A', content: 'x');
+      final rb = await gw.sendDanmakuAsHolder(tabId: 'B', content: 'y');
+
+      expect(ra.success, isTrue, reason: 'A 在自己房间是 holder');
+      expect(rb.success, isTrue, reason: 'B 在自己房间是 holder');
+      expect(guard.sentDanmaku, ['x', 'y']);
+      gw.stopHeartbeatForTesting();
+    });
+
+    test('同房间的两个标签仍然互斥：后者抢占前者', () async {
+      final guard = FakeGuard();
+      final gw = DouyinPresenceGateway(guard);
+      final a = FakeTab('A', '111');
+      final b = FakeTab('B', '111');
+      await gw.claim(a);
+      await gw.claim(b);
+      await Future<void>.value();
+
+      expect(a.yields, 1, reason: '同房互斥保留');
+      expect(gw.hasClaim('A'), isTrue);
+      gw.stopHeartbeatForTesting();
+    });
+  });
+
   group('rehome 跨窗换端口', () {
     test('holder+ready：零 enter/exit、新端口收 applyReentered（=进场 status）、'
         '心跳经新端口 guard 参数、holder/accountId 不变', () {
@@ -1189,7 +1274,7 @@ void main() {
         expect(gw.isTrackedTab('A'), isTrue);
         expect(gw.currentGuardArgsFor('A')?.roomId, 'room_111');
 
-        final b = FakeTab('A', '222'); // 同 tabId、不同 guard 三元组
+        final b = FakeTab('A', '111', roomId: 'room_222'); // 同 tabId、不同 guard 三元组
         var rehomeDone = false;
         gw.rehome('A', newPort: b).then((_) => rehomeDone = true);
         async.flushMicrotasks();
@@ -1217,7 +1302,7 @@ void main() {
       final gw = DouyinPresenceGateway(guard);
       addTearDown(gw.stopHeartbeatForTesting);
       final a = FakeTab('A', '111');
-      final b = FakeTab('B', '222');
+      final b = FakeTab('B', '111');
       await gw.claim(a);
       await gw.claim(b); // b 成为 holder，a 在栈中非 holder
       final a2 = FakeTab('A', '111');
@@ -1286,7 +1371,7 @@ void main() {
       final a = FakeTab('A', '111');
       await gw.claim(a);
 
-      final b = FakeTab('A', '222');
+      final b = FakeTab('A', '111', roomId: 'room_222');
       b.applyThrows = true;
       await gw.rehome('A', newPort: b); // 吞异常
       expect(b.reenteredOnlyCalls, 1);
@@ -1339,7 +1424,7 @@ void main() {
         expect(gw.holderTabId, 'A');
 
         // rehome 复刻失败 → pending 置位
-        final b = FakeTab('A', '222');
+        final b = FakeTab('A', '111', roomId: 'room_222');
         b.applyThrows = true;
         gw.rehome('A', newPort: b);
         async.flushMicrotasks();
@@ -1382,7 +1467,7 @@ void main() {
         expect(gw.holderTabId, 'A');
 
         // 第一代 rehome 复刻失败 → pending 置位
-        final b1 = FakeTab('A', '222');
+        final b1 = FakeTab('A', '111', roomId: 'room_222');
         b1.applyThrows = true;
         gw.rehome('A', newPort: b1);
         async.flushMicrotasks();
@@ -1399,7 +1484,7 @@ void main() {
         expect(gw.hasPendingApplyReplay('A'), isFalse, reason: '短路已摘除 pending');
 
         // 补放仍在途时第二代 rehome：复刻失败 → pending 置位
-        final b2 = FakeTab('A', '333');
+        final b2 = FakeTab('A', '111', roomId: 'room_333');
         b2.applyThrows = true;
         gw.rehome('A', newPort: b2);
         async.flushMicrotasks();

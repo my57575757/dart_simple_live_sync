@@ -692,19 +692,66 @@ class LiveRoomController extends PlayerController
     }
   }
 
-  /// 抖音写动作（发弹幕/点赞/灯牌/入团）前确保账号在场：
-  /// 已完整进入或已挂机（账号在房）即可发送，不读账号详情
-  Future<bool> ensureAccountPresence() async {
+  /// 抖音写动作（发弹幕/点赞/灯牌/入团）前确保账号在房：
+  /// 已完整进入 / 已挂机 / 已最小进场即可发送，不读账号详情；
+  /// 否则只做**最小进场**（账号在房+心跳），不进直播间、不开账号视角。
+  Future<bool> ensureAccountPresence({bool force = false}) async {
     if (site.id != Constant.kDouyin) return true;
-    if (presence.value == RoomPresence.account || guardHolding.value) {
+    if (!force &&
+        (presence.value == RoomPresence.account ||
+            guardHolding.value ||
+            accountInRoom.value)) {
       return true;
     }
-    return enterAsAccount();
+    return _ensureAccountInRoom(force: force);
+  }
+
+  /// 最小进场：只让账号在房（服务端 holder + 心跳），不读账号详情、
+  /// 不切账号弹幕、不开账号视角——写动作与「进入直播间」解耦的核心。
+  /// [force]=true 用于服务端 holder 已被抢走的场景（not_holder）：必须重 claim。
+  Future<bool> _ensureAccountInRoom({
+    bool force = false,
+    String failText = "账号进房失败，请稍后重试",
+  }) async {
+    if (!force && accountInRoom.value) return true;
+    if (!danmakuLogined && !_isSubWindowDouyin) {
+      await showDanmakuLoginDialog();
+      return false;
+    }
+    final client = _presenceClient;
+    if (client != null) {
+      // 多窗：holdOnly claim 只建账号在房+心跳，不读详情不 apply
+      if (force) accountInRoom.value = false;
+      final r = await client.claim(holdOnly: true);
+      if (!r.granted) {
+        SmartDialog.showToast(presenceFailureText(r.reason));
+        return false;
+      }
+      accountInRoom.value = true;
+      return true;
+    }
+    try {
+      final entered = await _requestGuardEnter();
+      if (entered == null) {
+        SmartDialog.showToast(failText);
+        return false;
+      }
+      accountInRoom.value = true;
+      _startGuardHeartbeat(entered.accountId);
+      return true;
+    } catch (e) {
+      SmartDialog.showToast(failText);
+      return false;
+    }
   }
 
   /// 纯挂机（挂任务时长）：账号在房+心跳，不开账号视角（不读详情、不切弹幕）。
   /// 与「进入直播间」解耦：guest 态可独立开关，点进入直播间时升级补视角。
   final guardHolding = false.obs;
+
+  /// 账号已在房（服务端 holder + 心跳），但尚未开账号视角。
+  /// 写动作触发的最小进场与用户主动挂机都置位；退房/让位/挂起时清。
+  final accountInRoom = false.obs;
 
   Future<bool> startGuardHold() async {
     if (site.id != Constant.kDouyin) return true;
@@ -715,30 +762,10 @@ class LiveRoomController extends PlayerController
       await showDanmakuLoginDialog();
       return false;
     }
-    final client = _presenceClient;
-    if (client != null) {
-      // 多窗：holdOnly claim 只建账号在房+心跳，不读详情不 apply
-      final r = await client.claim(holdOnly: true);
-      if (!r.granted) {
-        SmartDialog.showToast(presenceFailureText(r.reason));
-        return false;
-      }
-      guardHolding.value = true;
-      return true;
-    }
-    try {
-      final entered = await _requestGuardEnter();
-      if (entered == null) {
-        SmartDialog.showToast("挂机失败，请稍后重试");
-        return false;
-      }
-      guardHolding.value = true;
-      _startGuardHeartbeat(entered.accountId);
-      return true;
-    } catch (e) {
-      SmartDialog.showToast("挂机失败，请稍后重试");
-      return false;
-    }
+    final ok = await _ensureAccountInRoom(failText: "挂机失败，请稍后重试");
+    if (!ok) return false;
+    guardHolding.value = true;
+    return true;
   }
 
   Future<void> stopGuardHold() async {
@@ -747,11 +774,13 @@ class LiveRoomController extends PlayerController
     if (client != null) {
       guardHolding.value = false;
       await client.release();
+      accountInRoom.value = false;
       return;
     }
-    // 先退房再清标志：_exitGuardRoom 对「游客且未挂机」不发 exit
+    // 先退房再清标志：_exitGuardRoom 对「游客且未在房」不发 exit
     await _exitGuardRoom();
     guardHolding.value = false;
+    accountInRoom.value = false;
   }
 
   Future<bool> _doEnterAsAccount() async {
@@ -849,6 +878,7 @@ class LiveRoomController extends PlayerController
   Future<void> applyYieldToGuest() async {
     final generation = ++_presenceGeneration;
     guardHolding.value = false;
+    accountInRoom.value = false;
     guardJoined.value = false;
     guardStarRoom.value = false;
     guardBadgeActive.value = false;
@@ -880,6 +910,7 @@ class LiveRoomController extends PlayerController
     // 不切弹幕、不抢回；使在途的让位/进场续体失效
     ++_presenceGeneration;
     guardHolding.value = false;
+    accountInRoom.value = false;
     presence.value = RoomPresence.guest;
   }
 
@@ -901,6 +932,9 @@ class LiveRoomController extends PlayerController
           // 等用户在本端主动点击/发弹幕时再抢占（与多窗口网关侧
           // applySuspended 语义一致）。
           _stopGuardHeartbeat();
+          // 账号已不在房：在房/挂机标记同时作废，后续写动作重新最小进场
+          accountInRoom.value = false;
+          guardHolding.value = false;
           if (site.id == Constant.kDouyin &&
               presence.value == RoomPresence.account) {
             await applySuspended();
@@ -1033,10 +1067,11 @@ class LiveRoomController extends PlayerController
     _stopGuardHeartbeat();
     guardJoined.value = false;
     guardStarRoom.value = false;
-    // 抖音游客态：账号从未真实进场，不发 exit（挂机=已在房，放行）
+    // 抖音游客态：账号从未真实进场，不发 exit（挂机/最小进场=已在房，放行）
     if (site.id == Constant.kDouyin &&
         presence.value != RoomPresence.account &&
-        !guardHolding.value) {
+        !guardHolding.value &&
+        !accountInRoom.value) {
       return;
     }
     if (!canStartDanmaku(detail.value)) return;
@@ -1066,14 +1101,17 @@ class LiveRoomController extends PlayerController
       final inStack = client.isClaimed;
       if (unconditional || presence.value == RoomPresence.account || inStack) {
         await client.release();
+        accountInRoom.value = false;
       }
       return;
     }
     if (unconditional) {
       await _exitGuardRoom();
+      accountInRoom.value = false;
     } else if (site.id == Constant.kDouyin &&
         presence.value == RoomPresence.account) {
       await _exitGuardRoom();
+      accountInRoom.value = false;
     }
   }
 
@@ -1086,13 +1124,14 @@ class LiveRoomController extends PlayerController
       SmartDialog.showToast("弹幕内容过长（最多200字）");
       return;
     }
-    // 抖音游客态：先以账号进入，进入被拒/取消则不发
-    if (site.id == Constant.kDouyin) {
-      final entered = await ensureAccountPresence();
-      if (!entered) return;
-    }
+    // 抖音写动作前先确保账号在房（最小进场）：只让账号在房+心跳，
+    // 不读账号详情、不切账号弹幕、不开账号视角——与「进入直播间」解耦。
     sendingDanmaku.value = true;
     try {
+      if (site.id == Constant.kDouyin) {
+        final entered = await ensureAccountPresence();
+        if (!entered) return;
+      }
       var result = await _dispatchDanmakuSend(content);
       // 抖音登录态失效（guard 内部已重试一次仍 20003）：先拉云端最新 cookie
       // 无感恢复、以新账号重进后自动重发一次；拉不到/重进失败则引导重新登录。
@@ -1157,7 +1196,8 @@ class LiveRoomController extends PlayerController
     var r = await client.sendDanmaku(content);
     if (!r.success && r.code == kPresenceCodeNotHolder) {
       presence.value = RoomPresence.guest;
-      if (await ensureAccountPresence()) {
+      // 服务端 holder 已易主：本地在房标记作废，强制重新 claim 抢回
+      if (await ensureAccountPresence(force: true)) {
         r = await client.sendDanmaku(content);
       }
     }
@@ -1248,10 +1288,12 @@ class LiveRoomController extends PlayerController
     }
     final client = _presenceClient;
     presence.value = RoomPresence.guest;
+    accountInRoom.value = false;
     if (client != null) {
       await client.release();
     }
-    return ensureAccountPresence();
+    // 新凭据对应新账号身份：强制重新最小进场（不读详情、不进直播间）
+    return ensureAccountPresence(force: true);
   }
 
   /// 斗鱼弹幕登录态（7 天）过期：弹窗引导重新登录，成功后用新 cookie 重启弹幕
@@ -1479,7 +1521,8 @@ class LiveRoomController extends PlayerController
     var r = await client.sendAction(action);
     if (!r.success && r.code == kPresenceCodeNotHolder) {
       presence.value = RoomPresence.guest;
-      if (await ensureAccountPresence()) {
+      // 服务端 holder 已易主：本地在房标记作废，强制重新 claim 抢回
+      if (await ensureAccountPresence(force: true)) {
         r = await client.sendAction(action);
       }
     }

@@ -15,7 +15,10 @@ import 'presence_client.dart';
 
 /// 抖音登录心跳全局仲裁者（每引擎一个；M3 仅主引擎在 kShell binding 实例化）。
 ///
-/// 全应用唯一心跳 Timer：只有 arbiter.holder 的房间被续租。
+/// 互斥粒度 = 账号 × 房间：同房间只承认一个 presence（先入者），
+/// 不同房间各自记账、各自广播，互不抢占。心跳按房间分组，
+/// 每组一个 Timer——异房标签进场不会掐断对方续租。
+///
 /// 账号态 HTTP（ensureAccount/enterRoom/heartbeat/exitRoom/reregister）
 /// 与 404 重注册全部收口于此；账号详情取数经 DouyinPresenceTab 端口。
 ///
@@ -33,10 +36,15 @@ class DouyinPresenceGateway extends GetxService
   final GuardServerService _guard;
   final Duration heartbeatInterval;
   final bool Function()? _isAccountLoggedIn;
-  final PresenceArbiter arbiter = PresenceArbiter();
 
   final Map<String, DouyinPresenceTab> _tabs = {};
   final Map<String, String> _accountIds = {};
+
+  /// 房间分组仲裁器：组键 = 房间（与服务端房间会话键一致）。
+  final Map<String, PresenceArbiter> _groups = {};
+
+  /// tabId → 所属房间组键
+  final Map<String, String> _tabGroup = {};
 
   /// 已完整进场成功且持有心跳的 tabId。holder 不在其中时（回退接管失败、
   /// 被外部端抢占 suspended），claim 必须重走完整进场序列而不能短路。
@@ -49,10 +57,12 @@ class DouyinPresenceGateway extends GetxService
   /// rehome 后尚未在新端口复刻成功的 tab：claim 短路分支补放一次。
   final Set<String> _pendingApplyReplay = <String>{};
 
-  Timer? _heartbeatTimer;
+  /// 每个房间组一个心跳 Timer：异房组互不掐断对方续租。
+  final Map<String, Timer> _heartbeatTimers = {};
 
-  /// 心跳拍在途标志：heartbeat RTT 超过间隔时跳过重叠拍，杜绝并发续租（#5）
-  bool _beatInFlight = false;
+  /// 每个房间组一个心跳拍在途标志：heartbeat RTT 超过间隔时跳过重叠拍，
+  /// 杜绝并发续租（#5）
+  final Map<String, bool> _beatInFlight = {};
 
   /// 变更操作串行链
   Future<void> _chain = Future<void>.value();
@@ -68,14 +78,64 @@ class DouyinPresenceGateway extends GetxService
     return done;
   }
 
-  String? get holderTabId => arbiter.holder;
+  /// 全局唯一持有者视图：仅当只有一个房间持有 presence 时返回它；
+  /// 多房间并存时为 null（按房间查询用 holderTabIdFor）。
+  String? get holderTabId {
+    final holders = <String>{};
+    for (final arbiter in _groups.values) {
+      final holder = arbiter.holder;
+      if (holder != null) holders.add(holder);
+    }
+    return holders.length == 1 ? holders.first : null;
+  }
+
+  /// 指定标签所在房间的持有者（该标签自己不在栈时返回同房他标签）。
+  String? holderTabIdFor(String tabId) {
+    final groupKey = _tabGroup[tabId];
+    if (groupKey == null) return null;
+    return _groups[groupKey]?.holder;
+  }
+
+  /// 指定房间（webRid）的持有者
+  String? holderTabIdOfRoom(String roomKey) => _groups[roomKey]?.holder;
+
+  /// 按房间分组的仲裁器视图（只读）
+  Map<String, PresenceArbiter> get groups => Map.unmodifiable(_groups);
+
+  /// 房间组键：与服务端房间会话键一致（webRid），回退 roomId；
+  /// 两者皆空时退化为 tabId 占位组
+  String _groupKeyOf(DouyinPresenceTab tab) {
+    final webRid = tab.guardWebRid.trim();
+    if (webRid.isNotEmpty) return webRid;
+    final roomId = tab.guardRoomId.trim();
+    if (roomId.isNotEmpty) return roomId;
+    return 'tab:${tab.tabId}';
+  }
+
+  PresenceArbiter _arbiterFor(String groupKey) =>
+      _groups.putIfAbsent(groupKey, () => PresenceArbiter());
+
+  /// 归组：占位组（房间标识皆空）时跟随最新可得的房间标识
+  String _resolveGroup(String tabId, DouyinPresenceTab tab) {
+    final groupKey = _groupKeyOf(tab);
+    final existing = _tabGroup[tabId];
+    if (existing == null) return groupKey;
+    if (existing.startsWith('tab:') && !groupKey.startsWith('tab:')) {
+      return groupKey;
+    }
+    return existing;
+  }
 
   /// 控制器 onInit 绑定标签端口（同 tabId 重复绑定幂等）
   void bindTab(DouyinPresenceTab tab) {
     _tabs[tab.tabId] = tab;
   }
 
-  bool hasClaim(String tabId) => arbiter.isClaimed(tabId);
+  bool hasClaim(String tabId) {
+    final groupKey = _tabGroup[tabId];
+    if (groupKey == null) return false;
+    return _groups[groupKey]?.isClaimed(tabId) ?? false;
+  }
 
   /// 显式进入 / 抢占（点「进入直播间」、发弹幕、点赞等）；
   /// holdOnly=true 为挂机：只建立账号在房+心跳，不读账号详情、不开账号视角
@@ -86,6 +146,9 @@ class DouyinPresenceGateway extends GetxService
   Future<PresenceClaimResult> _claim(DouyinPresenceTab tab,
       {bool holdOnly = false}) async {
     bindTab(tab);
+    final groupKey = _resolveGroup(tab.tabId, tab);
+    _tabGroup[tab.tabId] = groupKey;
+    final arbiter = _arbiterFor(groupKey);
     if (arbiter.holder == tab.tabId && _ready.contains(tab.tabId)) {
       if (_pendingApplyReplay.remove(tab.tabId)) {
         // best-effort，不阻塞 granted：失败由补放函数自行重新置位。
@@ -94,11 +157,11 @@ class DouyinPresenceGateway extends GetxService
       }
       return const PresenceClaimResult.granted();
     }
-    final previousHolder = _currentHolderTab();
+    final previousHolder = _currentHolderTab(groupKey);
     final selfWasHolder = arbiter.holder == tab.tabId;
-    // enter 成功前先停心跳：否则旧 holder 的下一拍会在服务端把浏览器页面
-    // 抢回旧房间，造成两个标签 flip-flop。
-    _heartbeatTimer?.cancel();
+    // enter 成功前先停同房间组的心跳：否则旧 holder 的下一拍会在服务端把
+    // 浏览器页面抢回旧房间，造成同房两个标签 flip-flop。异房组心跳不动。
+    _heartbeatTimers[groupKey]?.cancel();
 
     final result = await _performEnter(tab, holdOnly: holdOnly);
     final entered = result.outcome;
@@ -111,7 +174,7 @@ class DouyinPresenceGateway extends GetxService
           _ready.contains(previousHolder.tabId)) {
         final id = _accountIds[previousHolder.tabId];
         if (id != null) {
-          _startHeartbeat(previousHolder, id);
+          _startHeartbeat(previousHolder, id, groupKey);
         }
       }
       return PresenceClaimResult.failure(
@@ -151,7 +214,7 @@ class DouyinPresenceGateway extends GetxService
         // 补 applyReentered 开视角
         _pendingApplyReplay.add(tab.tabId);
       }
-      _startHeartbeat(tab, entered.accountId);
+      _startHeartbeat(tab, entered.accountId, groupKey);
     }
 
     if (previousHolder != null &&
@@ -208,11 +271,16 @@ class DouyinPresenceGateway extends GetxService
       _tabs[tabId] = newPort;
     }
     final tab = _tabs[tabId]!;
+    // 跨窗迁移不改变房间归属：组键沿用原值
+    final groupKey = _tabGroup[tabId];
+    if (groupKey == null) return;
+    final arbiter = _groups[groupKey];
+    if (arbiter == null) return;
     final holderReady = arbiter.holder == tabId && _ready.contains(tabId);
     if (!holderReady) return; // guest/suspended：新窗本就是游客态
     final accountId = _accountIds[tabId];
     if (accountId != null) {
-      _startHeartbeat(tab, accountId); // 零 HTTP：旧 Timer cancel、新 Timer 起
+      _startHeartbeat(tab, accountId, groupKey); // 零 HTTP：旧 Timer cancel、新 Timer 起
     }
     if (tab.isClosed) return;
     final status = _lastEnterStatus[tabId];
@@ -245,18 +313,31 @@ class DouyinPresenceGateway extends GetxService
   Future<void> _remove(String tabId, {required bool emitExit}) async {
     final tab = _tabs[tabId];
     final accountId = _accountIds[tabId];
+    final groupKey = _tabGroup[tabId];
+    if (groupKey == null) {
+      // 未知 tab：不在任何房间组里，无仲裁状态可迁移，只清残留
+      _tabs.remove(tabId);
+      _accountIds.remove(tabId);
+      _ready.remove(tabId);
+      _lastEnterStatus.remove(tabId);
+      _pendingApplyReplay.remove(tabId);
+      return;
+    }
+    final arbiter = _arbiterFor(groupKey);
     // 必须在 arbiter 摘栈前快照：detach 唯一持有者且无 fallback 时
     // transition 的 exits/enters 均为 null，会命中下方早退导致 Timer 残留（#4）
     final wasHolder = arbiter.holder == tabId;
     final transition =
         emitExit ? arbiter.release(tabId) : arbiter.detach(tabId);
     _tabs.remove(tabId);
+    _tabGroup.remove(tabId);
     _accountIds.remove(tabId);
     _ready.remove(tabId);
     _lastEnterStatus.remove(tabId);
     _pendingApplyReplay.remove(tabId);
     if (wasHolder) {
-      _heartbeatTimer?.cancel();
+      _heartbeatTimers[groupKey]?.cancel();
+      _heartbeatTimers.remove(groupKey);
     }
     if (transition == null) {
       return; // 未知 tab
@@ -264,7 +345,7 @@ class DouyinPresenceGateway extends GetxService
     if (transition.exits == null && transition.enters == null) {
       return; // 非持有者仅出栈 / detach 唯一持有者无 fallback：心跳已在上方取消
     }
-    _heartbeatTimer?.cancel();
+    _heartbeatTimers[groupKey]?.cancel();
 
     // 同一服务端浏览器页面会话：先 exit（页面回首页）再让 fallback enter，
     // 顺序反了 exit 可能作用于 fallback 刚进入的房间。
@@ -272,11 +353,11 @@ class DouyinPresenceGateway extends GetxService
       await _exitRoom(tab, accountId);
     }
     if (transition.enters != null) {
-      await _applyFallback(transition.enters!);
+      await _applyFallback(transition.enters!, groupKey);
     }
   }
 
-  /// 批量关闭（关闭其他/右侧/全部）：一次性摘栈，整批至多一次 exit、
+  /// 批量关闭（关闭其他/右侧/全部）：按房间分组一次性摘栈，每组至多一次 exit、
   /// 至多一次幸存者接管。必须在这批标签的控制器被销毁**之前**调用：
   /// 摘栈后控制器 onClose 的 release 全部命中未知 tab no-op。
   @override
@@ -285,32 +366,44 @@ class DouyinPresenceGateway extends GetxService
 
   Future<void> _batchRelease(Set<String> tabIds) async {
     if (tabIds.isEmpty) return;
-    final holderId = arbiter.holder;
-    final holderInBatch = holderId != null && tabIds.contains(holderId);
-    final exitTab = holderInBatch ? _tabs[holderId] : null;
-    final exitAccount =
-        exitTab == null ? null : _accountIds[holderId];
-
-    final transition = arbiter.releaseMany(tabIds);
-    if (transition == null) {
-      return; // 批内没有任何 claimant
-    }
+    // 跨房间的批次按组分别结算：每个房间组各自退自己的 holder
+    final byGroup = <String, Set<String>>{};
     for (final id in tabIds) {
-      _tabs.remove(id);
-      _accountIds.remove(id);
-      _ready.remove(id);
-      _lastEnterStatus.remove(id);
-      _pendingApplyReplay.remove(id);
+      final groupKey = _tabGroup[id];
+      if (groupKey == null) continue;
+      (byGroup[groupKey] ??= <String>{}).add(id);
     }
-    if (transition.exits == null && transition.enters == null) {
-      return; // 原 holder 不在批内：心跳归属不变
-    }
-    _heartbeatTimer?.cancel();
-    if (exitTab != null) {
-      await _exitRoom(exitTab, exitAccount);
-    }
-    if (transition.enters != null) {
-      await _applyFallback(transition.enters!);
+    if (byGroup.isEmpty) return;
+    for (final groupKey in byGroup.keys) {
+      final ids = byGroup[groupKey]!;
+      final arbiter = _arbiterFor(groupKey);
+      final holderId = arbiter.holder;
+      final holderInBatch = holderId != null && ids.contains(holderId);
+      final exitTab = holderInBatch ? _tabs[holderId] : null;
+      final exitAccount = exitTab == null ? null : _accountIds[holderId];
+
+      final transition = arbiter.releaseMany(ids);
+      for (final id in ids) {
+        _tabs.remove(id);
+        _tabGroup.remove(id);
+        _accountIds.remove(id);
+        _ready.remove(id);
+        _lastEnterStatus.remove(id);
+        _pendingApplyReplay.remove(id);
+      }
+      if (transition == null) {
+        continue; // 组内没有任何 claimant
+      }
+      if (transition.exits == null && transition.enters == null) {
+        continue; // 原 holder 不在批内：心跳归属不变
+      }
+      _heartbeatTimers[groupKey]?.cancel();
+      if (exitTab != null) {
+        await _exitRoom(exitTab, exitAccount);
+      }
+      if (transition.enters != null) {
+        await _applyFallback(transition.enters!, groupKey);
+      }
     }
   }
 
@@ -330,14 +423,13 @@ class DouyinPresenceGateway extends GetxService
 
   /// 非 holder / 不在 _ready：零 HTTP 直接 not_holder；
   /// accountId 缺失：not_login。404 重注册一次（与控制器旧策略一致）。
+  /// holder 判定按房间组：本标签须是**本房间**的持有者。
   Future<PresenceSendResult> _sendDanmakuAsHolder(
     String tabId,
     String content,
   ) async {
     final tab = _tabs[tabId];
-    if (tab == null ||
-        arbiter.holder != tabId ||
-        !_ready.contains(tabId)) {
+    if (tab == null || !_isRoomHolder(tabId)) {
       return PresenceSendResult.notHolder;
     }
     final accountId = _accountIds[tabId];
@@ -397,9 +489,7 @@ class DouyinPresenceGateway extends GetxService
     String action,
   ) async {
     final tab = _tabs[tabId];
-    if (tab == null ||
-        arbiter.holder != tabId ||
-        !_ready.contains(tabId)) {
+    if (tab == null || !_isRoomHolder(tabId)) {
       return PresenceSendResult.notHolder;
     }
     final accountId = _accountIds[tabId];
@@ -459,9 +549,9 @@ class DouyinPresenceGateway extends GetxService
   @visibleForTesting
   bool hasPendingApplyReplay(String tabId) => _pendingApplyReplay.contains(tabId);
 
-  /// 幸存者重新进场并接管唯一心跳；进场失败时 holder 已迁移但不在 _ready
-  /// 中、心跳暂停，用户在该标签的下一次写动作经 claim 重走完整进场序列。
-  Future<void> _applyFallback(String fallbackId) async {
+  /// 幸存者重新进场并接管该房间组的心跳；进场失败时 holder 已迁移但不在
+  /// _ready 中、心跳暂停，用户在该标签的下一次写动作经 claim 重走完整进场序列。
+  Future<void> _applyFallback(String fallbackId, String groupKey) async {
     final fallback = _tabs[fallbackId];
     if (fallback == null) {
       return;
@@ -495,13 +585,22 @@ class DouyinPresenceGateway extends GetxService
         // 账号视角未开：标记待补放，下次短路 claim 补 applyReentered
         _pendingApplyReplay.add(fallbackId);
       }
-      _startHeartbeat(fallback, entered.accountId);
+      _startHeartbeat(fallback, entered.accountId, groupKey);
     }
   }
 
-  DouyinPresenceTab? _currentHolderTab() {
-    final id = arbiter.holder;
+  DouyinPresenceTab? _currentHolderTab(String groupKey) {
+    final id = _groups[groupKey]?.holder;
     return id == null ? null : _tabs[id];
+  }
+
+  /// 本标签是否是**本房间**的持有者（且已完整进场）
+  bool _isRoomHolder(String tabId) {
+    final groupKey = _tabGroup[tabId];
+    if (groupKey == null) return false;
+    final arbiter = _groups[groupKey];
+    if (arbiter == null) return false;
+    return arbiter.holder == tabId && _ready.contains(tabId);
   }
 
   Future<void> _exitRoom(DouyinPresenceTab tab, String? accountId) async {
@@ -595,14 +694,14 @@ class DouyinPresenceGateway extends GetxService
     }
   }
 
-  /// 心跳失去 holder 资格或重注册失败的统一收口：cancel Timer、移出
-  /// _ready、标 suspended、通知标签（best-effort）。inRoom!=true 与
+  /// 心跳失去 holder 资格或重注册失败的统一收口：cancel 该房间组 Timer、
+  /// 移出 _ready、标 suspended、通知标签（best-effort）。inRoom!=true 与
   /// 404-reregister 失败共用此路径。
-  Future<void> _suspend(DouyinPresenceTab tab) async {
-    _heartbeatTimer?.cancel();
+  Future<void> _suspend(DouyinPresenceTab tab, String groupKey) async {
+    _heartbeatTimers[groupKey]?.cancel();
     Log.logPrint('presence: 心跳 suspended 收口: ${tab.tabId}');
     _ready.remove(tab.tabId);
-    arbiter.markSuspended(tab.tabId);
+    _arbiterFor(groupKey).markSuspended(tab.tabId);
     try {
       await tab.applySuspended();
     } catch (e) {
@@ -610,17 +709,18 @@ class DouyinPresenceGateway extends GetxService
     }
   }
 
-  void _startHeartbeat(DouyinPresenceTab tab, String accountId) {
-    _heartbeatTimer?.cancel();
+  void _startHeartbeat(DouyinPresenceTab tab, String accountId, String groupKey) {
+    _heartbeatTimers[groupKey]?.cancel();
+    final arbiter = _arbiterFor(groupKey);
 
     Future<void> beat() async {
       // 上一拍仍在途（RTT > 间隔）：跳过本拍，不并发 heartbeat（#5）
-      if (_beatInFlight) return;
+      if (_beatInFlight[groupKey] == true) return;
       // 回调延迟期间 holder 可能已切换：非 holder 不再续租
       if (arbiter.holder != tab.tabId) {
         return;
       }
-      _beatInFlight = true;
+      _beatInFlight[groupKey] = true;
       try {
         final data = await _guard.heartbeat(
           accountId: accountId,
@@ -633,7 +733,7 @@ class DouyinPresenceGateway extends GetxService
         }
         if (data['inRoom'] != true) {
           // 同账号在外部端进入别的房间：suspended 收口，不抢回
-          await _suspend(tab);
+          await _suspend(tab, groupKey);
           return;
         }
       } on DioException catch (e) {
@@ -649,14 +749,14 @@ class DouyinPresenceGateway extends GetxService
             }
             if (newId != null) {
               _accountIds[tab.tabId] = newId;
-              _startHeartbeat(tab, newId);
+              _startHeartbeat(tab, newId, groupKey);
             } else {
-              await _suspend(tab);
+              await _suspend(tab, groupKey);
             }
           } catch (e2) {
             Log.logPrint('弹幕服务心跳重注册失败: $e2');
             if (arbiter.holder == tab.tabId) {
-              await _suspend(tab);
+              await _suspend(tab, groupKey);
             }
           }
           return;
@@ -666,22 +766,24 @@ class DouyinPresenceGateway extends GetxService
         // 响应体畸形等：只记日志，不让单个 beat 成为未处理 async 异常
         Log.logPrint('弹幕服务心跳异常: $e');
       } finally {
-        _beatInFlight = false;
+        _beatInFlight[groupKey] = false;
       }
     }
 
-    _heartbeatTimer = Timer.periodic(heartbeatInterval, (_) => beat());
+    _heartbeatTimers[groupKey] = Timer.periodic(heartbeatInterval, (_) => beat());
   }
 
   @visibleForTesting
   void stopHeartbeatForTesting() {
-    _heartbeatTimer?.cancel();
-    _heartbeatTimer = null;
+    for (final timer in _heartbeatTimers.values) {
+      timer.cancel();
+    }
+    _heartbeatTimers.clear();
   }
 
   @override
   void onClose() {
-    _heartbeatTimer?.cancel();
+    stopHeartbeatForTesting();
     super.onClose();
   }
 }

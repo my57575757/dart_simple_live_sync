@@ -406,9 +406,10 @@ void main() {
     await register('w1', 't1');
     await claim('w1', 't1',
         roomId: '1', guardRoomId: 'room_1', guardWebRid: '1');
-    await register('w2', 't2', roomId: '2');
+    // 互斥粒度 = 账号 × 房间：同房间组内 t2 抢占 t1
+    await register('w2', 't2', roomId: '1');
     await claim('w2', 't2',
-        roomId: '2', guardRoomId: 'room_2', guardWebRid: '2');
+        roomId: '1', guardRoomId: 'room_1', guardWebRid: '1');
 
     final yields = port.invokes
         .where((i) => i.$2 == PresenceProtocol.mApplyYield)
@@ -424,7 +425,7 @@ void main() {
           const PresenceReleaseCall(windowId: 'w2', tabId: 't2')),
     );
     expect(resp, isTrue);
-    expect(guard.exits, contains('acct1@room_2'));
+    expect(guard.exits, contains('acct1@room_1'));
 
     final reenters = port.invokes
         .where((i) => i.$2 == PresenceProtocol.mApplyEnter)
@@ -499,9 +500,10 @@ void main() {
     await register('w1', 't1', roomId: '1');
     await claim('w1', 't1',
         roomId: '1', guardRoomId: 'room_1', guardWebRid: '1');
-    await register('w1', 't2', roomId: '2');
+    // 同房间组：整批释放只退本组 holder 一次
+    await register('w1', 't2', roomId: '1');
     await claim('w1', 't2',
-        roomId: '2', guardRoomId: 'room_2', guardWebRid: '2');
+        roomId: '1', guardRoomId: 'room_1', guardWebRid: '1');
 
     expect(
       await svc.handleCall(
@@ -513,7 +515,7 @@ void main() {
       ),
       isTrue,
     );
-    expect(guard.exits, ['acct1@room_2'], reason: '整批仅 holder 一次 exit');
+    expect(guard.exits, ['acct1@room_1'], reason: '同房间组整批仅 holder 一次 exit');
 
     // 正常开窗登记后 register+claim，再模拟进程被杀（无临终消息）
     registry.registerChild('w2', {'douyin_3'});
@@ -587,9 +589,9 @@ void main() {
     expect(guard.sendActions.single.containsKey('platform'), isFalse,
         reason: 'sendAction 不带 platform');
 
-    await register('w2', 't2', roomId: '2');
+    await register('w2', 't2', roomId: '1');
     await claim('w2', 't2',
-        roomId: '2', guardRoomId: 'room_2', guardWebRid: '2');
+        roomId: '1', guardRoomId: 'room_1', guardWebRid: '1');
     guard.sendDanmakus.clear();
     final displaced = PresenceProtocol.decodeSendResult(
       await svc.handleCall(
@@ -825,9 +827,9 @@ void main() {
     expect(guard.sendDanmakus.single['platform'], 'douyin');
 
     // 抢占后网关返回 not_holder（直连分支无此语义）
-    await register('w2', 't2', roomId: '2');
+    await register('w2', 't2', roomId: '1');
     await claim('w2', 't2',
-        roomId: '2', guardRoomId: 'room_2', guardWebRid: '2');
+        roomId: '1', guardRoomId: 'room_1', guardWebRid: '1');
     guard.sendDanmakus.clear();
     final displaced = await guardSend('w1', 't1', content: 'z');
     expect(displaced.code, kPresenceCodeNotHolder);

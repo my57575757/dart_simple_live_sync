@@ -364,17 +364,21 @@ void main() {
     controller.stopGuardHeartbeatForTesting();
   });
 
-  testWidgets('游客态发弹幕：自动进入成功后才经 guard 发送', (tester) async {
+  testWidgets('游客态发弹幕：最小进场（账号在房）但不读详情不切弹幕，不进直播间', (
+    tester,
+  ) async {
     await bootstrap(tester);
 
     await runAction<void>(tester, () => controller.sendDanmaku('hello'));
 
-    expect(controller.presence.value, RoomPresence.account);
+    expect(controller.presence.value, RoomPresence.guest, reason: '发弹幕不进直播间');
+    expect(fakeSite.asAccountCalls, isEmpty, reason: '发弹幕不读账号详情');
+    expect(fakeSite.danmaku.stops, 0, reason: '游客弹幕不切换');
     expect(fakeGuard.sentDanmaku, equals(['hello']));
-    expect(fakeSite.danmaku.sends, isEmpty, reason: '抖音弹幕必须走 guard');
+    expect(fakeGuard.enters.length, 1, reason: '最小进场让账号在房');
   });
 
-  testWidgets('游客态发弹幕：账号详情失败仍发送（发送与账号视角解耦）', (
+  testWidgets('游客态发弹幕：不读账号详情，详情失败也不影响发送', (
     tester,
   ) async {
     await bootstrap(tester);
@@ -382,8 +386,22 @@ void main() {
 
     await runAction<void>(tester, () => controller.sendDanmaku('hello'));
 
-    expect(controller.presence.value, RoomPresence.account);
+    expect(fakeSite.asAccountCalls, isEmpty, reason: '发弹幕不读账号详情');
     expect(fakeGuard.sentDanmaku, equals(['hello']));
+    expect(controller.presence.value, RoomPresence.guest);
+  });
+
+  testWidgets('发弹幕（最小进场）后再点进入直播间：补账号视角', (tester) async {
+    await bootstrap(tester);
+    await runAction<void>(tester, () => controller.sendDanmaku('hello'));
+    expect(controller.presence.value, RoomPresence.guest, reason: '先只最小进场');
+
+    final ok = await runAction<bool>(tester, controller.enterAsAccount);
+
+    expect(ok, isTrue);
+    expect(controller.presence.value, RoomPresence.account);
+    expect(fakeSite.asAccountCalls, equals([true]), reason: '进入直播间才读账号详情');
+    expect(fakeSite.danmaku.starts, 1, reason: '进入直播间才切账号弹幕');
   });
 
   testWidgets('游客态发弹幕：guard 进场失败则不发送', (tester) async {
@@ -401,16 +419,17 @@ void main() {
     expect(fakeSite.danmaku.sends, isEmpty);
   });
 
-  testWidgets('游客态点赞：自动进入成功后才发 action', (tester) async {
+  testWidgets('游客态点赞：最小进场后发 action，不进直播间', (tester) async {
     await bootstrap(tester);
 
     await runAction<void>(tester, controller.like);
 
-    expect(controller.presence.value, RoomPresence.account);
+    expect(controller.presence.value, RoomPresence.guest, reason: '点赞不进直播间');
+    expect(fakeSite.asAccountCalls, isEmpty, reason: '点赞不读账号详情');
     expect(fakeGuard.sentActions, equals(['like']));
   });
 
-  testWidgets('游客态点赞：账号详情失败仍发 action（发送与账号视角解耦）', (
+  testWidgets('游客态点赞：不读账号详情，详情失败也不影响发 action', (
     tester,
   ) async {
     await bootstrap(tester);
@@ -418,8 +437,9 @@ void main() {
 
     await runAction<void>(tester, controller.like);
 
-    expect(controller.presence.value, RoomPresence.account);
+    expect(fakeSite.asAccountCalls, isEmpty, reason: '点赞不读账号详情');
     expect(fakeGuard.sentActions, equals(['like']));
+    expect(controller.presence.value, RoomPresence.guest);
   });
 
   testWidgets('游客态点赞：guard 进场失败则不发 action', (tester) async {
@@ -466,6 +486,7 @@ void main() {
 
       expect(controller.presence.value, RoomPresence.guest);
       expect(controller.guardHolding.value, isTrue);
+      expect(controller.accountInRoom.value, isTrue, reason: '挂机即账号在房');
       expect(fakeSite.asAccountCalls, isEmpty, reason: '挂机不读账号详情');
       expect(fakeSite.danmaku.stops, 0);
       expect(fakeSite.danmaku.starts, 0);
@@ -524,6 +545,7 @@ void main() {
       await runAction<void>(tester, controller.stopGuardHold);
 
       expect(controller.guardHolding.value, isFalse);
+      expect(controller.accountInRoom.value, isFalse, reason: '退房后不再在房');
       expect(fakeGuard.exits, equals(['7690343577918212890']));
       expect(controller.presence.value, RoomPresence.guest);
 

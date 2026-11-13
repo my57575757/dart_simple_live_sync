@@ -102,6 +102,7 @@ class _Account extends DouyinAccountService {
 
 class _FakeClient implements PresenceClient {
   int claims = 0;
+  final claimHoldOnly = <bool>[];
   int danmakuSends = 0;
   int actionSends = 0;
   bool firstSendNotHolder = true;
@@ -113,6 +114,7 @@ class _FakeClient implements PresenceClient {
   @override
   Future<PresenceClaimResult> claim({bool holdOnly = false}) async {
     claims++;
+    claimHoldOnly.add(holdOnly);
     return const PresenceClaimResult.granted();
   }
   @override
@@ -179,10 +181,15 @@ void main() {
       await tester.pump(const Duration(milliseconds: 300));
     }
 
-    // 首次 ensure（进入）claim 一次；not_holder 后强制回 guest 重进再 claim 一次
+    // 首次 ensure（最小进场）claim 一次；not_holder 后强制重新 claim 再发一次
     expect(client.claims, 2);
     expect(client.danmakuSends, 2, reason: 'not_holder 后只重发一次');
-    expect(c.presence.value, RoomPresence.account);
+    expect(
+      client.claimHoldOnly,
+      equals([true, true]),
+      reason: '写动作只做最小进场（holdOnly），不进直播间',
+    );
+    expect(c.presence.value, RoomPresence.guest, reason: '发弹幕不进直播间');
   });
 
   testWidgets('抖音点赞遇 not_holder：强制回 guest → 重新 claim → 重发一次',
@@ -214,10 +221,15 @@ void main() {
       await tester.pump(const Duration(milliseconds: 300));
     }
 
-    // 首次 ensure（进入）claim 一次；not_holder 后强制回 guest 重进再 claim 一次
+    // 首次 ensure（最小进场）claim 一次；not_holder 后强制重新 claim 再发一次
     expect(client.claims, 2);
     expect(client.actionSends, 2, reason: 'not_holder 后只重发一次');
-    expect(c.presence.value, RoomPresence.account);
+    expect(
+      client.claimHoldOnly,
+      equals([true, true]),
+      reason: '写动作只做最小进场（holdOnly），不进直播间',
+    );
+    expect(c.presence.value, RoomPresence.guest, reason: '点赞不进直播间');
   });
 
   testWidgets('抖音点赞遇 20003：云端刷新成功 + 强制重进后重发一次，不弹重登',
@@ -255,7 +267,7 @@ void main() {
     expect(account.refreshCalls, 1, reason: '只拉一次云端 cookie');
     expect(client.actionSends, 2, reason: '恢复后只重发一次');
     expect(client.claims, 2, reason: '强制重进重新 claim');
-    expect(c.presence.value, RoomPresence.account);
+    expect(c.presence.value, RoomPresence.guest, reason: '写动作不进直播间');
     expect(find.text('抖音登录态已过期，是否重新登录？'), findsNothing,
         reason: '恢复成功不引导重登');
   });

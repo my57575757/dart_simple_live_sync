@@ -201,7 +201,8 @@ void main() {
 
   setUp(() async {
     siteA = FakeDouyinSite('111', 'room_111', FakeDanmaku());
-    siteB = FakeDouyinSite('222', 'room_222', FakeDanmaku());
+    // B 与 A 同房间：让位/接管链路只在同房间组内发生（互斥粒度 = 账号 × 房间）
+    siteB = FakeDouyinSite('111', 'room_111', FakeDanmaku());
     guard = FakeGuard();
     // 并发加载下前序 isolate 可能残留微任务回调：排空后再进用例，稳定首跑
     await Future<void>.delayed(Duration.zero);
@@ -244,19 +245,54 @@ void main() {
     expect(ok, isTrue);
     expect(b.presence.value, RoomPresence.account);
     expect(a.presence.value, RoomPresence.guest);
-    expect(guard.enters, ['room_111', 'room_222']);
+    expect(guard.enters, ['room_111', 'room_111']);
     expect(guard.exits, isEmpty, reason: '让位不发 exit');
     expect(siteA.danmaku.cookies.last, 'ttwid=guest',
         reason: 'A 重连游客弹幕');
 
     // 关闭 holder B → A 自动回退接管
     await gateway.release('tabB');
-    expect(guard.exits, ['room_222']);
+    expect(guard.exits, ['room_111']);
     expect(gateway.holderTabId, 'tabA');
     expect(a.presence.value, RoomPresence.account);
     expect(siteA.danmaku.cookies.last, 'sessionid=abc');
 
     // 唯一心跳由网关维护；body 结束前取消，避免残留 periodic Timer
+    gateway.stopHeartbeatForTesting();
+  });
+
+  testWidgets('不同房间并存：各自账号态，互不让位、互不退房', (tester) async {
+    final gateway = DouyinPresenceGateway(guard);
+
+    await tester.pumpWidget(
+      GetMaterialApp(
+        navigatorObservers: [FlutterSmartDialog.observer],
+        builder: FlutterSmartDialog.init(),
+        home: const Scaffold(body: SizedBox()),
+      ),
+    );
+    Get.put<DouyinAccountService>(FakeDouyinAccount());
+
+    final siteC = FakeDouyinSite('222', 'room_222', FakeDanmaku());
+    final a = makeController(tabId: 'tabA', site: siteA, gateway: gateway);
+    final c = makeController(tabId: 'tabC', site: siteC, gateway: gateway);
+
+    expect(await a.enterAsAccount(), isTrue);
+    await tester.pump();
+    expect(await c.enterAsAccount(), isTrue);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+
+    expect(a.presence.value, RoomPresence.account, reason: '异房互不抢占');
+    expect(c.presence.value, RoomPresence.account);
+    expect(siteA.danmaku.cookies.last, 'sessionid=abc',
+        reason: 'A 不降级游客弹幕');
+    expect(guard.enters, ['room_111', 'room_222']);
+    expect(guard.exits, isEmpty, reason: '异房不互相退房');
+    expect(gateway.holderTabId, isNull, reason: '两个房间各有持有者');
+    expect(gateway.holderTabIdFor('tabA'), 'tabA');
+    expect(gateway.holderTabIdFor('tabC'), 'tabC');
+
     gateway.stopHeartbeatForTesting();
   });
 
