@@ -11,7 +11,8 @@ class LocalPresenceClient implements PresenceClient {
   final DouyinPresenceTab _tab;
 
   @override
-  Future<PresenceClaimResult> claim() => _gateway.claim(_tab);
+  Future<PresenceClaimResult> claim({bool holdOnly = false}) =>
+      _gateway.claim(_tab, holdOnly: holdOnly);
 
   @override
   Future<void> release() => _gateway.release(_tab.tabId);

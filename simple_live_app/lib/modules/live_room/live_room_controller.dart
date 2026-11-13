@@ -648,7 +648,10 @@ class LiveRoomController extends PlayerController
         client == null ? _doEnterAsAccount() : _doEnterViaGateway(client);
     _enteringFuture = future;
     try {
-      return await future;
+      final ok = await future;
+      // 升级为完整进入（含降级在房）后挂机标志收敛
+      if (ok) guardHolding.value = false;
+      return ok;
     } finally {
       _enteringFuture = null;
     }
@@ -670,7 +673,8 @@ class LiveRoomController extends PlayerController
   }
 
   /// claim/IPC 失败原因 → toast 文案（spec §5.1 逐字）。
-  /// 主窗本地只会见到 detailFailed/enterFailed；其余为子窗 IPC 路径。
+  /// detailFailed 已不再产生（详情降级不否决），枚举/文案保留兼容 IPC 上线值；
+  /// 主窗本地只会见到 enterFailed；其余为子窗 IPC 路径。
   String presenceFailureText(PresenceFailureReason? reason) {
     switch (reason) {
       case PresenceFailureReason.notLoggedIn:
@@ -688,24 +692,80 @@ class LiveRoomController extends PlayerController
     }
   }
 
-  /// 抖音写动作（发弹幕/点赞/灯牌/入团）前确保账号在场
+  /// 抖音写动作（发弹幕/点赞/灯牌/入团）前确保账号在场：
+  /// 已完整进入或已挂机（账号在房）即可发送，不读账号详情
   Future<bool> ensureAccountPresence() async {
     if (site.id != Constant.kDouyin) return true;
-    if (presence.value == RoomPresence.account) return true;
+    if (presence.value == RoomPresence.account || guardHolding.value) {
+      return true;
+    }
     return enterAsAccount();
+  }
+
+  /// 纯挂机（挂任务时长）：账号在房+心跳，不开账号视角（不读详情、不切弹幕）。
+  /// 与「进入直播间」解耦：guest 态可独立开关，点进入直播间时升级补视角。
+  final guardHolding = false.obs;
+
+  Future<bool> startGuardHold() async {
+    if (site.id != Constant.kDouyin) return true;
+    if (guardHolding.value || presence.value == RoomPresence.account) {
+      return true;
+    }
+    if (!danmakuLogined && !_isSubWindowDouyin) {
+      await showDanmakuLoginDialog();
+      return false;
+    }
+    final client = _presenceClient;
+    if (client != null) {
+      // 多窗：holdOnly claim 只建账号在房+心跳，不读详情不 apply
+      final r = await client.claim(holdOnly: true);
+      if (!r.granted) {
+        SmartDialog.showToast(presenceFailureText(r.reason));
+        return false;
+      }
+      guardHolding.value = true;
+      return true;
+    }
+    try {
+      final entered = await _requestGuardEnter();
+      if (entered == null) {
+        SmartDialog.showToast("挂机失败，请稍后重试");
+        return false;
+      }
+      guardHolding.value = true;
+      _startGuardHeartbeat(entered.accountId);
+      return true;
+    } catch (e) {
+      SmartDialog.showToast("挂机失败，请稍后重试");
+      return false;
+    }
+  }
+
+  Future<void> stopGuardHold() async {
+    if (!guardHolding.value) return;
+    final client = _presenceClient;
+    if (client != null) {
+      guardHolding.value = false;
+      await client.release();
+      return;
+    }
+    // 先退房再清标志：_exitGuardRoom 对「游客且未挂机」不发 exit
+    await _exitGuardRoom();
+    guardHolding.value = false;
   }
 
   Future<bool> _doEnterAsAccount() async {
     final liveSite = site.liveSite;
     if (liveSite is! DouyinSite) return false;
     presence.value = RoomPresence.entering;
-    final LiveRoomDetail accountDetail;
+    // 账号详情尽力获取：发弹幕/送礼/挂时长只需账号在房，读详情失败不否决
+    // 进场；失败时仅账号视角（详情/账号弹幕）不可用，游客弹幕保持
+    LiveRoomDetail? accountDetail;
     try {
       accountDetail = await fetchAccountDetail();
     } catch (e) {
-      SmartDialog.showToast("无法以账号身份读取该房间（可能被主播限制）");
-      presence.value = RoomPresence.guest;
-      return false;
+      Log.logPrint("presence: 账号详情获取失败，降级为仅账号在房: $e");
+      accountDetail = null;
     }
 
     final ({String accountId, Map<String, dynamic> status})? entered;
@@ -722,11 +782,19 @@ class LiveRoomController extends PlayerController
       return false;
     }
 
-    await applyAccountEnter(
-      accountDetail: accountDetail,
-      guardStatus: entered.status,
-      reentered: false,
-    );
+    if (accountDetail != null) {
+      await applyAccountEnter(
+        accountDetail: accountDetail,
+        guardStatus: entered.status,
+        reentered: false,
+      );
+    } else {
+      // 迟到防护与 applyAccountEnter 同门：在途时用户刷新则本次放弃
+      if (presence.value != RoomPresence.entering) return false;
+      _applyGuardStatus(entered.status);
+      presence.value = RoomPresence.account;
+      addSysMsg("已进入直播间（账号视角暂不可用）");
+    }
     _startGuardHeartbeat(entered.accountId);
     return true;
   }
@@ -780,6 +848,7 @@ class LiveRoomController extends PlayerController
   @override
   Future<void> applyYieldToGuest() async {
     final generation = ++_presenceGeneration;
+    guardHolding.value = false;
     guardJoined.value = false;
     guardStarRoom.value = false;
     guardBadgeActive.value = false;
@@ -810,6 +879,7 @@ class LiveRoomController extends PlayerController
   Future<void> applySuspended() async {
     // 不切弹幕、不抢回；使在途的让位/进场续体失效
     ++_presenceGeneration;
+    guardHolding.value = false;
     presence.value = RoomPresence.guest;
   }
 
@@ -963,8 +1033,10 @@ class LiveRoomController extends PlayerController
     _stopGuardHeartbeat();
     guardJoined.value = false;
     guardStarRoom.value = false;
-    // 抖音游客态：账号从未真实进场，不发 exit
-    if (site.id == Constant.kDouyin && presence.value != RoomPresence.account) {
+    // 抖音游客态：账号从未真实进场，不发 exit（挂机=已在房，放行）
+    if (site.id == Constant.kDouyin &&
+        presence.value != RoomPresence.account &&
+        !guardHolding.value) {
       return;
     }
     if (!canStartDanmaku(detail.value)) return;
@@ -1458,8 +1530,10 @@ class LiveRoomController extends PlayerController
   Future<void> like() => _sendGuardAction("like");
 
   Future<void> sendFansBadge() async {
-    // 灯牌为粉丝团成员专属：未入团先入团；团还在但勋章已熄灭先点亮
+    // 送灯牌前查一次该房星守护态：进房缓存可能过期（星守护开/关、游客态
+    // 未进场），据查询结果决定送点点星光还是普通粉丝牌
     if (site.id == "douyin") {
+      await _refreshGuardStatus();
       if (!guardJoined.value) {
         SmartDialog.showToast("请先加入主播的粉丝团");
         await joinFansClub();
@@ -1478,6 +1552,26 @@ class LiveRoomController extends PlayerController
     );
     if (confirmed == true) {
       await _sendGuardAction("fans_badge");
+    }
+  }
+
+  /// 查该房入团/星守护/点亮状态并落本地；失败保留原状态（子窗未配 guard 时
+  /// 直接跳过，沿用进房/网关下发的缓存）
+  Future<void> _refreshGuardStatus() async {
+    final guard = GuardServerService.instance;
+    if (!guard.configured) return;
+    try {
+      final accountId = await guard.ensureAccount(site.id);
+      if (accountId == null) return;
+      _applyGuardStatus(
+        await guard.getGuardStatus(
+          accountId: accountId,
+          roomId: _guardRoomId,
+          webRid: _guardWebRid,
+        ),
+      );
+    } catch (e) {
+      Log.logPrint("粉丝牌状态查询失败: $e");
     }
   }
 
@@ -1542,12 +1636,33 @@ class LiveRoomController extends PlayerController
     }
   }
 
+  /// 粉丝牌形态：星守护房送点点星光（9 抖币），普通房送粉丝团灯牌（1 抖币）。
+  /// 服务端送礼时按「我是否有该直播间的星守护」自动分流，客户端据此显示
+  static ({String title, String label, String price}) fansBadgeForm(
+    bool isStarRoom,
+  ) {
+    return isStarRoom
+        ? (title: "送出点点星光", label: "点点星光", price: "9 抖币")
+        : (title: "送出粉丝团灯牌", label: "粉丝团灯牌", price: "1 抖币");
+  }
+
+  /// 每日任务弹窗「本房可送」一行；无星守护字段（如旧服务端）不显示
+  static String? fansBadgeStatusText(Map<String, dynamic> tasks) {
+    final star = tasks["starGuard"];
+    if (star is! bool) return null;
+    final form = fansBadgeForm(star);
+    return "本房可送：${form.label}（${form.price}）";
+  }
+
   Widget _buildSendBadgeConfirmDialog(bool isStarRoom) {
+    final form = fansBadgeForm(isStarRoom);
     final priceText = site.id == "douyin"
-        ? (isStarRoom ? "星守护房间将送出点点星光（8 抖币）" : "送出粉丝团灯牌（1 抖币）")
+        ? (isStarRoom
+            ? "星守护房间将送出${form.label}（${form.price}）"
+            : "送出${form.label}（${form.price}）")
         : "免费";
     return AlertDialog(
-      title: Text(isStarRoom ? "送出点点星光" : "送出粉丝团灯牌"),
+      title: Text(form.title),
       content: Text("$priceText，确认送给主播吗？"),
       actions: [
         TextButton(
@@ -1571,6 +1686,7 @@ class LiveRoomController extends PlayerController
     final items =
         (tasks["tasks"] as List?)?.whereType<Map>().toList(growable: false) ??
             const <Map>[];
+    final badgeText = fansBadgeStatusText(tasks);
 
     return AlertDialog(
       title: const Text("每日任务"),
@@ -1604,6 +1720,18 @@ class LiveRoomController extends PlayerController
                   minHeight: 6,
                   value: (intimacy / nextIntimacy).clamp(0.0, 1.0),
                 ),
+              ),
+            ],
+            if (badgeText != null) ...[
+              const SizedBox(height: 6),
+              Row(
+                children: [
+                  const Icon(Icons.card_membership, size: 16),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(badgeText, style: theme.textTheme.bodySmall),
+                  ),
+                ],
               ),
             ],
             const SizedBox(height: 8),
@@ -1670,6 +1798,10 @@ class LiveRoomController extends PlayerController
     if (tasks == null) {
       SmartDialog.showToast("每日任务查询失败，请确认已登录并加入该主播粉丝团");
       return;
+    }
+    // 任务查询带该房最新星守护态，同步本地避免沿用进房旧值
+    if (tasks["starGuard"] is bool) {
+      guardStarRoom.value = tasks["starGuard"] == true;
     }
     await Get.dialog<bool>(_buildDailyTasksDialog(tasks));
   }

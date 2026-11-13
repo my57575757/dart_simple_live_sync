@@ -361,6 +361,25 @@ void main() {
     expect(claimCall.roomId, '1');
     expect(claimCall.guardRoomId, 'room_1');
     expect(claimCall.guardExtra, {'k': 'v'});
+    expect(claimCall.holdOnly, isFalse, reason: '默认完整进场');
+
+    // 挂机：holdOnly 透传主窗；老载荷缺省 false（兼容）
+    await client.claim(holdOnly: true);
+    expect(PresenceProtocol.decodeClaim(port.calls.last.$2)!.holdOnly, isTrue);
+    expect(
+      PresenceProtocol.decodeClaim({
+        'windowId': 'w1',
+        'tabId': 't1',
+        'roomId': '1',
+        'shareUrl': 's',
+        'guardRoomId': 'r',
+        'guardWebRid': '1',
+        'guardExtra': <String, Object?>{},
+      })!
+          .holdOnly,
+      isFalse,
+      reason: '老载荷缺省完整进场',
+    );
 
     // args 提供者在再次 claim 当刻读到新值
     guardRoomId = 'room_2';

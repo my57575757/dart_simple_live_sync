@@ -77,11 +77,14 @@ class DouyinPresenceGateway extends GetxService
 
   bool hasClaim(String tabId) => arbiter.isClaimed(tabId);
 
-  /// 显式进入 / 抢占（点「进入直播间」、发弹幕、点赞等）
-  Future<PresenceClaimResult> claim(DouyinPresenceTab tab) =>
-      _serialized(() => _claim(tab));
+  /// 显式进入 / 抢占（点「进入直播间」、发弹幕、点赞等）；
+  /// holdOnly=true 为挂机：只建立账号在房+心跳，不读账号详情、不开账号视角
+  Future<PresenceClaimResult> claim(DouyinPresenceTab tab,
+          {bool holdOnly = false}) =>
+      _serialized(() => _claim(tab, holdOnly: holdOnly));
 
-  Future<PresenceClaimResult> _claim(DouyinPresenceTab tab) async {
+  Future<PresenceClaimResult> _claim(DouyinPresenceTab tab,
+      {bool holdOnly = false}) async {
     bindTab(tab);
     if (arbiter.holder == tab.tabId && _ready.contains(tab.tabId)) {
       if (_pendingApplyReplay.remove(tab.tabId)) {
@@ -97,7 +100,7 @@ class DouyinPresenceGateway extends GetxService
     // 抢回旧房间，造成两个标签 flip-flop。
     _heartbeatTimer?.cancel();
 
-    final result = await _performEnter(tab);
+    final result = await _performEnter(tab, holdOnly: holdOnly);
     final entered = result.outcome;
     if (entered == null) {
       // 仲裁尚未迁移，旧 holder 没有被让位：恢复其心跳。
@@ -131,15 +134,22 @@ class DouyinPresenceGateway extends GetxService
       // 进场由随后的 release 发 exit 收口并触发幸存者接管。
       Log.logPrint('presence: 进房在途时标签已关闭，跳过 apply: ${tab.tabId}');
     } else {
-      try {
-        await tab.applyAccountEnter(
-          accountDetail: entered.detail,
-          guardStatus: entered.status,
-          reentered: false,
-        );
-      } catch (e) {
-        // 服务端已进场，以仲裁/心跳为准；弹幕侧重连失败只记日志
-        Log.logPrint('presence: applyAccountEnter 失败: $e');
+      if (entered.detail != null) {
+        _pendingApplyReplay.remove(tab.tabId);
+        try {
+          await tab.applyAccountEnter(
+            accountDetail: entered.detail!,
+            guardStatus: entered.status,
+            reentered: false,
+          );
+        } catch (e) {
+          // 服务端已进场，以仲裁/心跳为准；弹幕侧重连失败只记日志
+          Log.logPrint('presence: applyAccountEnter 失败: $e');
+        }
+      } else {
+        // 账号视角未开（挂机/详情降级）：标记待补放，下次短路 claim
+        // 补 applyReentered 开视角
+        _pendingApplyReplay.add(tab.tabId);
       }
       _startHeartbeat(tab, entered.accountId);
     }
@@ -470,14 +480,20 @@ class DouyinPresenceGateway extends GetxService
     if (fallback.isClosed) {
       Log.logPrint('presence: 回退接管时幸存者标签已关闭，跳过 apply: $fallbackId');
     } else {
-      try {
-        await fallback.applyAccountEnter(
-          accountDetail: entered.detail,
-          guardStatus: entered.status,
-          reentered: true,
-        );
-      } catch (e) {
-        Log.logPrint('presence: 回退接管 apply 失败: $e');
+      if (entered.detail != null) {
+        _pendingApplyReplay.remove(fallbackId);
+        try {
+          await fallback.applyAccountEnter(
+            accountDetail: entered.detail!,
+            guardStatus: entered.status,
+            reentered: true,
+          );
+        } catch (e) {
+          Log.logPrint('presence: 回退接管 apply 失败: $e');
+        }
+      } else {
+        // 账号视角未开：标记待补放，下次短路 claim 补 applyReentered
+        _pendingApplyReplay.add(fallbackId);
       }
       _startHeartbeat(fallback, entered.accountId);
     }
@@ -509,15 +525,23 @@ class DouyinPresenceGateway extends GetxService
     }
   }
 
-  /// 账号进场 HTTP 序列：账号详情 → 登录态 → 配置 → ensureAccount →
-  /// enterRoom（404 重注册一次）。失败 outcome 为 null，reason 给细分原因。
+  /// 账号进场 HTTP 序列：登录态 → 配置 → ensureAccount →
+  /// enterRoom（404 重注册一次）。账号详情尽力获取，失败不否决进场
+  /// （发送弹幕/送礼/挂时长只需账号在房）；失败 outcome 为 null，reason
+  /// 给细分原因（未登录/未配置/guard 进场失败）。holdOnly（挂机）不读
+  /// 账号详情，账号视角待后续完整 claim 补放。
   Future<({_EnterOutcome? outcome, PresenceFailureReason? reason})>
-      _performEnter(DouyinPresenceTab tab) async {
-    final LiveRoomDetail detail;
-    try {
-      detail = await tab.fetchAccountDetail();
-    } catch (e) {
-      return (outcome: null, reason: PresenceFailureReason.detailFailed);
+      _performEnter(DouyinPresenceTab tab, {bool holdOnly = false}) async {
+    LiveRoomDetail? detail;
+    if (holdOnly) {
+      detail = null;
+    } else {
+      try {
+        detail = await tab.fetchAccountDetail();
+      } catch (e) {
+        Log.logPrint('presence: 账号详情获取失败，降级为仅账号在房: $e');
+        detail = null;
+      }
     }
     // 登录态门在配置门之前：未登录时不计"未配置"，文案指向主窗登录
     final loggedIn = _isAccountLoggedIn?.call() ?? true;
@@ -671,5 +695,7 @@ class _EnterOutcome {
 
   final String accountId;
   final Map<String, dynamic> status;
-  final LiveRoomDetail detail;
+  /// 账号详情尽力获取：为 null 表示读详情失败，账号在房/发送/挂时长照常，
+  /// 仅账号视角（详情/账号弹幕）不可用
+  final LiveRoomDetail? detail;
 }

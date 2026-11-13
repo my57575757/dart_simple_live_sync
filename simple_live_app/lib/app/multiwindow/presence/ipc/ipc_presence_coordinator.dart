@@ -322,7 +322,7 @@ class _IpcPresenceClient implements PresenceClient {
   bool get isClaimed => _claimed;
 
   @override
-  Future<PresenceClaimResult> claim() async {
+  Future<PresenceClaimResult> claim({bool holdOnly = false}) async {
     final a = args();
     try {
       final raw = await port.invokeMain(
@@ -336,6 +336,7 @@ class _IpcPresenceClient implements PresenceClient {
             guardRoomId: a.guardRoomId,
             guardWebRid: a.guardWebRid,
             guardExtra: a.guardExtra,
+            holdOnly: holdOnly,
           ),
         ),
       );

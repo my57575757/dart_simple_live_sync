@@ -274,6 +274,63 @@ class FakeTab implements DouyinPresenceTab {
 }
 
 void main() {
+  group('holdOnly 挂机', () {
+    test('holdOnly claim：不读详情、不 apply，granted 且标记待补放', () async {
+      final guard = FakeGuard();
+      final gw = DouyinPresenceGateway(guard);
+      final a = FakeTab('A', '111');
+
+      final r = await gw.claim(a, holdOnly: true);
+
+      expect(r.granted, isTrue);
+      expect(a.detailFetches, 0, reason: '挂机不读账号详情');
+      expect(a.reenteredCalls, isEmpty);
+      expect(a.reenteredOnlyCalls, 0);
+      expect(guard.enters, ['acct1@room_111']);
+      expect(gw.holderTabId, 'A');
+      expect(gw.hasPendingApplyReplay('A'), isTrue, reason: '视角待补放');
+      gw.stopHeartbeatForTesting();
+    });
+
+    test('holdOnly 后完整 claim：短路补放视角一次，不重进', () async {
+      final guard = FakeGuard();
+      final gw = DouyinPresenceGateway(guard);
+      final a = FakeTab('A', '111');
+      await gw.claim(a, holdOnly: true);
+
+      final r = await gw.claim(a);
+      // 补放经 unawaited 入串行链，排空微任务让它跑完
+      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(r.granted, isTrue);
+      expect(guard.enters.length, 1, reason: '短路不重进');
+      expect(a.reenteredOnlyCalls, 1, reason: '补放 applyReentered 开视角');
+      expect(gw.hasPendingApplyReplay('A'), isFalse);
+      gw.stopHeartbeatForTesting();
+    });
+
+    test('holdOnly 中被抢占后完整重进：apply 成功 pending 不残留', () async {
+      final guard = FakeGuard();
+      final gw = DouyinPresenceGateway(guard);
+      final a = FakeTab('A', '111');
+      final b = FakeTab('B', '222');
+      await gw.claim(a, holdOnly: true);
+      await gw.claim(b);
+
+      final r = await gw.claim(a);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(r.granted, isTrue);
+      expect(gw.holderTabId, 'A');
+      expect(a.yields, 1, reason: 'holdOnly 被抢也走让位');
+      expect(a.reenteredCalls, [false], reason: '完整重进走 applyAccountEnter');
+      expect(a.reenteredOnlyCalls, 0, reason: '无补放');
+      expect(gw.hasPendingApplyReplay('A'), isFalse);
+      gw.stopHeartbeatForTesting();
+    });
+  });
+
   group('claim 进场', () {
     test('首个 claim：enter 一次、applyAccountEnter、holder 为该 tab',
         () async {
@@ -320,8 +377,8 @@ void main() {
       gw.stopHeartbeatForTesting();
     });
 
-    test('账号详情失败：detailFailed=true，仲裁不变、旧 holder 未 yield',
-        () async {
+    test('账号详情失败：仍 granted 进场（不切账号弹幕），仲裁迁移照常', () async {
+      // 解耦：发送弹幕/送礼/挂时长只需账号在房，读详情失败不得否决 claim
       final guard = FakeGuard();
       final gw = DouyinPresenceGateway(guard);
       final a = FakeTab('A', '111');
@@ -329,12 +386,12 @@ void main() {
       await gw.claim(a);
       final r = await gw.claim(b);
 
-      expect(r.granted, isFalse);
-      expect(r.reason, PresenceFailureReason.detailFailed);
-      expect(gw.holderTabId, 'A');
-      expect(guard.enters, ['acct1@room_111']);
-      expect(a.yields, 0);
+      expect(r.granted, isTrue);
+      expect(gw.holderTabId, 'B');
+      expect(guard.enters, ['acct1@room_111', 'acct1@room_222']);
+      // 无账号详情：不 applyAccountEnter，游客弹幕保持
       expect(b.reenteredCalls, isEmpty);
+      expect(a.yields, 1);
       gw.stopHeartbeatForTesting();
     });
 
@@ -439,7 +496,7 @@ void main() {
           heartbeatInterval: const Duration(milliseconds: 100),
         );
         final a = FakeTab('A', '111');
-        final b = FakeTab('B', '222')..detailThrows = true;
+        final b = FakeTab('B', '222');
 
         gw.claim(a);
         async.flushMicrotasks();
@@ -447,6 +504,8 @@ void main() {
         final before = guard.beats.length;
         expect(before, 1);
 
+        // 读详情失败已不否决 claim，claim 失败用 guard 进场失败构造
+        guard.enterAlways500 = true;
         gw.claim(b);
         async.flushMicrotasks();
         async.elapse(const Duration(milliseconds: 150));
@@ -884,12 +943,13 @@ void main() {
       await gw.claim(a);
       await gw.claim(b);
       await Future<void>.value();
-      a.detailThrows = true;
+      // 读详情失败已不否决进场，回退接管失败用 guard 进场失败构造
+      guard.enterAlways500 = true;
       await gw.release('B'); // 回退 A 失败：holder=A 但不 ready
       expect(gw.holderTabId, 'A');
       expect(a.reenteredCalls, [false], reason: '回退失败不 apply');
 
-      a.detailThrows = false;
+      guard.enterAlways500 = false;
       final yieldsBeforeReclaim = a.yields;
       final r = await gw.claim(a); // 不得命中 holder 短路
 

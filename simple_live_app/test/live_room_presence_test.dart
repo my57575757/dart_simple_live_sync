@@ -101,6 +101,9 @@ class FakeGuard extends GuardServerService {
   Future<String?> ensureAccount(String platform) async => 'acct1';
 
   @override
+  String? savedAccountId(String platform) => 'acct1';
+
+  @override
   Future<String?> reregister(String platform) async => 'acct2';
 
   @override
@@ -293,7 +296,9 @@ void main() {
     controller.stopGuardHeartbeatForTesting();
   });
 
-  testWidgets('账号详情失败：回 guest，弹幕未停、guard 未进场', (tester) async {
+  testWidgets('账号详情失败：仍进入（账号在房+挂时长），游客弹幕保持不切换', (
+    tester,
+  ) async {
     await bootstrap(tester);
     fakeSite.accountFailsOnDetail = true;
 
@@ -303,11 +308,28 @@ void main() {
       settle: const Duration(milliseconds: 2100),
     );
 
-    expect(ok, isFalse);
-    expect(controller.presence.value, RoomPresence.guest);
-    expect(fakeSite.danmaku.stops, 0);
+    // 解耦：发弹幕/送礼/挂时长只需账号在房，读详情失败不得否决进场
+    expect(ok, isTrue);
+    expect(controller.presence.value, RoomPresence.account);
+    expect(fakeGuard.enters, equals(['7690343577918212890']));
+    expect(fakeSite.danmaku.stops, 0, reason: '不切账号弹幕，游客弹幕保持');
     expect(fakeSite.danmaku.starts, 0);
-    expect(fakeGuard.enters, isEmpty);
+  });
+
+  testWidgets('账号详情失败：挂时长心跳照常启动', (tester) async {
+    await bootstrap(tester);
+    fakeSite.accountFailsOnDetail = true;
+
+    final future = controller.enterAsAccount();
+    await tester.pump();
+    expect(await future, isTrue);
+    await tester.pump();
+
+    await tester.pump(const Duration(seconds: 21));
+    expect(fakeGuard.heartbeatCalls, 1, reason: '降级进场也要续 presence 租约');
+
+    controller.stopGuardHeartbeatForTesting();
+    await tester.pump(const Duration(milliseconds: 100));
   });
 
   testWidgets('guard 进场失败：回 guest，弹幕未停、播放继续', (tester) async {
@@ -352,9 +374,21 @@ void main() {
     expect(fakeSite.danmaku.sends, isEmpty, reason: '抖音弹幕必须走 guard');
   });
 
-  testWidgets('游客态发弹幕：自动进入失败则不发送', (tester) async {
+  testWidgets('游客态发弹幕：账号详情失败仍发送（发送与账号视角解耦）', (
+    tester,
+  ) async {
     await bootstrap(tester);
     fakeSite.accountFailsOnDetail = true;
+
+    await runAction<void>(tester, () => controller.sendDanmaku('hello'));
+
+    expect(controller.presence.value, RoomPresence.account);
+    expect(fakeGuard.sentDanmaku, equals(['hello']));
+  });
+
+  testWidgets('游客态发弹幕：guard 进场失败则不发送', (tester) async {
+    await bootstrap(tester);
+    fakeGuard.enterThrows = true;
 
     await runAction<void>(
       tester,
@@ -376,9 +410,21 @@ void main() {
     expect(fakeGuard.sentActions, equals(['like']));
   });
 
-  testWidgets('游客态点赞：自动进入失败则不发 action', (tester) async {
+  testWidgets('游客态点赞：账号详情失败仍发 action（发送与账号视角解耦）', (
+    tester,
+  ) async {
     await bootstrap(tester);
     fakeSite.accountFailsOnDetail = true;
+
+    await runAction<void>(tester, controller.like);
+
+    expect(controller.presence.value, RoomPresence.account);
+    expect(fakeGuard.sentActions, equals(['like']));
+  });
+
+  testWidgets('游客态点赞：guard 进场失败则不发 action', (tester) async {
+    await bootstrap(tester);
+    fakeGuard.enterThrows = true;
 
     await runAction<void>(
       tester,
@@ -405,5 +451,85 @@ void main() {
     expect(ok, isFalse);
     expect(controller.presence.value, RoomPresence.guest);
     expect(fakeGuard.enters, isEmpty);
+  });
+
+  group('挂机（挂任务时长与进入直播间解耦）', () {
+    testWidgets('挂机：不读账号详情不切弹幕，心跳启动，presence 保持 guest', (
+      tester,
+    ) async {
+      await bootstrap(tester);
+
+      final future = controller.startGuardHold();
+      await tester.pump();
+      expect(await future, isTrue);
+      await tester.pump();
+
+      expect(controller.presence.value, RoomPresence.guest);
+      expect(controller.guardHolding.value, isTrue);
+      expect(fakeSite.asAccountCalls, isEmpty, reason: '挂机不读账号详情');
+      expect(fakeSite.danmaku.stops, 0);
+      expect(fakeSite.danmaku.starts, 0);
+      expect(fakeGuard.enters, equals(['7690343577918212890']));
+
+      await tester.pump(const Duration(seconds: 21));
+      expect(fakeGuard.heartbeatCalls, 1, reason: '挂机即挂时长');
+      controller.stopGuardHeartbeatForTesting();
+      await tester.pump(const Duration(milliseconds: 100));
+    });
+
+    testWidgets('挂机中发弹幕：直接经 guard 发送，不读详情不重复进场', (
+      tester,
+    ) async {
+      await bootstrap(tester);
+      final f = controller.startGuardHold();
+      await tester.pump();
+      await f;
+      await tester.pump();
+      final entersAfterHold = fakeGuard.enters.length;
+
+      await runAction<void>(tester, () => controller.sendDanmaku('hi'));
+
+      expect(fakeGuard.sentDanmaku, equals(['hi']));
+      expect(fakeSite.asAccountCalls, isEmpty, reason: '发送不读账号详情');
+      expect(fakeGuard.enters.length, entersAfterHold);
+      expect(controller.guardHolding.value, isTrue, reason: '发送不升级为完整进入');
+    });
+
+    testWidgets('挂机中点进入直播间：补账号视角，guardHolding 清', (tester) async {
+      await bootstrap(tester);
+      final f = controller.startGuardHold();
+      await tester.pump();
+      await f;
+      await tester.pump();
+      expect(controller.guardHolding.value, isTrue, reason: '从挂机态出发');
+
+      final ok = await runAction<bool>(tester, controller.enterAsAccount);
+
+      expect(ok, isTrue);
+      expect(controller.presence.value, RoomPresence.account);
+      expect(controller.guardHolding.value, isFalse);
+      expect(fakeSite.asAccountCalls, equals([true]), reason: '升级时读账号详情');
+      expect(fakeSite.danmaku.starts, 1);
+    });
+
+    testWidgets('stopGuardHold：发 exit 停心跳，presence 保持 guest', (
+      tester,
+    ) async {
+      await bootstrap(tester);
+      final f = controller.startGuardHold();
+      await tester.pump();
+      await f;
+      await tester.pump();
+
+      await runAction<void>(tester, controller.stopGuardHold);
+
+      expect(controller.guardHolding.value, isFalse);
+      expect(fakeGuard.exits, equals(['7690343577918212890']));
+      expect(controller.presence.value, RoomPresence.guest);
+
+      final beats = fakeGuard.heartbeatCalls;
+      await tester.pump(const Duration(seconds: 41));
+      expect(fakeGuard.heartbeatCalls, beats, reason: '心跳已停');
+    });
   });
 }

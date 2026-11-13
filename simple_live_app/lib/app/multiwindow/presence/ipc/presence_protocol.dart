@@ -103,6 +103,7 @@ class PresenceProtocol {
         'guardRoomId': call.guardRoomId,
         'guardWebRid': call.guardWebRid,
         'guardExtra': call.guardExtra,
+        'holdOnly': call.holdOnly,
       };
 
   static PresenceClaimCall? decodeClaim(Object? args) {
@@ -133,6 +134,8 @@ class PresenceProtocol {
       guardRoomId: guardRoomId,
       guardWebRid: guardWebRid,
       guardExtra: Map<String, Object?>.from(guardExtra),
+      // 老载荷缺省 false（完整进场）
+      holdOnly: args['holdOnly'] == true,
     );
   }
 
@@ -474,6 +477,7 @@ class PresenceClaimCall {
     required this.guardRoomId,
     required this.guardWebRid,
     required this.guardExtra,
+    this.holdOnly = false,
   });
 
   final String windowId;
@@ -483,6 +487,7 @@ class PresenceClaimCall {
   final String guardRoomId;
   final String guardWebRid;
   final Map<String, Object?> guardExtra;
+  final bool holdOnly;
 }
 
 class PresenceReleaseCall {

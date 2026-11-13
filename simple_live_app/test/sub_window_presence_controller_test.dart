@@ -126,7 +126,7 @@ class _FakeWriteClient implements PresenceClient {
   PresenceSendResult result = const PresenceSendResult(success: true);
 
   @override
-  Future<PresenceClaimResult> claim() async =>
+  Future<PresenceClaimResult> claim({bool holdOnly = false}) async =>
       const PresenceClaimResult.granted();
 
   @override

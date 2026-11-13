@@ -111,7 +111,7 @@ class _FakeClient implements PresenceClient {
   @override
   bool isClaimed = true;
   @override
-  Future<PresenceClaimResult> claim() async {
+  Future<PresenceClaimResult> claim({bool holdOnly = false}) async {
     claims++;
     return const PresenceClaimResult.granted();
   }

@@ -283,7 +283,7 @@ class MainPresenceService extends GetxService
       guardWebRid: call.guardWebRid,
       guardExtra: call.guardExtra,
     );
-    final result = await gateway.claim(tab);
+    final result = await gateway.claim(tab, holdOnly: call.holdOnly);
     if (result.granted) {
       return PresenceProtocol.encodeClaimOk();
     }

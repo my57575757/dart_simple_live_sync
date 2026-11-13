@@ -332,7 +332,8 @@ class LiveRoomPage extends GetView<LiveRoomController> {
     );
   }
 
-  /// 抖音「进入直播间」：独立于控制条，不随 5 秒隐藏
+  /// 抖音「进入直播间」与「挂机」：独立于控制条，不随 5 秒隐藏。
+  /// 挂机=只挂任务时长（账号在房+心跳），不读详情不切弹幕，与进入解耦。
   Widget buildEnterRoomButton() {
     return Obx(() {
       if (controller.site.id != Constant.kDouyin) {
@@ -367,37 +368,75 @@ class LiveRoomPage extends GetView<LiveRoomController> {
           text = "已进入";
           onTap = null;
       }
+      // 挂机 toggle 只在游客态提供：已进入（含降级）本就带挂时长
+      final holdActive = controller.guardHolding.value;
+      final showHold = current == RoomPresence.guest;
+
+      Widget pill({
+        required Widget leading,
+        required String text,
+        required VoidCallback? onTap,
+        bool active = false,
+        bool dim = false,
+      }) {
+        return InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(16),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+            decoration: BoxDecoration(
+              color: active ? Colors.white24 : Colors.black54,
+              borderRadius: BorderRadius.circular(16),
+              border: active ? Border.all(color: Colors.white54) : null,
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                leading,
+                const SizedBox(width: 6),
+                Text(
+                  text,
+                  style: TextStyle(
+                    color: dim ? Colors.white70 : Colors.white,
+                    fontSize: 13,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      }
+
       return Positioned(
         left: 12,
         bottom: 56,
         child: Material(
           color: Colors.transparent,
-          child: InkWell(
-            onTap: onTap,
-            borderRadius: BorderRadius.circular(16),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-              decoration: BoxDecoration(
-                color: Colors.black54,
-                borderRadius: BorderRadius.circular(16),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              pill(
+                leading: leading,
+                text: text,
+                onTap: onTap,
+                dim: current == RoomPresence.account,
               ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  leading,
-                  const SizedBox(width: 6),
-                  Text(
-                    text,
-                    style: TextStyle(
-                      color: current == RoomPresence.account
-                          ? Colors.white70
-                          : Colors.white,
-                      fontSize: 13,
-                    ),
+              if (showHold) ...[
+                const SizedBox(width: 8),
+                pill(
+                  leading: Icon(
+                    holdActive ? Icons.timer : Icons.timer_outlined,
+                    size: 15,
+                    color: Colors.white,
                   ),
-                ],
-              ),
-            ),
+                  text: holdActive ? "挂机中" : "挂机",
+                  onTap: () => holdActive
+                      ? controller.stopGuardHold()
+                      : controller.startGuardHold(),
+                  active: holdActive,
+                ),
+              ],
+            ],
           ),
         ),
       );

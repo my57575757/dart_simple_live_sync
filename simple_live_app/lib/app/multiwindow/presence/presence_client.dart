@@ -67,7 +67,7 @@ class PresenceQueryResult {
 }
 
 abstract class PresenceClient {
-  Future<PresenceClaimResult> claim();
+  Future<PresenceClaimResult> claim({bool holdOnly = false});
   Future<void> release();
   Future<void> detach();
 
