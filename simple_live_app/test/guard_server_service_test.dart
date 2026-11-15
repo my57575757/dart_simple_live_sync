@@ -60,6 +60,44 @@ void main() {
     });
   }
 
+  test("连续两次请求复用同一 TCP 连接（Dio 单例 keep-alive）", () async {
+    // WHY：frp 隧道冷连接实测 60–180ms、热连接 1–2ms。每请求新建 Dio 会让
+    // 连接池无法复用，发送弹幕白付一整轮握手；单例 Dio 下两次串行请求必须
+    // 落在同一条 keep-alive 连接上（server 侧 remotePort 相同）。
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    final remotePorts = <int>[];
+    server.listen((request) {
+      remotePorts.add(request.connectionInfo!.remotePort);
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(
+        '{"code":0,"data":{"success":true,"platformCode":0,"message":""}}',
+      );
+      request.response.close();
+    });
+
+    final service = GuardServerService();
+    service.serverUrl = "http://127.0.0.1:${server.port}";
+    service.token = "t";
+
+    await service.sendDanmaku(
+      platform: "douyin",
+      accountId: "a1",
+      roomId: "r1",
+      content: "first",
+    );
+    await service.sendDanmaku(
+      platform: "douyin",
+      accountId: "a1",
+      roomId: "r1",
+      content: "second",
+    );
+
+    expect(remotePorts, hasLength(2));
+    expect(remotePorts[0], remotePorts[1]);
+
+    await server.close(force: true);
+  });
+
   test("saveRoomTrust 收到 400 实测拒绝：异常文本透传服务端原因", () async {
     final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     server.listen((request) async {

@@ -15,6 +15,18 @@ class GuardServerService extends GetxService {
   String serverUrl = "";
   String token = "";
 
+  /// 单例 Dio：复用底层 HttpClient 的 keep-alive 连接池。每请求新建 Dio 会
+  /// 重新 TCP/TLS 握手（frp 隧道冷连接实测 60–180ms，热连接仅 1–2ms），
+  /// 心跳每 20s 一次也让连接保持温热。baseUrl 每次取用時同步，兼容 setConfig
+  /// 切换服务地址；各调用的超时差异由 per-request Options.copyWith 覆盖。
+  Dio? _httpClient;
+
+  Dio get _dio {
+    final dio = _httpClient ??= Dio();
+    dio.options.baseUrl = serverUrl;
+    return dio;
+  }
+
   @override
   void onInit() {
     serverUrl = LocalStorageService.instance
@@ -26,9 +38,11 @@ class GuardServerService extends GetxService {
 
   bool get configured => serverUrl.trim().isNotEmpty;
 
-  /// /api/send、/api/action 等待响应上限：冷启动进房正常约 10s，服务端更久无响应即判失败
+  /// /api/send、/api/action 等待响应上限。guard 侧 chat/like fetch 单次 8s
+  /// 超时 + 一次重试，最坏约 16.5s；25s 给 frp 隧道与排队留足余量，同时保证
+  /// presence 串行链能在半分钟内释放，不再出现挂死 60s 堵死后续弹幕的情况。
   @visibleForTesting
-  Duration requestReceiveTimeout = const Duration(seconds: 60);
+  Duration requestReceiveTimeout = const Duration(seconds: 25);
 
   Future<void> setConfig(String url, String token) async {
     serverUrl = url.trim();
@@ -127,11 +141,13 @@ class GuardServerService extends GetxService {
   Options get _options => Options(headers: {"Authorization": "Bearer $token"});
 
   Future<String> registerAccount(String platform, String cookie) async {
-    final dio = Dio(BaseOptions(baseUrl: serverUrl, connectTimeout: const Duration(seconds: 10), receiveTimeout: const Duration(seconds: 20)));
-    final res = await dio.post<dynamic>(
+    final res = await _dio.post<dynamic>(
       "/api/account",
       data: {"platform": platform, "cookie": cookie},
-      options: _options,
+      options: _options.copyWith(
+        connectTimeout: const Duration(seconds: 10),
+        receiveTimeout: const Duration(seconds: 20),
+      ),
     );
     return res.data["data"]["accountId"].toString();
   }
@@ -160,8 +176,7 @@ class GuardServerService extends GetxService {
     required String content,
     Map<String, dynamic>? extra,
   }) async {
-    final dio = Dio(BaseOptions(baseUrl: serverUrl, connectTimeout: const Duration(seconds: 30), receiveTimeout: requestReceiveTimeout));
-    final res = await dio.post<dynamic>(
+    final res = await _dio.post<dynamic>(
       "/api/send",
       data: {
         "accountId": accountId,
@@ -170,7 +185,10 @@ class GuardServerService extends GetxService {
         "content": content,
         "extra": extra ?? {},
       },
-      options: _options,
+      options: _options.copyWith(
+        connectTimeout: const Duration(seconds: 30),
+        receiveTimeout: requestReceiveTimeout,
+      ),
     );
     return Map<String, dynamic>.from(res.data["data"] as Map);
   }
@@ -182,8 +200,7 @@ class GuardServerService extends GetxService {
     String webRid = "",
     required String action,
   }) async {
-    final dio = Dio(BaseOptions(baseUrl: serverUrl, connectTimeout: const Duration(seconds: 30), receiveTimeout: requestReceiveTimeout));
-    final res = await dio.post<dynamic>(
+    final res = await _dio.post<dynamic>(
       "/api/action",
       data: {
         "accountId": accountId,
@@ -191,28 +208,26 @@ class GuardServerService extends GetxService {
         "webRid": webRid,
         "action": action,
       },
-      options: _options,
+      options: _options.copyWith(
+        connectTimeout: const Duration(seconds: 30),
+        receiveTimeout: requestReceiveTimeout,
+      ),
     );
     return Map<String, dynamic>.from(res.data["data"] as Map);
   }
 
   Future<void> deleteAccount(String accountId) async {
-    final dio = Dio(BaseOptions(baseUrl: serverUrl));
-    await dio.delete<dynamic>("/api/account/$accountId", options: _options);
+    await _dio.delete<dynamic>("/api/account/$accountId", options: _options);
   }
 
   /// 同步抖音关注房 webRid 清单给 guard，供其定时冷启动预热；未配置则忽略。
   Future<void> syncDouyinWarmRooms(List<String> webRids) async {
     if (!configured) return;
     try {
-      final dio = Dio(BaseOptions(
-        baseUrl: serverUrl,
-        connectTimeout: const Duration(seconds: 10),
-      ));
-      await dio.post<dynamic>(
+      await _dio.post<dynamic>(
         "/api/warm/rooms",
         data: {"webRids": webRids},
-        options: _options,
+        options: _options.copyWith(connectTimeout: const Duration(seconds: 10)),
       );
     } catch (e) {
       Log.logPrint("同步预热房间清单失败: $e");
@@ -223,11 +238,10 @@ class GuardServerService extends GetxService {
   Future<void> triggerWarm() async {
     if (!configured) return;
     try {
-      final dio = Dio(BaseOptions(
-        baseUrl: serverUrl,
-        connectTimeout: const Duration(seconds: 10),
-      ));
-      await dio.post<dynamic>("/api/warm/run", options: _options);
+      await _dio.post<dynamic>(
+        "/api/warm/run",
+        options: _options.copyWith(connectTimeout: const Duration(seconds: 10)),
+      );
     } catch (e) {
       Log.logPrint("触发预热失败: $e");
     }
@@ -240,11 +254,7 @@ class GuardServerService extends GetxService {
     String webRid = "",
     Map<String, dynamic>? extra,
   }) async {
-    final dio = Dio(BaseOptions(
-      baseUrl: serverUrl,
-      connectTimeout: const Duration(seconds: 30),
-    ));
-    final res = await dio.post<dynamic>(
+    final res = await _dio.post<dynamic>(
       "/api/room/enter",
       data: {
         "accountId": accountId,
@@ -252,7 +262,7 @@ class GuardServerService extends GetxService {
         "webRid": webRid,
         "extra": extra ?? {},
       },
-      options: _options,
+      options: _options.copyWith(connectTimeout: const Duration(seconds: 30)),
     );
     return Map<String, dynamic>.from(res.data["data"] as Map);
   }
@@ -263,19 +273,17 @@ class GuardServerService extends GetxService {
     required String roomId,
     String webRid = "",
   }) async {
-    final dio = Dio(BaseOptions(
-      baseUrl: serverUrl,
-      connectTimeout: const Duration(seconds: 10),
-      receiveTimeout: const Duration(seconds: 20),
-    ));
-    final res = await dio.post<dynamic>(
+    final res = await _dio.post<dynamic>(
       "/api/room/tasks",
       data: {
         "accountId": accountId,
         "roomId": roomId,
         "webRid": webRid,
       },
-      options: _options,
+      options: _options.copyWith(
+        connectTimeout: const Duration(seconds: 10),
+        receiveTimeout: const Duration(seconds: 20),
+      ),
     );
     return Map<String, dynamic>.from(res.data["data"] as Map);
   }
@@ -287,19 +295,17 @@ class GuardServerService extends GetxService {
     required String roomId,
     String webRid = "",
   }) async {
-    final dio = Dio(BaseOptions(
-      baseUrl: serverUrl,
-      connectTimeout: const Duration(seconds: 10),
-      receiveTimeout: const Duration(seconds: 20),
-    ));
-    final res = await dio.post<dynamic>(
+    final res = await _dio.post<dynamic>(
       "/api/room/guard-status",
       data: {
         "accountId": accountId,
         "roomId": roomId,
         "webRid": webRid,
       },
-      options: _options,
+      options: _options.copyWith(
+        connectTimeout: const Duration(seconds: 10),
+        receiveTimeout: const Duration(seconds: 20),
+      ),
     );
     return Map<String, dynamic>.from(res.data["data"] as Map);
   }
@@ -311,19 +317,17 @@ class GuardServerService extends GetxService {
     String roomId = "",
     String webRid = "",
   }) async {
-    final dio = Dio(BaseOptions(
-      baseUrl: serverUrl,
-      connectTimeout: const Duration(seconds: 10),
-      receiveTimeout: const Duration(seconds: 15),
-    ));
-    final res = await dio.post<dynamic>(
+    final res = await _dio.post<dynamic>(
       "/api/room/status",
       data: {
         if (accountId != null) "accountId": accountId,
         "roomId": roomId,
         "webRid": webRid,
       },
-      options: _options,
+      options: _options.copyWith(
+        connectTimeout: const Duration(seconds: 10),
+        receiveTimeout: const Duration(seconds: 15),
+      ),
     );
     return Map<String, dynamic>.from(res.data["data"] as Map);
   }
@@ -334,18 +338,16 @@ class GuardServerService extends GetxService {
     required String webRid,
     String? accountId,
   }) async {
-    final dio = Dio(BaseOptions(
-      baseUrl: serverUrl,
-      connectTimeout: const Duration(seconds: 15),
-      receiveTimeout: const Duration(seconds: 30),
-    ));
-    final res = await dio.post<dynamic>(
+    final res = await _dio.post<dynamic>(
       "/api/room/html",
       data: {
         "webRid": webRid,
         if (accountId != null) "accountId": accountId,
       },
-      options: _options,
+      options: _options.copyWith(
+        connectTimeout: const Duration(seconds: 15),
+        receiveTimeout: const Duration(seconds: 30),
+      ),
     );
     final body = Map<String, dynamic>.from(res.data as Map);
     if (body["code"] == 4031) {
@@ -403,15 +405,13 @@ class GuardServerService extends GetxService {
     String keyword,
     int page,
   ) async {
-    final dio = Dio(BaseOptions(
-      baseUrl: serverUrl,
-      connectTimeout: const Duration(seconds: 15),
-      receiveTimeout: const Duration(seconds: 30),
-    ));
-    final res = await dio.post<dynamic>(
+    final res = await _dio.post<dynamic>(
       "/api/search",
       data: {"accountId": accountId, "keyword": keyword, "page": page},
-      options: _options,
+      options: _options.copyWith(
+        connectTimeout: const Duration(seconds: 15),
+        receiveTimeout: const Duration(seconds: 30),
+      ),
     );
     final body = Map<String, dynamic>.from(res.data as Map);
     if (body["code"] == 4032) {
@@ -435,16 +435,14 @@ class GuardServerService extends GetxService {
     required String cookies,
     required String ua,
   }) async {
-    final dio = Dio(BaseOptions(
-      baseUrl: serverUrl,
-      connectTimeout: const Duration(seconds: 10),
-      receiveTimeout: const Duration(seconds: 20),
-    ));
     try {
-      final res = await dio.post<dynamic>(
+      final res = await _dio.post<dynamic>(
         "/api/room/trust",
         data: {"webRid": webRid, "cookies": cookies, "ua": ua},
-        options: _options,
+        options: _options.copyWith(
+          connectTimeout: const Duration(seconds: 10),
+          receiveTimeout: const Duration(seconds: 20),
+        ),
       );
       final body = Map<String, dynamic>.from(res.data as Map);
       if (body["code"] != 0) {
@@ -464,46 +462,40 @@ class GuardServerService extends GetxService {
   // ===== 远程滑块验证会话（用户在 guard 自己的浏览器里滑，App 看截图回传轨迹）=====
 
   Future<DouyinVerifySession> startVerifySession(String webRid) async {
-    final dio = Dio(BaseOptions(
-      baseUrl: serverUrl,
-      connectTimeout: const Duration(seconds: 10),
-      // 真导航 + 等 DCL，guard 浏览器冷启动时给足
-      receiveTimeout: const Duration(seconds: 60),
-    ));
-    final res = await dio.post<dynamic>(
+    final res = await _dio.post<dynamic>(
       "/api/verify/session",
       data: {"webRid": webRid},
-      options: _options,
+      options: _options.copyWith(
+        connectTimeout: const Duration(seconds: 10),
+        // 真导航 + 等 DCL，guard 浏览器冷启动时给足
+        receiveTimeout: const Duration(seconds: 60),
+      ),
     );
     final data = _unwrapVerifyEnvelope(res.data);
     return DouyinVerifySession.fromJson(data);
   }
 
   Future<DouyinVerifyStatus> verifySessionStatus(String sessionId) async {
-    final dio = Dio(BaseOptions(
-      baseUrl: serverUrl,
-      connectTimeout: const Duration(seconds: 8),
-      receiveTimeout: const Duration(seconds: 15),
-    ));
-    final res = await dio.get<dynamic>(
+    final res = await _dio.get<dynamic>(
       "/api/verify/session/${Uri.encodeComponent(sessionId)}/status",
-      options: _options,
+      options: _options.copyWith(
+        connectTimeout: const Duration(seconds: 8),
+        receiveTimeout: const Duration(seconds: 15),
+      ),
     );
     return DouyinVerifyStatus.fromJson(_unwrapVerifyEnvelope(res.data));
   }
 
   /// 拉一帧 JPEG。410=会话已结束（看 message/reason），503=画面暂不可用（可继续重试）
   Future<VerifyFrame> verifySessionFrame(String sessionId) async {
-    final dio = Dio(BaseOptions(
-      baseUrl: serverUrl,
-      connectTimeout: const Duration(seconds: 8),
-      receiveTimeout: const Duration(seconds: 20),
-      responseType: ResponseType.bytes,
-    ));
     try {
-      final res = await dio.get<List<int>>(
+      final res = await _dio.get<List<int>>(
         "/api/verify/session/${Uri.encodeComponent(sessionId)}/frame",
-        options: _options,
+        options: _options.copyWith(
+          responseType: ResponseType.bytes,
+          connectTimeout: const Duration(seconds: 8),
+          receiveTimeout: const Duration(seconds: 20),
+        ),
       );
       final headers = res.headers.map.map(
         (k, v) => MapEntry(k.toLowerCase(), v),
@@ -528,17 +520,15 @@ class GuardServerService extends GetxService {
     List<VerifyPointerEvent> events,
   ) async {
     if (events.isEmpty) return 0;
-    final dio = Dio(BaseOptions(
-      baseUrl: serverUrl,
-      connectTimeout: const Duration(seconds: 8),
-      receiveTimeout: const Duration(seconds: 15),
-    ));
-    final res = await dio.post<dynamic>(
+    final res = await _dio.post<dynamic>(
       "/api/verify/session/${Uri.encodeComponent(sessionId)}/events",
       data: {
         "events": events.map((e) => e.toJson()).toList(),
       },
-      options: _options,
+      options: _options.copyWith(
+        connectTimeout: const Duration(seconds: 8),
+        receiveTimeout: const Duration(seconds: 15),
+      ),
     );
     final data = _unwrapVerifyEnvelope(res.data);
     return (data["applied"] as num?)?.toInt() ?? 0;
@@ -551,15 +541,13 @@ class GuardServerService extends GetxService {
       _verifyPost(sessionId, "cancel");
 
   Future<void> _verifyPost(String sessionId, String action) async {
-    final dio = Dio(BaseOptions(
-      baseUrl: serverUrl,
-      connectTimeout: const Duration(seconds: 8),
-      receiveTimeout: const Duration(seconds: 20),
-    ));
     try {
-      final res = await dio.post<dynamic>(
+      final res = await _dio.post<dynamic>(
         "/api/verify/session/${Uri.encodeComponent(sessionId)}/$action",
-        options: _options,
+        options: _options.copyWith(
+          connectTimeout: const Duration(seconds: 8),
+          receiveTimeout: const Duration(seconds: 20),
+        ),
       );
       _unwrapVerifyEnvelope(res.data);
     } on DioException catch (e) {
@@ -599,12 +587,7 @@ class GuardServerService extends GetxService {
     String webRid = "",
     Map<String, dynamic>? extra,
   }) async {
-    final dio = Dio(BaseOptions(
-      baseUrl: serverUrl,
-      connectTimeout: const Duration(seconds: 10),
-      receiveTimeout: const Duration(seconds: 20),
-    ));
-    final res = await dio.post<dynamic>(
+    final res = await _dio.post<dynamic>(
       "/api/room/heartbeat",
       data: {
         "accountId": accountId,
@@ -612,7 +595,10 @@ class GuardServerService extends GetxService {
         "webRid": webRid,
         "extra": extra ?? {},
       },
-      options: _options,
+      options: _options.copyWith(
+        connectTimeout: const Duration(seconds: 10),
+        receiveTimeout: const Duration(seconds: 20),
+      ),
     );
     return Map<String, dynamic>.from(res.data["data"] as Map);
   }
@@ -623,12 +609,7 @@ class GuardServerService extends GetxService {
     String webRid = "",
     Map<String, dynamic>? extra,
   }) async {
-    final dio = Dio(BaseOptions(
-      baseUrl: serverUrl,
-      connectTimeout: const Duration(seconds: 10),
-      receiveTimeout: const Duration(seconds: 20),
-    ));
-    await dio.post<dynamic>(
+    await _dio.post<dynamic>(
       "/api/room/exit",
       data: {
         "accountId": accountId,
@@ -636,7 +617,10 @@ class GuardServerService extends GetxService {
         "webRid": webRid,
         "extra": extra ?? {},
       },
-      options: _options,
+      options: _options.copyWith(
+        connectTimeout: const Duration(seconds: 10),
+        receiveTimeout: const Duration(seconds: 20),
+      ),
     );
   }
 }
