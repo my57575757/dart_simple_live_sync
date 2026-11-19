@@ -517,6 +517,94 @@ void main() {
       });
     });
 
+    test('心跳 Timer 丢失后看门狗自动补挂(挂机不得静默停摆)', () {
+      FakeAsync().run((async) {
+        final guard = FakeGuard();
+        final gw = DouyinPresenceGateway(
+          guard,
+          heartbeatInterval: const Duration(milliseconds: 100),
+          watchdogInterval: const Duration(milliseconds: 200),
+        );
+        final a = FakeTab('A', '111');
+        gw.claim(a);
+        async.flushMicrotasks();
+        async.elapse(const Duration(milliseconds: 150));
+        expect(guard.beats.length, 1);
+
+        // 模拟心跳 Timer 意外丢失：claim 在途取消 / suspend 收口 / 异常重建漏挂
+        gw.dropHeartbeatTimersForTesting();
+        final lost = guard.beats.length;
+        async.elapse(const Duration(milliseconds: 600));
+
+        expect(
+          guard.beats.length,
+          greaterThan(lost),
+          reason: '心跳 Timer 丢失后必须由看门狗补挂,否则客户端停止续租、'
+              '服务端租约到期回收房间,挂机静默失效',
+        );
+        gw.stopHeartbeatForTesting();
+      });
+    });
+
+    test('holder+ready 短路:心跳 Timer 缺失时必须补挂', () {
+      FakeAsync().run((async) {
+        final guard = FakeGuard();
+        final gw = DouyinPresenceGateway(
+          guard,
+          heartbeatInterval: const Duration(milliseconds: 100),
+          // 看门狗不介入：本用例单独验证 claim 短路分支
+          watchdogInterval: const Duration(minutes: 10),
+        );
+        final a = FakeTab('A', '111');
+        gw.claim(a);
+        async.flushMicrotasks();
+        async.elapse(const Duration(milliseconds: 150));
+        expect(guard.beats.length, 1);
+
+        gw.dropHeartbeatTimersForTesting();
+        final lost = guard.beats.length;
+        async.elapse(const Duration(milliseconds: 300));
+        expect(guard.beats.length, lost, reason: '心跳已丢失');
+
+        // 再次进入直播间（holder+ready 短路）必须把心跳补回来
+        gw.claim(a);
+        async.flushMicrotasks();
+        async.elapse(const Duration(milliseconds: 150));
+
+        expect(
+          guard.beats.length,
+          greaterThan(lost),
+          reason: '短路分支必须保证房间组心跳存活,否则本次「进入直播间」'
+              '看着成功、账号实际已不再续租',
+        );
+        gw.stopHeartbeatForTesting();
+      });
+    });
+
+    test('看门狗不得复活已释放标签的心跳', () {
+      FakeAsync().run((async) {
+        final guard = FakeGuard();
+        final gw = DouyinPresenceGateway(
+          guard,
+          heartbeatInterval: const Duration(milliseconds: 100),
+          watchdogInterval: const Duration(milliseconds: 200),
+        );
+        final a = FakeTab('A', '111');
+        gw.claim(a);
+        async.flushMicrotasks();
+        async.elapse(const Duration(milliseconds: 150));
+
+        gw.release('A');
+        async.flushMicrotasks();
+        async.elapse(const Duration(milliseconds: 150));
+        final afterRelease = guard.beats.length;
+
+        async.elapse(const Duration(milliseconds: 600));
+        expect(guard.beats.length, afterRelease, reason: '已释放标签不得被复活心跳');
+        gw.stopHeartbeatForTesting();
+      });
+    });
+
     test('claim 失败后旧 holder 心跳恢复', () {
       FakeAsync().run((async) {
         final guard = FakeGuard();

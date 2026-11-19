@@ -30,11 +30,18 @@ class DouyinPresenceGateway extends GetxService
   DouyinPresenceGateway(
     this._guard, {
     this.heartbeatInterval = const Duration(seconds: 20),
+    Duration? watchdogInterval,
     bool Function()? isAccountLoggedIn,
-  }) : _isAccountLoggedIn = isAccountLoggedIn;
+  })  : _isAccountLoggedIn = isAccountLoggedIn,
+        watchdogInterval = watchdogInterval ?? heartbeatInterval * 2;
 
   final GuardServerService _guard;
   final Duration heartbeatInterval;
+
+  /// 心跳看门狗巡检间隔：默认两个心跳周期。心跳 Timer 一旦丢失（claim 在途
+  /// 取消、suspend 收口、异常重建漏挂），客户端就停止续租，服务端租约到期
+  /// 后回收房间会话，挂机静默失效且没有任何报错。
+  final Duration watchdogInterval;
   final bool Function()? _isAccountLoggedIn;
 
   final Map<String, DouyinPresenceTab> _tabs = {};
@@ -63,6 +70,9 @@ class DouyinPresenceGateway extends GetxService
   /// 每个房间组一个心跳拍在途标志：heartbeat RTT 超过间隔时跳过重叠拍，
   /// 杜绝并发续租（#5）
   final Map<String, bool> _beatInFlight = {};
+
+  /// 心跳看门狗 Timer：自续期单次 Timer，负责补挂丢失的房间组心跳
+  Timer? _watchdogTimer;
 
   /// 变更操作串行链
   Future<void> _chain = Future<void>.value();
@@ -155,6 +165,9 @@ class DouyinPresenceGateway extends GetxService
         // 入串行链后排在 claim 之后、任何后续 release/rehome 之前（MINOR-1）。
         unawaited(_serialized(() => _replayEnter(tab)));
       }
+      // 短路前先确认该房间组的心跳仍在：否则本次「进入直播间」看着成功，
+      // 实际账号已不再续租，挂机会在租约到期后无声失效。
+      _ensureGroupHeartbeat(groupKey, tab);
       return const PresenceClaimResult.granted();
     }
     final previousHolder = _currentHolderTab(groupKey);
@@ -793,10 +806,67 @@ class DouyinPresenceGateway extends GetxService
     }
 
     _heartbeatTimers[groupKey] = Timer.periodic(heartbeatInterval, (_) => beat());
+    _scheduleWatchdog();
+  }
+
+  /// 看门狗：自续期单次 Timer（非 periodic，不干扰业务心跳的 Timer 计数）。
+  /// 定期核对每个房间组的持有者是否仍有活跃心跳 Timer，缺失即补挂。
+  void _scheduleWatchdog() {
+    if (_watchdogTimer != null) return;
+    _watchdogTimer = Timer(watchdogInterval, _watchdogTick);
+  }
+
+  void _watchdogTick() {
+    _watchdogTimer = null;
+    // 巡检入串行链：不与在途 claim 抢同房组心跳，避免把「旧 holder 让位
+    // 中」的房间重新拉回旧 holder。
+    unawaited(
+      _serialized(_ensureGroupHeartbeats).catchError((Object e, StackTrace s) {
+        Log.logPrint('presence: 心跳看门狗异常: $e');
+      }),
+    );
+    _scheduleWatchdog();
+  }
+
+  /// 补挂所有缺失的房间组心跳（持有者已就绪但心跳 Timer 不在）。
+  Future<void> _ensureGroupHeartbeats() async {
+    for (final entry in _groups.entries) {
+      final groupKey = entry.key;
+      final holder = entry.value.holder;
+      if (holder == null) continue;
+      if (!_ready.contains(holder)) continue;
+      final timer = _heartbeatTimers[groupKey];
+      if (timer != null && timer.isActive) continue;
+      final tab = _tabs[holder];
+      if (tab == null || tab.isClosed) continue;
+      _ensureGroupHeartbeat(groupKey, tab);
+    }
+  }
+
+  /// 保证某房间组的心跳存活：持有者已就绪、账号 id 已知但心跳 Timer 缺失
+  /// 时重新挂上。服务端 heartbeat 会自行重新进房，无需用户再次操作。
+  void _ensureGroupHeartbeat(String groupKey, DouyinPresenceTab tab) {
+    final timer = _heartbeatTimers[groupKey];
+    if (timer != null && timer.isActive) return;
+    final accountId = _accountIds[tab.tabId];
+    if (accountId == null) return;
+    Log.logPrint('presence: 补挂房间组心跳: $groupKey');
+    _startHeartbeat(tab, accountId, groupKey);
   }
 
   @visibleForTesting
   void stopHeartbeatForTesting() {
+    _watchdogTimer?.cancel();
+    _watchdogTimer = null;
+    for (final timer in _heartbeatTimers.values) {
+      timer.cancel();
+    }
+    _heartbeatTimers.clear();
+  }
+
+  /// 仅掐断房间组心跳（保留看门狗）：模拟心跳 Timer 意外丢失的场景。
+  @visibleForTesting
+  void dropHeartbeatTimersForTesting() {
     for (final timer in _heartbeatTimers.values) {
       timer.cancel();
     }
